@@ -1,0 +1,65 @@
+[versions]
+agp = "9.3.1"
+# AGP 9 has built-in Kotlin support and bundles KGP 2.2.10. The standalone
+# org.jetbrains.kotlin.android plugin must NOT be applied, and the compose/serialization
+# compiler plugins have to match the bundled compiler version exactly.
+kotlin = "2.2.10"
+
+# Compose BOM 2026.08.00 pins compose ui/foundation to 1.12.0.
+composeBom = "2026.08.00"
+# Material 3 Expressive components (MaterialShapes, ButtonGroup, LoadingIndicator,
+# wavy progress, FloatingToolbar, SplitButton, ToggleButton) only exist in the 1.5.0
+# alpha line — stable 1.4.0 ships the expressive *theme* and tokens but not the widgets.
+# This deliberately overrides the BOM's material3 version.
+material3 = "1.5.0-alpha26"
+
+activityCompose = "1.13.0"
+lifecycle = "2.11.0"
+navigation = "2.9.8"
+coreKtx = "1.19.0"
+splashscreen = "1.2.0"
+datastore = "1.2.1"
+graphicsShapes = "1.1.0"
+coroutines = "1.11.0"
+serialization = "1.11.0"
+
+# Reading a server's QR code. CameraX supplies the frames; zxing decodes them and also encodes
+# the codes the app shows. zxing's `core` is pure Java and pulls in nothing.
+camerax = "1.6.1"
+zxing = "3.5.4"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "splashscreen" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-graphics-shapes = { module = "androidx.graphics:graphics-shapes", version.ref = "graphicsShapes" }
+
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-animation = { module = "androidx.compose.animation:animation" }
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
+
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+junit = { module = "junit:junit", version = "4.13.2" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+.idea/
+build/
+local.properties
+.kotlin/
+.cxx/
+captures/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# Ядро sing-box: 117 МБ на архитектуру, выше лимита GitHub в 100 МБ на файл.
+# Собирается по инструкции в DEVELOPMENT.md и кладётся сюда руками.
+app/libs/*.aar
+
+__pycache__/

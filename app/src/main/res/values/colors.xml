@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_background">#FFF7F2FA</color>
+    <!-- Indigo ground from the Yumi mark; the adaptive background must be opaque. -->
+    <color name="launcher_background">#FF5052B7</color>
+</resources>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Compose owns every pixel after launch, so the platform theme only has to cover the
+      window between process start and the first frame. Keeping it edge-to-edge and
+      transparent-barred avoids the white flash on cold start.
+    -->
+    <style name="Theme.MyDrop" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <!--
+      The splash carries the launcher's own ground rather than the window's: the mark is white, so
+      on the light window background it was invisible and the splash read as a blank flash.
+    -->
+    <style name="Theme.MyDrop.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.MyDrop</item>
+    </style>
+
+</resources>
