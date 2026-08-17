@@ -91,5 +91,13 @@ data class AppSettings(
      */
     val failoverNodeIds: Set<String> = emptySet(),
     val subscriptionAutoUpdate: Boolean = true,
+    /**
+     * How often subscriptions refresh themselves, in minutes.
+     *
+     * Kept here rather than per subscription: the question a user has is "how fresh should my
+     * server lists be", asked once, not once per provider. The per-subscription field that used to
+     * sit in [Subscription] answered it in hours and was never read by anything.
+     */
+    val subscriptionUpdateMinutes: Int = 360,
     val logLevel: LogLevel = LogLevel.Info,
 )

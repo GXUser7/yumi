@@ -48,8 +48,6 @@ data class Subscription(
     val userInfo: SubscriptionUserInfo? = null,
     val lastUpdatedEpochMillis: Long? = null,
     val lastError: String? = null,
-    /** Auto-refresh cadence in hours; 0 disables background refresh for this subscription. */
-    val updateIntervalHours: Int = 12,
     val enabled: Boolean = true,
     /** Provider's own name for the bundle, from the `profile-title` header when present. */
     val remoteTitle: String? = null,

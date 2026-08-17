@@ -286,29 +286,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             transient.update {
                 it.copy(refreshingSubscriptionIds = it.refreshingSubscriptionIds + subscriptionId)
             }
-            when (val result = container.subscriptionService.fetch(subscription)) {
-                is SubscriptionUpdate.Success -> {
-                    val (added, removed) = container.profiles.applySubscriptionUpdate(
-                        subscriptionId = subscriptionId,
-                        fetchedNodes = result.nodes,
-                        userInfo = result.subscription.userInfo,
-                        remoteTitle = result.subscription.remoteTitle,
-                        webPageUrl = result.subscription.webPageUrl,
-                    )
-                    emit(
-                        buildString {
-                            append("«${subscription.name}»: ${pluralServers(result.nodes.size)}")
-                            if (added > 0) append(", +$added новых")
-                            if (removed > 0) append(", -$removed удалено")
-                        },
-                    )
-                }
+            emit(container.subscriptionRefresher.refresh(subscription))
 
-                is SubscriptionUpdate.Failure -> {
-                    container.profiles.recordSubscriptionError(subscriptionId, result.message)
-                    emit("«${subscription.name}»: ${result.message}")
-                }
-            }
             transient.update {
                 it.copy(refreshingSubscriptionIds = it.refreshingSubscriptionIds - subscriptionId)
             }

@@ -83,9 +83,34 @@ class AppContainer(context: Context) {
         scope = applicationScope,
     )
 
+    val subscriptionRefresher = SubscriptionRefresher(
+        profiles = profiles,
+        service = subscriptionService,
+        logs = logs,
+    )
+
+    /** Re-reads server lists on the cadence chosen in settings. */
+    val subscriptionScheduler = SubscriptionScheduler(
+        profiles = profiles,
+        settings = settings,
+        refresher = subscriptionRefresher,
+        logs = logs,
+        scope = applicationScope,
+    )
+
+    /** Keeps the failover list free of servers a subscription refresh has taken away. */
+    val staleSelectionPruner = StaleSelectionPruner(
+        profiles = profiles,
+        settings = settings,
+        logs = logs,
+        scope = applicationScope,
+    )
+
     init {
         seedDemoContentOnFirstRun()
         failoverWatchdog.start()
+        staleSelectionPruner.start()
+        subscriptionScheduler.start()
     }
 
     private fun deviceIdentity(): DeviceIdentity {

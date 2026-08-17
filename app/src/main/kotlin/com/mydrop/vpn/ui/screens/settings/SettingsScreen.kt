@@ -7,6 +7,8 @@ import android.content.Intent
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -106,6 +108,16 @@ private fun ValidatedField(
         shape = RoundedCornerShape(14.dp),
     )
 }
+
+/** Offered cadences. Anything under half an hour re-reads a list that changes daily. */
+private val UPDATE_INTERVALS = listOf(
+    30 to "30 мин",
+    60 to "1 час",
+    180 to "3 часа",
+    360 to "6 часов",
+    720 to "12 часов",
+    1440 to "Раз в сутки",
+)
 
 @Composable
 fun SettingsScreen(
@@ -341,10 +353,45 @@ fun SettingsScreen(
                 }
                 SwitchRow(
                     title = "Автообновление подписок",
-                    subtitle = "Периодически обновлять список серверов",
+                    subtitle = "Периодически перечитывать список серверов",
                     checked = settings.subscriptionAutoUpdate,
                     onCheckedChange = { onUpdate { s -> s.copy(subscriptionAutoUpdate = it) } },
                 )
+
+                AnimatedVisibility(visible = settings.subscriptionAutoUpdate) {
+                    Column {
+                        Text(
+                            text = "Как часто",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            UPDATE_INTERVALS.forEach { (minutes, label) ->
+                                ToggleButton(
+                                    checked = settings.subscriptionUpdateMinutes == minutes,
+                                    onCheckedChange = {
+                                        onUpdate { s -> s.copy(subscriptionUpdateMinutes = minutes) }
+                                    },
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
+                        Text(
+                            text = "Обновление происходит, пока приложение запущено — будильник " +
+                                "ради перечитывания списка серверов не стоит расхода батареи",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
             }
         }
 
