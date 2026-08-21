@@ -237,6 +237,29 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         emit("Режим «${mode.label}» применён")
     }
 
+    /**
+     * Flips certificate checking for one server, and rebuilds the tunnel when it is the one
+     * carrying traffic — the core was handed the old flag at startup and will not reread it.
+     */
+    fun setTlsInsecure(nodeId: String, insecure: Boolean) {
+        val node = container.profiles.nodes.firstOrNull { it.id == nodeId } ?: return
+        val tls = node.tls ?: return
+        if (tls.insecure == insecure) return
+
+        container.profiles.setTlsInsecure(nodeId, insecure)
+        emit(
+            if (insecure) {
+                "«${node.name}»: сертификат не проверяется"
+            } else {
+                "«${node.name}»: проверка сертификата включена"
+            },
+        )
+
+        if (!uiState.value.vpnState.isActive) return
+        if (container.profiles.selectedNode()?.id != nodeId) return
+        container.tunnelLauncher.connectTo(node.copy(tls = tls.copy(insecure = insecure)))
+    }
+
     // ------------------------------------------------------------ Latency
 
     fun pingNode(nodeId: String) {

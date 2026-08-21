@@ -79,6 +79,27 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
         )
     }
 
+    /**
+     * Turns certificate checking off, or back on, for one server.
+     *
+     * The flag already travelled from share-links into the generated configuration; what it never
+     * had was a way in for a server whose link omitted it. Self-signed and expired certificates
+     * are ordinary on hand-rolled Hysteria2 and Trojan endpoints, and without this the only fix
+     * was to edit the link by hand and re-import.
+     *
+     * A node with no TLS is left alone: there is no certificate to skip, and writing the flag
+     * would put a field in the configuration the core ignores while the list claimed otherwise.
+     */
+    fun setTlsInsecure(nodeId: String, insecure: Boolean) = store.update { current ->
+        current.copy(
+            nodes = current.nodes.map { node ->
+                val tls = node.tls
+                if (node.id != nodeId || tls == null) node
+                else node.copy(tls = tls.copy(insecure = insecure))
+            },
+        )
+    }
+
     fun removeNode(nodeId: String) = store.update { current ->
         val remaining = current.nodes.filterNot { it.id == nodeId }
         current.copy(

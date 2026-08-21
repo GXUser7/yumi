@@ -24,6 +24,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.GppGood
+import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Search
@@ -81,6 +83,7 @@ fun ServersScreen(
     onSelect: (String) -> Unit,
     onPing: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onSetTlsInsecure: (String, Boolean) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -154,6 +157,9 @@ fun ServersScreen(
                         onSelect = { onSelect(node.id) },
                         onPing = { onPing(node.id) },
                         onRemove = { onRemove(node.id) },
+                        onSetTlsInsecure = node.tls
+                            ?.takeIf { it.enabled && it.reality == null }
+                            ?.let { tls -> { onSetTlsInsecure(node.id, !tls.insecure) } },
                         onShare = node.sourceUri?.let { { sharing = node } },
                         modifier = Modifier.padding(horizontal = 16.dp),
                     )
@@ -345,6 +351,12 @@ private fun ServerRow(
     onSelect: () -> Unit,
     onPing: () -> Unit,
     onRemove: () -> Unit,
+    /**
+     * Null when there is no certificate check to switch off: a plaintext server has none, and
+     * REALITY authenticates by key exchange and never looks at the one it is shown, so the core
+     * ignores the flag there and the menu entry would promise something it cannot do.
+     */
+    onSetTlsInsecure: (() -> Unit)?,
     /** Null when the server was not parsed from a link and so has nothing to hand over. */
     onShare: (() -> Unit)?,
     modifier: Modifier = Modifier,
@@ -416,6 +428,30 @@ private fun ServerRow(
                             menuOpen = false
                         },
                     )
+                    if (onSetTlsInsecure != null) {
+                        val skipping = node.tls?.insecure == true
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (skipping) {
+                                        "Проверять сертификат"
+                                    } else {
+                                        "Не проверять сертификат"
+                                    },
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    if (skipping) Icons.Rounded.GppGood else Icons.Rounded.GppMaybe,
+                                    null,
+                                )
+                            },
+                            onClick = {
+                                onSetTlsInsecure()
+                                menuOpen = false
+                            },
+                        )
+                    }
                     if (onShare != null) {
                         DropdownMenuItem(
                             text = { Text("Показать QR-код") },

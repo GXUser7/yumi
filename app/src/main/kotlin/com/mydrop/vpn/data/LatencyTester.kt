@@ -15,8 +15,13 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509ExtendedTrustManager
 import kotlin.random.Random
 
 /**
@@ -72,20 +77,40 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
      * exchange proves the endpoint really terminates TLS — which for a REALITY or masquerading
      * node is the difference between "the port is open" and "the disguise is up".
      *
-     * Certificates are not validated on purpose: this measures timing, and REALITY nodes present
-     * a borrowed certificate by design, so a trust check would fail every one of them.
+     * Certificates are not validated: see [probeSocketFactory] for why that is the only setting
+     * under which this mode measures anything at all.
      */
     private fun tlsHandshake(node: ProxyNode): Boolean = runCatching {
         Socket().use { raw ->
             raw.connect(InetSocketAddress(node.server, node.port), TIMEOUT)
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            (factory.createSocket(raw, node.tls?.serverName ?: node.server, node.port, false)
+            val name = node.tls?.serverName?.takeIf(String::isNotEmpty) ?: node.server
+            (probeSocketFactory.createSocket(raw, name, node.port, false)
                 as SSLSocket).use { tls ->
                 tls.soTimeout = TIMEOUT
                 tls.startHandshake()
             }
         }
     }.isSuccess
+
+    /**
+     * A factory that trusts every chain, for probes only.
+     *
+     * This used to be `SSLSocketFactory.getDefault()`, whose trust managers validate the chain
+     * inside `startHandshake()` — the exact opposite of what this probe needs. A REALITY node
+     * serves a forged certificate by design and a self-signed Hysteria2 or Trojan node chains to
+     * no system root, so the handshake threw for all of them and every such server was recorded
+     * as unreachable. That reading was not merely cosmetic: [FailoverWatchdog] treats a failed
+     * probe as a dead server, so TLS ping mode moved the tunnel off servers that were working.
+     *
+     * Trusting everything is safe here in a way it never is on a data path: the socket carries no
+     * traffic and no credentials, it is closed the moment the handshake completes, and the core
+     * does its own TLS with its own settings and its own trust store.
+     */
+    private val probeSocketFactory: SSLSocketFactory by lazy {
+        SSLContext.getInstance("TLS")
+            .apply { init(null, arrayOf<TrustManager>(TrustEveryChain), null) }
+            .socketFactory
+    }
 
     /**
      * QUIC endpoints answer an unknown version with a Version Negotiation packet — RFC 9000 §6
@@ -142,4 +167,40 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
         const val MEDIAN_SAMPLES = 3
         const val QUIC_DATAGRAM_SIZE = 1200
     }
+}
+
+/**
+ * Accepts any certificate. Reachable only through [LatencyTester.probeSocketFactory], which
+ * documents why a probe must not validate; nothing else in the app may use it.
+ */
+private object TrustEveryChain : X509ExtendedTrustManager() {
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+
+    override fun checkClientTrusted(
+        chain: Array<out X509Certificate>?,
+        authType: String?,
+        socket: Socket?,
+    ) = Unit
+
+    override fun checkServerTrusted(
+        chain: Array<out X509Certificate>?,
+        authType: String?,
+        socket: Socket?,
+    ) = Unit
+
+    override fun checkClientTrusted(
+        chain: Array<out X509Certificate>?,
+        authType: String?,
+        engine: SSLEngine?,
+    ) = Unit
+
+    override fun checkServerTrusted(
+        chain: Array<out X509Certificate>?,
+        authType: String?,
+        engine: SSLEngine?,
+    ) = Unit
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 }

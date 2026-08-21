@@ -195,6 +195,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onSelect = viewModel::selectNode,
                     onPing = viewModel::pingNode,
                     onRemove = viewModel::removeNode,
+                    onSetTlsInsecure = viewModel::setTlsInsecure,
                     contentPadding = contentPadding,
                 )
             }

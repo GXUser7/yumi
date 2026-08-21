@@ -33,6 +33,9 @@ data class ProxyNode(
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { add(it) }
             tls?.badge?.let(::add)
+            // Skipping verification is a decision with consequences, taken per server. It belongs
+            // where the list is read, not only inside the menu it was set from.
+            tls?.takeIf { it.enabled && it.insecure && it.reality == null }?.let { add("no-verify") }
             transport?.label?.let(::add)
             (settings as? ProxySettings.Vless)
                 ?.flow

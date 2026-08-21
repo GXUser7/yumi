@@ -33,6 +33,21 @@ class SingBoxConfigFactoryTest {
     private val JsonObject.routeRules: List<JsonObject>
         get() = this["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
 
+    /**
+     * The server list can now flip this per node, so the flag has to survive the whole way into
+     * the document — a toggle that changes nothing in the config would be worse than no toggle.
+     */
+    @Test
+    fun `insecure reaches the outbound only when it is set`() {
+        val skipping = config("hysteria2://pass@se.example.com:443?insecure=1#N").proxy
+        assertTrue(skipping["tls"]!!.jsonObject["insecure"]!!.jsonPrimitive.booleanOrNull == true)
+
+        // Absent rather than `false`: sing-box defaults to verifying, and writing the default
+        // would make a diff of two configurations noisier than the difference between them.
+        val verifying = config("hysteria2://pass@se.example.com:443#N").proxy
+        assertNull(verifying["tls"]!!.jsonObject["insecure"])
+    }
+
     @Test
     fun `vless reality outbound carries uuid flow and reality keys`() {
         val proxy = config(
