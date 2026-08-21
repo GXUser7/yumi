@@ -44,6 +44,13 @@ enum class PingMode(val label: String, val description: String) {
     Median("Медиана", "Три пробы, берётся средняя. Медленнее, но число не пляшет"),
 }
 
+/**
+ * The game [AppSettings.brawlStarsMode] is about. Lives here rather than beside the resolver in
+ * the config factory because the settings screen needs it too, to say when the switch is quietly
+ * overruling a split-tunnelling choice.
+ */
+const val BRAWL_STARS_PACKAGE = "com.supercell.brawlstars"
+
 @Serializable
 data class AppSettings(
     // Appearance
@@ -63,6 +70,18 @@ data class AppSettings(
     val mtu: Int = 9000,
     val splitTunnelMode: SplitTunnelMode = SplitTunnelMode.Off,
     val splitTunnelPackages: Set<String> = emptySet(),
+
+    /**
+     * Brawl Stars through xbox-dns.ru, with its traffic kept out of the proxy.
+     *
+     * Two halves of one switch because either alone does nothing. xbox-dns.ru answers the game's
+     * domains with addresses of its own unblocking proxies, which are reachable from the phone's
+     * own connection — so the traffic has to leave directly, or it would arrive at those proxies
+     * from an exit node they do not serve. And the game has to stay *inside* the tunnel for the
+     * core to see its queries at all: excluding it in Android's split tunnelling would hand it
+     * back to the system resolver, where the chosen DNS never applies.
+     */
+    val brawlStarsMode: Boolean = false,
 
     // DNS
     val remoteDns: String = "https://1.1.1.1/dns-query",

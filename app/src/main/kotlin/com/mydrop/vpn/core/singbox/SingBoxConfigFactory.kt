@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.singbox
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.BRAWL_STARS_PACKAGE
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
@@ -36,6 +37,14 @@ object SingBoxConfigFactory {
     private const val DNS_REMOTE_TAG = "dns-remote"
     private const val DNS_DIRECT_TAG = "dns-direct"
     private const val DNS_BOOTSTRAP_TAG = "dns-bootstrap"
+    private const val DNS_BRAWL_TAG = "dns-brawl"
+
+    /**
+     * The unblocking resolver. Fixed rather than configurable: this switch answers one question —
+     * "make Brawl Stars work" — and a free-text field would turn it into a second DNS setting
+     * nobody asked for. The package it applies to is [BRAWL_STARS_PACKAGE].
+     */
+    const val BRAWL_STARS_DNS = "https://xbox-dns.ru/dns-query"
 
     /** Fallbacks for a DNS field the user has emptied; they match [AppSettings]' own defaults. */
     const val DEFAULT_REMOTE_DNS = "https://1.1.1.1/dns-query"
@@ -162,7 +171,10 @@ object SingBoxConfigFactory {
     private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
         val remoteNamed = !addressOf(settings.remoteDns, DEFAULT_REMOTE_DNS).isNumericAddress()
         val directNamed = !addressOf(settings.directDns, DEFAULT_DIRECT_DNS).isNumericAddress()
-        val bootstrap = if (remoteNamed || directNamed) DNS_BOOTSTRAP_TAG else null
+        // xbox-dns.ru is a name like any other, so switching it on pulls in the bootstrap even
+        // when both of the user's own resolvers are numeric and would not have needed one.
+        val bootstrap =
+            if (remoteNamed || directNamed || settings.brawlStarsMode) DNS_BOOTSTRAP_TAG else null
 
         putJsonArray("servers") {
             add(dnsServer(DNS_REMOTE_TAG, settings.remoteDns, PROXY_TAG, bootstrap.takeIf { remoteNamed }))
@@ -170,6 +182,11 @@ object SingBoxConfigFactory {
             // at our intentionally empty `direct` outbound is redundant and newer sing-box
             // versions reject that combination while starting the DNS service.
             add(dnsServer(DNS_DIRECT_TAG, settings.directDns, null, bootstrap.takeIf { directNamed }))
+            if (settings.brawlStarsMode) {
+                // No detour: the answers name unblocking proxies that expect to be reached from
+                // the phone's own address, so the lookup travels the same way the traffic will.
+                add(dnsServer(DNS_BRAWL_TAG, BRAWL_STARS_DNS, null, DNS_BOOTSTRAP_TAG))
+            }
             if (bootstrap != null) {
                 addJsonObject {
                     put("type", "udp")
@@ -181,6 +198,18 @@ object SingBoxConfigFactory {
                         addressOf(settings.directDns, DEFAULT_DIRECT_DNS)
                             .takeIf { it.isNumericAddress() } ?: DEFAULT_DIRECT_DNS,
                     )
+                }
+            }
+        }
+
+        // Matched by package rather than by domain list: the game reaches a spread of Supercell
+        // and CDN hosts that changes without notice, and a list that goes stale fails silently —
+        // the switch would look on while the game kept resolving through the ordinary resolver.
+        if (settings.brawlStarsMode) {
+            putJsonArray("rules") {
+                addJsonObject {
+                    putJsonArray("package_name") { add(BRAWL_STARS_PACKAGE) }
+                    put("server", DNS_BRAWL_TAG)
                 }
             }
         }
@@ -278,16 +307,27 @@ object SingBoxConfigFactory {
         put("stack", "gvisor")
         if (settings.hijackDns) put("dns_mode", "hijack")
 
+        // Brawl Stars has to be inside the tunnel for any of its switch to mean anything: the
+        // core can only point the game at xbox-dns.ru and at the direct outbound for traffic it
+        // actually sees. Split tunnelling decides that, and it is answering a different question,
+        // so the two are reconciled here rather than left to contradict each other silently.
+        val brawl = settings.brawlStarsMode
+        val split = settings.splitTunnelPackages
         when (settings.splitTunnelMode) {
             SplitTunnelMode.Off -> Unit
-            SplitTunnelMode.AllowList -> if (settings.splitTunnelPackages.isNotEmpty()) {
-                putJsonArray("include_package") {
-                    settings.splitTunnelPackages.sorted().forEach { add(it) }
+            SplitTunnelMode.AllowList -> {
+                // An allow-list that omits the game would keep it out of the tunnel entirely.
+                val included = if (brawl) split + BRAWL_STARS_PACKAGE else split
+                if (included.isNotEmpty()) {
+                    putJsonArray("include_package") { included.sorted().forEach { add(it) } }
                 }
             }
-            SplitTunnelMode.BlockList -> if (settings.splitTunnelPackages.isNotEmpty()) {
-                putJsonArray("exclude_package") {
-                    settings.splitTunnelPackages.sorted().forEach { add(it) }
+            SplitTunnelMode.BlockList -> {
+                // Excluding it would hand it back to the system resolver, where the game's DNS
+                // is whatever the network says and this switch reaches nothing.
+                val excluded = if (brawl) split - BRAWL_STARS_PACKAGE else split
+                if (excluded.isNotEmpty()) {
+                    putJsonArray("exclude_package") { excluded.sorted().forEach { add(it) } }
                 }
             }
         }
@@ -344,6 +384,17 @@ object SingBoxConfigFactory {
                 }
             }
 
+
+            // After the DNS hijack, so the game's queries still reach the resolver chosen for it
+            // above, and before every other rule, because this switch means "send Brawl Stars
+            // around all of it" — an ad-blocking or geo rule clipping the game would be exactly
+            // the failure the switch exists to prevent.
+            if (settings.brawlStarsMode) {
+                addJsonObject {
+                    putJsonArray("package_name") { add(BRAWL_STARS_PACKAGE) }
+                    put("outbound", DIRECT_TAG)
+                }
+            }
 
             if (settings.blockAds) {
                 addJsonObject {

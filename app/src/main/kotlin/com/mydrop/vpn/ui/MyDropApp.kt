@@ -218,6 +218,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     selectedDnsId = state.selectedDnsId,
                     onSelectDns = viewModel::selectDns,
                     onRemoveDns = viewModel::removeDns,
+                    onSetBrawlStarsMode = viewModel::setBrawlStarsMode,
                     onUpdate = viewModel::updateSettings,
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },

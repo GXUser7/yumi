@@ -260,6 +260,33 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.tunnelLauncher.connectTo(node.copy(tls = tls.copy(insecure = insecure)))
     }
 
+    /**
+     * Applied to a running tunnel, not merely stored.
+     *
+     * Both halves of this switch — the resolver the game is pointed at and the rule sending its
+     * traffic around the proxy — live in the document the core was handed at startup. Storing the
+     * flag and leaving the core alone would leave a switch reading "on" while nothing about the
+     * game had changed, which is the same quiet lie the resolver picker used to tell.
+     */
+    fun setBrawlStarsMode(enabled: Boolean) {
+        if (uiState.value.settings.brawlStarsMode == enabled) return
+        container.settings.update { it.copy(brawlStarsMode = enabled) }
+
+        val active = uiState.value.vpnState.isActive
+        emit(
+            when {
+                !enabled -> "Brawl Stars: разблокировка выключена"
+                // The switch does nothing on its own — it only shapes a tunnel that is running.
+                !active -> "Brawl Stars: заработает при подключении"
+                else -> "Brawl Stars: разблокировка включена"
+            },
+        )
+
+        if (!active) return
+        val node = container.profiles.selectedNode() ?: return
+        container.tunnelLauncher.connectTo(node)
+    }
+
     // ------------------------------------------------------------ Latency
 
     fun pingNode(nodeId: String) {

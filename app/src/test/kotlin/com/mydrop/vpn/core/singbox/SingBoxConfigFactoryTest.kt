@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -33,6 +34,20 @@ class SingBoxConfigFactoryTest {
     private val JsonObject.routeRules: List<JsonObject>
         get() = this["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
 
+    private val JsonObject.dns: JsonObject get() = this["dns"]!!.jsonObject
+
+    private val JsonObject.tun: JsonObject
+        get() = this["inbounds"]!!.jsonArray.map { it.jsonObject }
+            .first { it["type"]!!.jsonPrimitive.content == "tun" }
+
+    private val JsonObject.dnsServerTags: List<String>
+        get() = dns["servers"]!!.jsonArray.map { it.jsonObject["tag"]!!.jsonPrimitive.content }
+
+    private fun JsonObject.packagesOf(rule: JsonObject): List<String> =
+        rule["package_name"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+
+    private val brawl = "com.supercell.brawlstars"
+
     /**
      * The server list can now flip this per node, so the flag has to survive the whole way into
      * the document — a toggle that changes nothing in the config would be worse than no toggle.
@@ -46,6 +61,93 @@ class SingBoxConfigFactoryTest {
         // would make a diff of two configurations noisier than the difference between them.
         val verifying = config("hysteria2://pass@se.example.com:443#N").proxy
         assertNull(verifying["tls"]!!.jsonObject["insecure"])
+    }
+
+    // -------------------------------------------------------- Brawl Stars
+
+    @Test
+    fun `brawl stars mode points the game at xbox-dns and sends it around the proxy`() {
+        val config = config(
+            "vless://uuid-1@de.example.com:443?security=tls#N",
+            AppSettings(brawlStarsMode = true),
+        )
+
+        val brawlServer = config.dns["servers"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "dns-brawl" }
+        assertEquals("xbox-dns.ru", brawlServer["server"]!!.jsonPrimitive.content)
+        assertEquals("/dns-query", brawlServer["path"]!!.jsonPrimitive.content)
+        // No detour: the answers name unblocking proxies expecting the phone's own address.
+        assertNull(brawlServer["detour"])
+        // xbox-dns.ru is a name, so it cannot resolve itself.
+        assertEquals("dns-bootstrap", brawlServer["domain_resolver"]!!.jsonPrimitive.content)
+        assertTrue("dns-bootstrap" in config.dnsServerTags)
+
+        val dnsRule = config.dns["rules"]!!.jsonArray.single().jsonObject
+        assertEquals(listOf(brawl), config.packagesOf(dnsRule))
+        assertEquals("dns-brawl", dnsRule["server"]!!.jsonPrimitive.content)
+
+        val routeRule = config.routeRules.single { config.packagesOf(it).contains(brawl) }
+        assertEquals("direct", routeRule["outbound"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * Order is the whole behaviour here. Before the DNS hijack the game's queries would leave
+     * un-hijacked and never reach the resolver picked for it; after a geo or ad rule, one of those
+     * could claim the game first and the switch would be on while nothing changed.
+     */
+    @Test
+    fun `the brawl stars route rule sits after the dns hijack and before the geo rules`() {
+        val rules = config(
+            "vless://uuid-1@de.example.com:443?security=tls#N",
+            AppSettings(brawlStarsMode = true, blockAds = true),
+        ).routeRules
+
+        val hijack = rules.indexOfFirst { it["action"]?.jsonPrimitive?.content == "hijack-dns" }
+        val game = rules.indexOfFirst { it["package_name"] != null }
+        val ads = rules.indexOfFirst { it["action"]?.jsonPrimitive?.content == "reject" }
+        val geo = rules.indexOfFirst { it["rule_set"] != null && it["action"] == null }
+
+        assertTrue("hijack=$hijack game=$game", hijack in 0 until game)
+        assertTrue("game=$game ads=$ads", game < ads)
+        assertTrue("game=$game geo=$geo", game < geo)
+    }
+
+    @Test
+    fun `without the switch nothing about the game is emitted`() {
+        val config = config("vless://uuid-1@de.example.com:443?security=tls#N")
+
+        assertNull(config.dns["rules"])
+        assertFalse("dns-brawl" in config.dnsServerTags)
+        assertTrue(config.routeRules.none { it["package_name"] != null })
+    }
+
+    /**
+     * Split tunnelling decides whether the core sees the game at all, so the two settings can
+     * contradict each other. The switch wins, because outside the tunnel neither half of it can
+     * apply and it would read as on while doing nothing.
+     */
+    @Test
+    fun `the switch keeps the game inside the tunnel whatever split tunnelling says`() {
+        val allowed = config(
+            "vless://uuid-1@de.example.com:443?security=tls#N",
+            AppSettings(
+                brawlStarsMode = true,
+                splitTunnelMode = SplitTunnelMode.AllowList,
+                splitTunnelPackages = setOf("com.android.chrome"),
+            ),
+        ).tun["include_package"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("com.android.chrome", brawl).sorted(), allowed)
+
+        val excluded = config(
+            "vless://uuid-1@de.example.com:443?security=tls#N",
+            AppSettings(
+                brawlStarsMode = true,
+                splitTunnelMode = SplitTunnelMode.BlockList,
+                splitTunnelPackages = setOf("com.android.chrome", brawl),
+            ),
+        ).tun["exclude_package"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("com.android.chrome"), excluded)
     }
 
     @Test

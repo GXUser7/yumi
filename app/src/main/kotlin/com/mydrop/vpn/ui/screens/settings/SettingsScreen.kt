@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Card
@@ -66,6 +67,7 @@ import androidx.annotation.RequiresApi
 import androidx.core.net.toUri
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.BRAWL_STARS_PACKAGE
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
@@ -127,6 +129,8 @@ fun SettingsScreen(
     selectedDnsId: String?,
     onSelectDns: (String?) -> Unit,
     onRemoveDns: (String) -> Unit,
+    /** Separate from [onUpdate]: this one reloads a running core instead of only storing. */
+    onSetBrawlStarsMode: (Boolean) -> Unit,
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSplitTunnel: () -> Unit,
@@ -286,6 +290,39 @@ fun SettingsScreen(
                             onRemove = { onRemoveDns(profile.id) },
                         )
                     }
+                }
+            }
+        }
+
+        item("brawl") {
+            SettingsSection(title = "Brawl Stars", icon = Icons.Rounded.SportsEsports) {
+                SwitchRow(
+                    title = "Разблокировать через xbox-dns.ru",
+                    subtitle = "Игра резолвится через xbox-dns.ru, а её трафик идёт мимо прокси. " +
+                        "Действует только при поднятом туннеле",
+                    checked = settings.brawlStarsMode,
+                    onCheckedChange = onSetBrawlStarsMode,
+                )
+
+                // The switch quietly wins over split tunnelling, because it has to: outside the
+                // tunnel the core never sees the game and neither half of this can apply. Saying
+                // so is the difference between a deliberate override and a setting that lies.
+                val overrulesSplitTunnel = when (settings.splitTunnelMode) {
+                    SplitTunnelMode.Off -> false
+                    SplitTunnelMode.AllowList ->
+                        BRAWL_STARS_PACKAGE !in settings.splitTunnelPackages
+                    SplitTunnelMode.BlockList ->
+                        BRAWL_STARS_PACKAGE in settings.splitTunnelPackages
+                }
+                if (settings.brawlStarsMode && overrulesSplitTunnel) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Раздельное туннелирование оставляло Brawl Stars вне туннеля — " +
+                            "пока переключатель включён, игра держится внутри, иначе её DNS " +
+                            "достаётся системному резолверу и разблокировка не сработает.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

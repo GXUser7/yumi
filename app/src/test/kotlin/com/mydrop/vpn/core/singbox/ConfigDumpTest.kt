@@ -66,6 +66,12 @@ class ConfigDumpTest {
             AppSettings(),
         )
         dump(
+            "brawl-stars",
+            "vless://11111111-2222-3333-4444-555555555555@de.example.com:443" +
+                "?security=tls&sni=de.example.com#brawl",
+            AppSettings(brawlStarsMode = true, blockAds = true),
+        )
+        dump(
             "tuic",
             "tuic://11111111-2222-3333-4444-555555555555:password@jp.example.com:443" +
                 "?sni=jp.example.com&congestion_control=bbr&alpn=h3#tuic",
