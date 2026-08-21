@@ -31,8 +31,11 @@ android {
         applicationId = "com.mydrop.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        // Ветка ForBrawlStars. Суффикс несёт смысл, а не служебную пометку: applicationId тот же,
+        // так что эта сборка встаёт поверх обычной, и без него на телефоне не отличить, какая из
+        // двух стоит. versionCode на единицу выше по той же причине — установка поверх 0.3.2.
+        versionName = "0.3.2-brawl"
         // ABI selection lives in `splits.abi` below; the two cannot both be set.
     }
 

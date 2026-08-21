@@ -454,9 +454,11 @@ fun SettingsScreen(
                 runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).versionName
                 }.getOrNull()
-                    // The build type appends its own suffix, and "0.2.0-debug" on screen is a
-                    // detail of how the APK was made, not something the reader has any use for.
-                    ?.substringBefore('-')
+                    // Only the build type's own suffix goes: "0.2.0-debug" on screen is a detail
+                    // of how the APK was made. Everything else in the name stays, because a
+                    // variant marker like "-brawl" is the one thing telling the reader which of
+                    // two builds sharing an applicationId is actually installed.
+                    ?.removeSuffix("-debug")
                     .orEmpty()
             }
 
