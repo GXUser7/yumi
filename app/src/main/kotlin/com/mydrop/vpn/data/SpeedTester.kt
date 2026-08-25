@@ -1,20 +1,9 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.SpeedPhase
 import com.mydrop.vpn.core.model.SpeedTestState
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.Closeable
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -29,6 +18,18 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Measures throughput the way the user would experience it, and says which path it measured.
@@ -49,7 +50,7 @@ import kotlin.math.roundToInt
  * `CONNECT` with credentials no stock client sends for us, the byte counting has to be continuous
  * rather than per-response, and a phase has to stop mid-body when its budget runs out.
  */
-class SpeedTester(private val logs: LogRepository) {
+class SpeedTester(private val logs: LogRepository, private val strings: Strings) {
 
     /**
      * Runs one test. A non-null [probe] routes everything through the core, which is the only way
@@ -97,9 +98,16 @@ class SpeedTester(private val logs: LogRepository) {
             )
             send(state)
 
-            val summary = "Замер скорости ${if (probe != null) "через туннель" else "напрямую"}: " +
-                "приём ${download.megabits()} Мбит/с, отдача ${upload.megabits()} Мбит/с, " +
-                "отклик $latency мс"
+            val path = strings.get(
+                if (probe != null) R.string.log_speed_through_tunnel else R.string.log_speed_direct,
+            )
+            val summary = strings.get(
+                R.string.log_speed_summary,
+                path,
+                download.megabits(),
+                upload.megabits(),
+                latency,
+            )
             logs.info(summary)
             // Also to logcat: the in-app journal dies with the process, and these numbers are the
             // only way to tell a slow link from a broken measurement when reading logs off a
@@ -108,8 +116,10 @@ class SpeedTester(private val logs: LogRepository) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
-            val message = error.message ?: error::class.simpleName ?: "нет связи"
-            logs.warn("Замер скорости: $message")
+            val message = error.message
+                ?: error::class.simpleName
+                ?: strings.get(R.string.error_speed_no_connection)
+            logs.warn(R.string.log_speed_failed, message)
             android.util.Log.w(TAG, "speed test failed in ${state.phase}: $message", error)
             send(state.copy(phase = SpeedPhase.Failed, liveBytesPerSecond = 0, message = message))
         }
@@ -277,7 +287,7 @@ class SpeedTester(private val logs: LogRepository) {
 
         val head = readHead(socket.inputStream)
         checkStatus(head)
-        var remaining = contentLength(head) ?: throw IllegalStateException("ответ без длины тела")
+        var remaining = contentLength(head) ?: throw IllegalStateException(strings.get(R.string.error_speed_no_length))
 
         val buffer = ByteArray(CHUNK)
         while (remaining > 0) {
@@ -352,7 +362,9 @@ class SpeedTester(private val logs: LogRepository) {
                 )
                 raw.outputStream.flush()
                 val status = readHead(raw.inputStream).lineSequence().firstOrNull().orEmpty()
-                check(" 200" in status) { "ядро отклонило запрос: ${status.trim()}" }
+                check(" 200" in status) {
+                    strings.get(R.string.error_speed_core_refused, status.trim())
+                }
             }
 
             // A deliberately small send buffer. The upload phase counts bytes as they are written,
@@ -415,7 +427,12 @@ class SpeedTester(private val logs: LogRepository) {
         val status = head.lineSequence().firstOrNull().orEmpty().trim()
         val code = status.split(' ').getOrNull(1)?.toIntOrNull()
         if (code == null || code >= 300) {
-            throw IllegalStateException("измерительный сервер ответил: ${status.ifEmpty { "ничего" }}")
+            throw IllegalStateException(
+                strings.get(
+                    R.string.error_speed_server_said,
+                    status.ifEmpty { strings.get(R.string.error_speed_nothing) },
+                ),
+            )
         }
     }
 
@@ -436,7 +453,7 @@ class SpeedTester(private val logs: LogRepository) {
     }
 
     private suspend fun ensureActive() {
-        if (!currentCoroutineContext().isActive) throw CancellationException("замер остановлен")
+        if (!currentCoroutineContext().isActive) throw CancellationException(strings.get(R.string.error_speed_cancelled))
     }
 
     private fun rate(bytes: Long, nanos: Long): Long =

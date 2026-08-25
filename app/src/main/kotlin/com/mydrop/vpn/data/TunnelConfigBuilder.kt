@@ -1,16 +1,17 @@
 package com.mydrop.vpn.data
 
 import android.content.Context
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Turns a chosen server into the document the core reads at startup.
@@ -50,7 +51,7 @@ class TunnelConfigBuilder(
         } else {
             // Route by rules without the geo sets rather than refusing to connect: plain routing
             // still works, and a tunnel that comes up beats one that will not.
-            logs.warn("Гео-правила недоступны (${missing.joinToString()}) — маршрутизация без них")
+            logs.warn(R.string.log_georules_missing, missing.joinToString())
             settings.value.copy(routingMode = RoutingMode.Global, blockAds = false)
         }
 
@@ -71,9 +72,9 @@ class TunnelConfigBuilder(
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
             // when reading a log off the device.
-            probe?.let { logs.debug("Порт для замера скорости: ${it.port}") }
+            probe?.let { logs.debug(R.string.log_probe_port, it.port) }
         }.getOrElse { error ->
-            logs.error("Не удалось собрать конфигурацию: ${error.message}")
+            logs.error(R.string.log_config_failed, error.message.orEmpty())
             null
         }
     }

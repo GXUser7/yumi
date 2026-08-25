@@ -45,11 +45,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.graphics.shapes.Morph
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import kotlin.math.floor
@@ -218,13 +220,15 @@ private fun ConnectButtonLabel(state: VpnState, accent: Color) {
         else -> Icons.Rounded.PowerSettingsNew
     }
 
-    val caption = when (state) {
-        is VpnState.Connected -> "Подключено"
-        is VpnState.Connecting -> state.phase.label
-        VpnState.Disconnecting -> "Отключение"
-        is VpnState.Failed -> "Ошибка"
-        VpnState.Disconnected -> "Подключиться"
-    }
+    val caption = stringResource(
+        when (state) {
+            is VpnState.Connected -> R.string.connect_state_connected
+            is VpnState.Connecting -> state.phase.labelRes
+            VpnState.Disconnecting -> R.string.connect_button_disconnecting
+            is VpnState.Failed -> R.string.connect_state_error
+            VpnState.Disconnected -> R.string.connect_button_connect
+        },
+    )
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,

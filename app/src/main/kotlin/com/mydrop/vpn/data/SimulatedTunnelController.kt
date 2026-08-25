@@ -1,8 +1,11 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import kotlin.math.sin
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -11,8 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.sin
-import kotlin.random.Random
 
 /**
  * Drives the full connect/disconnect state machine without touching the network, so the connect
@@ -40,16 +41,16 @@ class SimulatedTunnelController(
         job?.cancel()
         _traffic.value = TrafficStats.Zero
         job = scope.launch {
-            logs.info("Подключение к ${node.name} (${node.protocol.label}, ${node.address})")
+            logs.info(R.string.log_connecting_to, node.name, node.protocol.label, node.address)
 
             VpnState.Connecting.Phase.entries.forEach { phase ->
                 _state.value = VpnState.Connecting(node.id, phase)
-                logs.debug(phase.label)
+                logs.debug(phase.labelRes)
                 delay(Random.nextLong(350, 700))
             }
 
             _state.value = VpnState.Connected(node.id, System.currentTimeMillis())
-            logs.info("Туннель поднят: ${node.name}")
+            logs.info(R.string.log_tunnel_up, node.name)
             pumpTraffic()
         }
     }
@@ -58,7 +59,7 @@ class SimulatedTunnelController(
         job?.cancel()
         job = scope.launch {
             _state.value = VpnState.Disconnecting
-            logs.info("Остановка туннеля")
+            logs.info(R.string.log_tunnel_stopping)
             delay(300)
             _state.value = VpnState.Disconnected
             _traffic.value = TrafficStats.Zero

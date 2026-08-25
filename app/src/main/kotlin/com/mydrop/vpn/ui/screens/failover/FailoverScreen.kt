@@ -25,18 +25,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.core.format.pluralServers
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
-import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.ui.components.LatencyChip
 import com.mydrop.vpn.ui.components.ProtocolBadge
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
+import com.mydrop.vpn.ui.format.pluralServers
 
 /**
  * Chooses which servers the tunnel is allowed to move onto.
@@ -66,27 +68,27 @@ fun FailoverScreen(
     ) {
         item(key = "header") {
             ScreenHeader(
-                title = "Подмена\nсервера",
+                title = stringResource(R.string.failover_title),
                 titleStyle = MaterialTheme.typography.headlineLarge,
                 subtitle = if (chosen.isEmpty()) {
-                    "Выбирается автоматически"
+                    stringResource(R.string.failover_automatic)
                 } else {
-                    "Выбрано ${pluralServers(chosen.size)}"
+                    stringResource(R.string.failover_chosen, pluralServers(chosen.size))
                 },
                 modifier = Modifier.padding(bottom = 10.dp),
-                actions = { TonalIconButton(Icons.Rounded.ArrowBack, "Назад", onBack) },
+                actions = {
+                    TonalIconButton(
+                        Icons.Rounded.ArrowBack,
+                        stringResource(R.string.action_back),
+                        onBack,
+                    )
+                },
             )
         }
 
         item(key = "explainer") {
             Text(
-                text = "Пока туннель поднят, приложение раз в 20 секунд проверяет текущий " +
-                    "сервер. Если он не ответил дважды подряд, выбранные здесь серверы " +
-                    "пингуются заново: не ответившие выбывают, слишком медленные на фоне " +
-                    "остальных — тоже, а из оставшихся берётся случайный. Случайный, а не " +
-                    "самый быстрый, чтобы при падении популярного сервера все не сбежались " +
-                    "на один и тот же. В проверку идут не больше " +
-                    "${FailoverGroup.MAX_GROUP} серверов, считая текущий.",
+                text = stringResource(R.string.failover_explanation, FailoverGroup.MAX_GROUP),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -99,7 +101,7 @@ fun FailoverScreen(
                     onClick = { onUpdate { it.copy(failoverNodeIds = emptySet()) } },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 ) {
-                    Text("Снять выбор и решать автоматически")
+                    Text(stringResource(R.string.failover_clear_selection))
                 }
             }
         }
@@ -107,7 +109,7 @@ fun FailoverScreen(
         if (candidates.isEmpty()) {
             item(key = "empty") {
                 Text(
-                    text = "Сначала добавьте серверы — подменять пока нечем",
+                    text = stringResource(R.string.failover_no_servers),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(32.dp),

@@ -1,5 +1,6 @@
 package com.mydrop.vpn.ui.screens.servers
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -50,11 +51,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.core.format.pluralServers
-import com.mydrop.vpn.core.format.pluralSources
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.ui.MainUiState
@@ -63,12 +64,14 @@ import com.mydrop.vpn.ui.components.LatencyChip
 import com.mydrop.vpn.ui.components.ProtocolBadge
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
+import com.mydrop.vpn.ui.format.pluralServers
+import com.mydrop.vpn.ui.format.pluralSources
 
-enum class ServerSort(val label: String) {
-    Default("По порядку"),
-    Latency("По задержке"),
-    Name("По названию"),
-    Protocol("По протоколу"),
+enum class ServerSort(@StringRes val labelRes: Int) {
+    Default(R.string.servers_sort_default),
+    Latency(R.string.servers_sort_latency),
+    Name(R.string.servers_sort_name),
+    Protocol(R.string.servers_sort_protocol),
 }
 
 private data class ServerGroup(
@@ -92,8 +95,18 @@ fun ServersScreen(
     var sort by rememberSaveable { mutableStateOf(ServerSort.Default) }
     val collapsedGroups = remember { mutableStateOf(emptySet<String>()) }
 
-    val groups = remember(state.nodes, state.subscriptions, state.latencies, query, sort) {
-        buildGroups(state, query, sort)
+    // Read outside the remember block: it is not a composition, so it cannot resolve resources,
+    // and the label is the only thing in there that depends on the language.
+    val manualGroupTitle = stringResource(R.string.servers_group_manual)
+    val groups = remember(
+        state.nodes,
+        state.subscriptions,
+        state.latencies,
+        query,
+        sort,
+        manualGroupTitle,
+    ) {
+        buildGroups(state, query, sort, manualGroupTitle)
     }
 
     LazyColumn(
@@ -103,8 +116,12 @@ fun ServersScreen(
     ) {
         item(key = "header") {
             ScreenHeader(
-                title = "Серверы",
-                subtitle = "${pluralServers(state.nodes.size)} · ${pluralSources(state.subscriptions.size)}",
+                title = stringResource(R.string.servers_title),
+                subtitle = stringResource(
+                    R.string.servers_subtitle,
+                    pluralServers(state.nodes.size),
+                    pluralSources(state.subscriptions.size),
+                ),
                 modifier = Modifier.padding(bottom = 8.dp),
             )
         }
@@ -183,6 +200,7 @@ private fun buildGroups(
     state: MainUiState,
     query: String,
     sort: ServerSort,
+    manualGroupTitle: String,
 ): List<ServerGroup> {
     val normalizedQuery = query.trim().lowercase()
 
@@ -221,7 +239,7 @@ private fun buildGroups(
     val manualGroup = if (manual.isEmpty()) {
         null
     } else {
-        ServerGroup(id = "manual", title = "Добавлено вручную", nodes = manual)
+        ServerGroup(id = "manual", title = manualGroupTitle, nodes = manual)
     }
 
     return (subscriptionGroups + listOfNotNull(manualGroup)).filter { it.nodes.isNotEmpty() }
@@ -246,12 +264,15 @@ private fun SearchAndSortRow(
             value = query,
             onValueChange = onQueryChange,
             modifier = Modifier.weight(1f),
-            placeholder = { Text("Поиск сервера") },
+            placeholder = { Text(stringResource(R.string.servers_search_placeholder)) },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
                     IconButton(onClick = { onQueryChange("") }) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Очистить")
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = stringResource(R.string.action_clear),
+                        )
                     }
                 }
             },
@@ -261,12 +282,15 @@ private fun SearchAndSortRow(
 
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Rounded.SwapVert, contentDescription = "Сортировка")
+                Icon(
+                    Icons.Rounded.SwapVert,
+                    contentDescription = stringResource(R.string.action_sort),
+                )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 ServerSort.entries.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(option.label) },
+                        text = { Text(stringResource(option.labelRes)) },
                         onClick = {
                             onSortChange(option)
                             menuOpen = false
@@ -336,7 +360,9 @@ private fun GroupHeader(
         }
         Icon(
             imageVector = if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
-            contentDescription = if (collapsed) "Развернуть" else "Свернуть",
+            contentDescription = stringResource(
+                if (collapsed) R.string.action_expand else R.string.action_collapse,
+            ),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -417,11 +443,14 @@ private fun ServerRow(
 
             Box {
                 IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Rounded.NetworkPing, contentDescription = "Действия")
+                    Icon(
+                        Icons.Rounded.NetworkPing,
+                        contentDescription = stringResource(R.string.servers_actions),
+                    )
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
-                        text = { Text("Проверить задержку") },
+                        text = { Text(stringResource(R.string.servers_measure_latency)) },
                         leadingIcon = { Icon(Icons.Rounded.NetworkPing, null) },
                         onClick = {
                             onPing()
@@ -433,11 +462,13 @@ private fun ServerRow(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    if (skipping) {
-                                        "Проверять сертификат"
-                                    } else {
-                                        "Не проверять сертификат"
-                                    },
+                                    stringResource(
+                                        if (skipping) {
+                                            R.string.servers_verify_certificate
+                                        } else {
+                                            R.string.servers_skip_certificate
+                                        },
+                                    ),
                                 )
                             },
                             leadingIcon = {
@@ -454,7 +485,7 @@ private fun ServerRow(
                     }
                     if (onShare != null) {
                         DropdownMenuItem(
-                            text = { Text("Показать QR-код") },
+                            text = { Text(stringResource(R.string.servers_show_qr)) },
                             leadingIcon = { Icon(Icons.Rounded.QrCode2, null) },
                             onClick = {
                                 onShare()
@@ -463,7 +494,7 @@ private fun ServerRow(
                         )
                     }
                     DropdownMenuItem(
-                        text = { Text("Удалить сервер") },
+                        text = { Text(stringResource(R.string.servers_delete)) },
                         leadingIcon = { Icon(Icons.Rounded.Delete, null) },
                         onClick = {
                             onRemove()
@@ -484,14 +515,16 @@ private fun EmptyState(hasNodes: Boolean, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = if (hasNodes) "Ничего не найдено" else "Серверов пока нет",
+            text = stringResource(
+                if (hasNodes) R.string.servers_empty_filtered else R.string.servers_empty,
+            ),
             style = MaterialTheme.typography.titleMedium,
         )
         Text(
             text = if (hasNodes) {
-                "Попробуйте изменить запрос"
+                stringResource(R.string.servers_empty_filtered_hint)
             } else {
-                "Добавьте подписку или вставьте ссылку на сервер"
+                stringResource(R.string.servers_empty_hint)
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -511,7 +544,7 @@ fun PingAllButtonContent(isBusy: Boolean) {
     } else {
         Icon(
             imageVector = Icons.Rounded.Bolt,
-            contentDescription = "Проверить все",
+            contentDescription = stringResource(R.string.servers_ping_all),
             modifier = Modifier.rotate(rotation),
         )
     }

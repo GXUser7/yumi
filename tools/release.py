@@ -39,8 +39,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_GRADLE = ROOT / "app/build.gradle.kts"
 APK_DIR = ROOT / "app/build/outputs/apk/release"
-ENV_FILE = Path.home() / ".mydrop-signing/publish.env"
-KEYSTORE_PROPS = Path.home() / ".mydrop-signing/keystore.properties"
+
+# Same override the Gradle build honours, and for the same reason: the default is a guess about
+# the machine rather than about the project, and the credentials do not have to live on C:.
+#
+#     YUMI_SIGNING_DIR=E:/.mydrop-signing tools/release.py
+SIGNING_DIR = Path(os.environ.get("YUMI_SIGNING_DIR") or (Path.home() / ".mydrop-signing"))
+ENV_FILE = SIGNING_DIR / "publish.env"
+KEYSTORE_PROPS = SIGNING_DIR / "keystore.properties"
 
 # Fallbacks for a release published without `--notes` / `--announce`. Deliberately says nothing
 # about what changed: a default that describes one particular version turns into a lie the next
@@ -50,9 +56,30 @@ RELEASE_NOTES = """## Yumi {version}
 Android-клиент VPN на Material 3 Expressive с ядром sing-box.
 """
 
+# Appended to every release body. The APKs are installed from "unknown sources" with nothing
+# between the download and the phone, so the checksums are the only way for somebody to tell the
+# file they got from a file somebody else got. They were computed and printed to the terminal
+# before, which helps nobody downloading from the releases page.
+CHECKSUMS_SECTION = """
+
+### sha256
+
+```
+{lines}
+```
+"""
+
 ANNOUNCEMENT = """<b>Yumi {version}</b>
 
 Новая сборка Android-клиента."""
+
+
+# This script prints arrows and Russian, and on a Windows console the default encoding is cp1251,
+# which cannot represent either. Without this the run dies on its own progress message — and it
+# does so partway through publishing, which is the worst possible moment for it.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def die(message: str) -> "NoReturn":  # type: ignore[name-defined]
@@ -131,7 +158,12 @@ def build() -> list[Path]:
         die(f"{KEYSTORE_PROPS} not found — the release would be unsigned and refuse to install")
 
     env = dict(os.environ)
-    env.setdefault("JAVA_HOME", str(Path.home() / ".gradle/jdks/eclipse_adoptium-21-amd64-linux.2"))
+    # No default: the path that used to be here existed on exactly one machine, and anywhere else
+    # it sent the build at a JDK that was not there. Gradle finds its own if JAVA_HOME is unset;
+    # this only says what the build needs when it cannot.
+    if "JAVA_HOME" not in env:
+        print("note: JAVA_HOME is unset; Gradle will use whatever java is on PATH (needs 21)")
+    env.setdefault("YUMI_SIGNING_DIR", str(SIGNING_DIR))
     print("→ building signed release…")
     subprocess.run([str(ROOT / "gradlew"), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
 
@@ -251,6 +283,14 @@ def main() -> None:
     parser.add_argument("--chats", action="store_true", help="показать чаты, доступные боту")
     args = parser.parse_args()
 
+    # `@path` reads the text from a UTF-8 file. Release notes and channel posts are paragraphs of
+    # Russian with newlines in them, and passing those through a Windows command line is a good
+    # way to publish mojibake to a few hundred people.
+    for field in ("notes", "announce"):
+        value = getattr(args, field)
+        if value.startswith("@"):
+            setattr(args, field, Path(value[1:]).read_text(encoding="utf-8"))
+
     if args.chats:
         list_chats(load_env()["TELEGRAM_BOT_TOKEN"])
         return
@@ -280,7 +320,11 @@ def main() -> None:
 
     token = env["GITHUB_TOKEN"]
     repo = resolve_repo(token, env.get("GITHUB_REPO"))
-    release = ensure_release(repo, token, tag, args.notes or RELEASE_NOTES.format(version=version))
+    notes = args.notes or RELEASE_NOTES.format(version=version)
+    notes += CHECKSUMS_SECTION.format(
+        lines=chr(10).join(f"{sha256(apk)}  {apk.name}" for apk in renamed),
+    )
+    release = ensure_release(repo, token, tag, notes)
     links = {apk.name: upload_asset(release, token, apk) for apk in renamed}
 
     announcement = args.announce or ANNOUNCEMENT.format(version=version)

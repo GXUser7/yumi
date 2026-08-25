@@ -398,4 +398,28 @@ class SingBoxConfigFactoryTest {
 
         assertEquals("gvisor", tun["stack"]!!.jsonPrimitive.content)
     }
+
+    /**
+     * A regression guard with a story behind it.
+     *
+     * Routing geosite-ru lookups to the direct resolver shipped once and made browsing drop out:
+     * `dns-direct` is plain UDP leaving through the user's own connection, which is precisely what
+     * gets throttled where this app is used, so most everyday names moved onto a path that fails
+     * intermittently. Everything resolves through `final` until something answers what happens
+     * when the direct resolver is unreachable.
+     */
+    @Test
+    fun `no DNS rule sends names to the direct resolver`() {
+        val node = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls",
+            ),
+        )
+        val dns = Json.parseToJsonElement(
+            SingBoxConfigFactory.build(node, AppSettings(routingMode = RoutingMode.Rules), "/rules"),
+        ).jsonObject["dns"]!!.jsonObject
+
+        assertNull(dns["rules"])
+        assertEquals("dns-remote", dns["final"]!!.jsonPrimitive.content)
+    }
 }

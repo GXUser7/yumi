@@ -1,29 +1,53 @@
 package com.mydrop.vpn.core.model
 
+import androidx.annotation.StringRes
+import com.mydrop.vpn.R
 import kotlinx.serialization.Serializable
 
+/*
+ * Why these enums carry resource ids rather than text.
+ *
+ * They used to hold the Russian words themselves, which put user-visible copy in the one layer
+ * that has no way to know what language the user reads. Serialisation is unaffected: kotlinx
+ * writes the entry name (`Rules`), never the constructor arguments, so a stored profile survives
+ * this change and would survive a retranslation too.
+ */
+
 @Serializable
-enum class ThemeMode(val label: String) {
-    System("Системная"),
-    Light("Светлая"),
-    Dark("Тёмная"),
+enum class ThemeMode(@StringRes val labelRes: Int) {
+    System(R.string.theme_system),
+    Light(R.string.theme_light),
+    Dark(R.string.theme_dark),
+}
+
+/**
+ * The language the interface is drawn in.
+ *
+ * [System] follows the phone, which resolves to Russian on a Russian phone and to English
+ * everywhere else — those are the two the app ships. A named choice overrides that, because the
+ * language of a phone and the language its owner wants an app in are not always the same.
+ *
+ * The tag is what [java.util.Locale.forLanguageTag] takes; null means "do not override".
+ */
+@Serializable
+enum class AppLanguage(val tag: String?, @StringRes val labelRes: Int) {
+    System(null, R.string.language_system),
+    Russian("ru", R.string.language_russian),
+    English("en", R.string.language_english),
 }
 
 @Serializable
-enum class RoutingMode(val label: String, val description: String) {
-    Global("Глобально", "Весь трафик идёт через прокси"),
-    Rules("По правилам", "Локальные и российские адреса — напрямую, остальное через прокси"),
-    Direct(
-        "Напрямую",
-        "Прокси не используется: трафик идёт с обычного адреса, но имена разрешает выбранный DNS",
-    ),
+enum class RoutingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
+    Global(R.string.routing_global, R.string.routing_global_description),
+    Rules(R.string.routing_rules, R.string.routing_rules_description),
+    Direct(R.string.routing_direct, R.string.routing_direct_description),
 }
 
 @Serializable
-enum class SplitTunnelMode(val label: String) {
-    Off("Выключено"),
-    AllowList("Только выбранные"),
-    BlockList("Кроме выбранных"),
+enum class SplitTunnelMode(@StringRes val labelRes: Int) {
+    Off(R.string.split_tunnel_off),
+    AllowList(R.string.split_tunnel_allow_list),
+    BlockList(R.string.split_tunnel_block_list),
 }
 
 @Serializable
@@ -34,14 +58,10 @@ enum class LogLevel { Trace, Debug, Info, Warn, Error }
  * they have no TCP port to handshake with.
  */
 @Serializable
-enum class PingMode(val label: String, val description: String) {
-    Tcp("TCP", "Одно рукопожатие TCP. Быстро, годится для длинных списков"),
-    Tls(
-        "TLS",
-        "Полное рукопожатие TLS: дороже на пару обменов, зато видно, что узел действительно " +
-            "отвечает шифрованием, а не просто держит порт открытым",
-    ),
-    Median("Медиана", "Три пробы, берётся средняя. Медленнее, но число не пляшет"),
+enum class PingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
+    Tcp(R.string.ping_tcp, R.string.ping_tcp_description),
+    Tls(R.string.ping_tls, R.string.ping_tls_description),
+    Median(R.string.ping_median, R.string.ping_median_description),
 }
 
 @Serializable
@@ -52,6 +72,7 @@ data class AppSettings(
     // that accent meaning "protected". Still a switch — the choice belongs to the user.
     val dynamicColor: Boolean = false,
     val amoled: Boolean = false,
+    val language: AppLanguage = AppLanguage.System,
 
     // Routing
     val routingMode: RoutingMode = RoutingMode.Rules,

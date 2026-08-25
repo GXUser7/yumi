@@ -7,6 +7,9 @@ import kotlinx.serialization.Serializable
  * Outbound protocols the app can carry. The set is deliberately the sing-box outbound
  * catalogue rather than a UI-only enum, so a node parsed from a subscription maps 1:1 onto
  * something the core can actually dial.
+ *
+ * [label] stays plain text rather than a string resource: every one of these is the protocol's
+ * own name and reads identically in any language.
  */
 @Serializable
 enum class Protocol(val label: String, val uriScheme: String) {
@@ -62,7 +65,7 @@ enum class Protocol(val label: String, val uriScheme: String) {
      * kept verbatim and handed to the core untouched.
      */
     @SerialName("raw")
-    RAW("Как есть", "raw"),
+    RAW("Raw", "raw"),
     ;
 
     /** True for protocols that ride QUIC and therefore need UDP to be reachable. */

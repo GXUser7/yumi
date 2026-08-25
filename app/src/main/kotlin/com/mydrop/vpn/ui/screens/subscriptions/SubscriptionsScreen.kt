@@ -8,7 +8,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,16 +23,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,9 +46,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
-import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -59,18 +59,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.format.daysUntil
-import com.mydrop.vpn.core.format.formatBytes
-import com.mydrop.vpn.core.format.formatRelativeTime
-import com.mydrop.vpn.core.format.pluralServers
-import com.mydrop.vpn.core.format.pluralSources
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.ui.MainUiState
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
+import com.mydrop.vpn.ui.format.formatBytes
+import com.mydrop.vpn.ui.format.formatRelativeTime
+import com.mydrop.vpn.ui.format.pluralServers
+import com.mydrop.vpn.ui.format.pluralSources
 
 @Composable
 fun SubscriptionsScreen(
@@ -90,7 +92,7 @@ fun SubscriptionsScreen(
     ) {
         item(key = "header") {
             ScreenHeader(
-                title = "Подписки",
+                title = stringResource(R.string.subscriptions_title),
                 subtitle = pluralSources(state.subscriptions.size),
                 modifier = Modifier.padding(bottom = 8.dp),
             )
@@ -103,9 +105,12 @@ fun SubscriptionsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Подписок нет", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = "Добавьте ссылку от провайдера — серверы подтянутся сами",
+                        stringResource(R.string.subscriptions_empty),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = stringResource(R.string.subscriptions_empty_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -188,9 +193,11 @@ private fun SubscriptionCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${pluralServers(nodeCount)} · обновлено ${
-                        formatRelativeTime(subscription.lastUpdatedEpochMillis)
-                    }",
+                    text = stringResource(
+                        R.string.subscriptions_updated,
+                        pluralServers(nodeCount),
+                        formatRelativeTime(subscription.lastUpdatedEpochMillis),
+                    ),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
@@ -198,13 +205,13 @@ private fun SubscriptionCard(
                 IconButton(onClick = onShare) {
                     Icon(
                         imageVector = Icons.Rounded.QrCode2,
-                        contentDescription = "Показать QR-код",
+                        contentDescription = stringResource(R.string.subscriptions_show_qr),
                     )
                 }
                 IconButton(onClick = onRemove) {
                     Icon(
                         imageVector = Icons.Rounded.Delete,
-                        contentDescription = "Удалить подписку",
+                        contentDescription = stringResource(R.string.subscriptions_delete),
                         tint = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -244,7 +251,7 @@ private fun TrafficQuota(subscription: Subscription) {
 
     if (info == null || fraction == null) {
         Text(
-            text = "Провайдер не сообщает лимит трафика",
+            text = stringResource(R.string.subscriptions_no_quota),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -268,9 +275,14 @@ private fun TrafficQuota(subscription: Subscription) {
 
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = buildString {
-                    append(formatBytes(info.usedBytes ?: 0))
-                    info.totalBytes?.let { append(" из ${formatBytes(it)}") }
+                text = run {
+                    val used = formatBytes(info.usedBytes ?: 0).toString()
+                    val total = info.totalBytes?.let { formatBytes(it).toString() }
+                    if (total == null) {
+                        used
+                    } else {
+                        stringResource(R.string.subscriptions_used_of, used, total)
+                    }
                 },
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f),
@@ -279,7 +291,11 @@ private fun TrafficQuota(subscription: Subscription) {
             val daysLeft = daysUntil(info.expiresAtEpochSeconds)
             if (daysLeft != null) {
                 Text(
-                    text = if (daysLeft > 0) "осталось $daysLeft дн." else "истекла",
+                    text = if (daysLeft > 0) {
+                        stringResource(R.string.subscriptions_days_left, daysLeft)
+                    } else {
+                        stringResource(R.string.subscriptions_expired)
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = if (daysLeft > 3) {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -305,7 +321,7 @@ private fun RefreshButton(isRefreshing: Boolean, onClick: () -> Unit) {
     IconButton(onClick = onClick, enabled = !isRefreshing) {
         Icon(
             imageVector = Icons.Rounded.Autorenew,
-            contentDescription = "Обновить",
+            contentDescription = stringResource(R.string.action_refresh),
             modifier = Modifier.rotate(if (isRefreshing) spin else 0f),
         )
     }
@@ -335,12 +351,13 @@ fun AddSubscriptionSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Добавить", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                stringResource(R.string.add_sheet_title),
+                style = MaterialTheme.typography.headlineSmall,
+            )
 
             Text(
-                text = "Ссылка от провайдера, happ://-ссылка, сам сервер (vless://, vmess://, " +
-                    "trojan://, ss://, hysteria2://, tuic://…) или адрес DNS " +
-                    "(tls://, sdns://, https://…/dns-query)",
+                text = stringResource(R.string.add_sheet_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -358,7 +375,7 @@ fun AddSubscriptionSheet(
                         checked = kind == option,
                         onCheckedChange = { kind = option },
                     ) {
-                        Text(option.label, style = MaterialTheme.typography.labelMedium)
+                        Text(stringResource(option.labelRes), style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -367,7 +384,7 @@ fun AddSubscriptionSheet(
                 value = url,
                 onValueChange = { url = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Ссылка") },
+                label = { Text(stringResource(R.string.add_sheet_link_label)) },
                 leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
@@ -377,7 +394,7 @@ fun AddSubscriptionSheet(
                 value = name,
                 onValueChange = { name = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Название (необязательно)") },
+                label = { Text(stringResource(R.string.add_sheet_name_label)) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
             )
@@ -394,7 +411,7 @@ fun AddSubscriptionSheet(
                 ) {
                     Icon(Icons.Rounded.ContentPaste, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Вставить")
+                    Text(stringResource(R.string.action_paste))
                 }
 
                 OutlinedButton(
@@ -403,7 +420,7 @@ fun AddSubscriptionSheet(
                 ) {
                     Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Сканировать")
+                    Text(stringResource(R.string.action_scan))
                 }
             }
 
@@ -411,7 +428,7 @@ fun AddSubscriptionSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(onClick = onDismiss) { Text("Отмена") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
 
                 Button(
                     onClick = {
@@ -424,7 +441,7 @@ fun AddSubscriptionSheet(
                 ) {
                     Icon(Icons.Rounded.OpenInNew, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Добавить")
+                    Text(stringResource(R.string.action_add))
                 }
             }
 

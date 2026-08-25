@@ -2,6 +2,7 @@ package com.mydrop.vpn.core.parse
 
 import java.net.URLDecoder
 import java.util.Base64
+import com.mydrop.vpn.core.net.splitHostPort
 
 /**
  * Proxy share-links are only URI-shaped. Their userinfo routinely carries raw base64, colons and
@@ -58,25 +59,23 @@ internal fun splitUri(raw: String): ParsedUri? {
         rest = rest.substring(atIndex + 1)
     }
 
-    val (host, port) = splitHostPort(rest) ?: return null
+    val (host, port) = splitHostAndPort(rest) ?: return null
     return ParsedUri(scheme, userInfo, host, port, query, fragment)
 }
 
-/** Handles bare hosts, IPv4 and bracketed IPv6 literals. */
-internal fun splitHostPort(raw: String, defaultPort: Int = -1): Pair<String, Int>? {
-    if (raw.isEmpty()) return null
-    if (raw.startsWith("[")) {
-        val close = raw.indexOf(']')
-        if (close < 0) return null
-        val host = raw.substring(1, close)
-        val port = raw.substring(close + 1).removePrefix(":").toIntOrNull() ?: defaultPort
-        return if (port in 1..65535) host to port else null
-    }
-    val colon = raw.lastIndexOf(':')
-    if (colon < 0) return if (defaultPort in 1..65535) raw to defaultPort else null
-    val host = raw.substring(0, colon)
-    val port = raw.substring(colon + 1).toIntOrNull() ?: return null
-    return if (host.isNotEmpty() && port in 1..65535) host to port else null
+/**
+ * Host and port for a link that needs both.
+ *
+ * A proxy share-link without a port cannot be dialled, so a missing one rejects the line rather
+ * than inventing a default — and an unbracketed IPv6 literal has no port to find, which is
+ * exactly the case the old hand-rolled split got wrong: it cut `2001:db8::1` on the last colon
+ * and produced host `2001:db8:` with port 1, a node that looked fine in the list and could never
+ * connect. The splitting itself now lives in [splitHostPort].
+ */
+internal fun splitHostAndPort(raw: String): Pair<String, Int>? {
+    val parsed = splitHostPort(raw) ?: return null
+    val port = parsed.port ?: return null
+    return parsed.host to port
 }
 
 internal fun parseQuery(raw: String): Map<String, String> =

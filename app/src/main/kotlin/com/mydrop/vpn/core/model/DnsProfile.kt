@@ -1,7 +1,7 @@
 package com.mydrop.vpn.core.model
 
-import kotlinx.serialization.Serializable
 import java.security.MessageDigest
+import kotlinx.serialization.Serializable
 
 /**
  * A resolver the tunnel can be pointed at.

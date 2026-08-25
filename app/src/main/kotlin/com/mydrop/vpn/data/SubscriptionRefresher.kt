@@ -1,6 +1,6 @@
 package com.mydrop.vpn.data
 
-import com.mydrop.vpn.core.format.pluralServers
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 
@@ -17,6 +17,7 @@ class SubscriptionRefresher(
     private val profiles: ProfileRepository,
     private val service: SubscriptionService,
     private val logs: LogRepository,
+    private val strings: Strings,
 ) {
 
     /** A sentence describing what happened, suitable for a snackbar or the journal. */
@@ -30,17 +31,21 @@ class SubscriptionRefresher(
                     remoteTitle = result.subscription.remoteTitle,
                     webPageUrl = result.subscription.webPageUrl,
                 )
-                buildString {
-                    append("«${subscription.name}»: ${pluralServers(result.nodes.size)}")
-                    if (added > 0) append(", +$added новых")
-                    if (removed > 0) append(", -$removed удалено")
+                val counted = strings.plural(R.plurals.servers, result.nodes.size)
+                val detail = when {
+                    added > 0 && removed > 0 ->
+                        strings.get(R.string.subscription_added_removed, counted, added, removed)
+                    added > 0 -> strings.get(R.string.subscription_added, counted, added)
+                    removed > 0 -> strings.get(R.string.subscription_removed_only, counted, removed)
+                    else -> counted
                 }
+                strings.get(R.string.log_subscription_message, subscription.name, detail)
             }
 
             is SubscriptionUpdate.Failure -> {
                 profiles.recordSubscriptionError(subscription.id, result.message)
-                logs.warn("Подписка «${subscription.name}»: ${result.message}")
-                "«${subscription.name}»: ${result.message}"
+                logs.warn(R.string.log_subscription_message, subscription.name, result.message)
+                strings.get(R.string.log_subscription_message, subscription.name, result.message)
             }
         }
 }

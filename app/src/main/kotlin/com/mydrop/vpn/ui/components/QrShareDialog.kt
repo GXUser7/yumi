@@ -18,9 +18,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.R
 
 /**
  * Hands a server or subscription to someone standing next to you.
@@ -72,11 +74,11 @@ fun QrShareDialog(
         },
         confirmButton = {
             TextButton(onClick = { clipboard.setText(AnnotatedString(link)) }) {
-                Text("Скопировать")
+                Text(stringResource(R.string.action_copy))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Закрыть") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
         },
     )
 }

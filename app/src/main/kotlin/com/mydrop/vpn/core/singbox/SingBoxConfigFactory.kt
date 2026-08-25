@@ -20,6 +20,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import com.mydrop.vpn.core.net.splitHostPort
+import com.mydrop.vpn.core.net.isNumericAddress
 
 /**
  * Builds a sing-box configuration document for one selected server.
@@ -92,7 +94,7 @@ object SingBoxConfigFactory {
     /**
      * Puts the chosen resolver where the queries actually go.
      *
-     * Which of the two servers that is depends on the routing mode: "напрямую" resolves through
+     * Which of the two servers that is depends on the routing mode: direct routing resolves through
      * `dns-direct` and never touches `dns-remote`, so overriding only the remote one left a
      * resolver selected in the list and a different one answering — the exact case of wanting a
      * DNS service *without* routing through a proxy, which is what these services are for.
@@ -160,8 +162,8 @@ object SingBoxConfigFactory {
      * never hit it — and why choosing a resolver by name did, immediately.
      */
     private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
-        val remoteNamed = !addressOf(settings.remoteDns, DEFAULT_REMOTE_DNS).isNumericAddress()
-        val directNamed = !addressOf(settings.directDns, DEFAULT_DIRECT_DNS).isNumericAddress()
+        val remoteNamed = !isNumericAddress(addressOf(settings.remoteDns, DEFAULT_REMOTE_DNS))
+        val directNamed = !isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))
         val bootstrap = if (remoteNamed || directNamed) DNS_BOOTSTRAP_TAG else null
 
         putJsonArray("servers") {
@@ -179,11 +181,27 @@ object SingBoxConfigFactory {
                     put(
                         "server",
                         addressOf(settings.directDns, DEFAULT_DIRECT_DNS)
-                            .takeIf { it.isNumericAddress() } ?: DEFAULT_DIRECT_DNS,
+                            .takeIf(::isNumericAddress) ?: DEFAULT_DIRECT_DNS,
                     )
                 }
             }
         }
+
+        // No DNS rules here, and that is a decision rather than an omission.
+        //
+        // Sending geosite-ru names to `dns-direct` looks obviously right: those domains route
+        // around the proxy, so resolving them through it hands back a CDN edge chosen for wherever
+        // the remote resolver sits. It was tried, and it broke browsing.
+        //
+        // `dns-direct` is plain UDP on port 53 with no detour, so it leaves through the phone's own
+        // connection — which is exactly the traffic Russian DPI throttles and hijacks. The rule
+        // therefore moved the majority of everyday lookups off a working DoH-through-the-tunnel
+        // path onto one that fails intermittently, and an intermittently failing resolver reads to
+        // the user as the internet cutting out.
+        //
+        // Anything that revisits this has to answer the question that version did not: what
+        // resolves these names when the direct resolver is unreachable. Until there is an answer,
+        // everything goes through `final` below, which works.
 
         // No `{"outbound":"any"}` rule here: resolving the proxy's own hostname directly is now
         // expressed as route.default_domain_resolver, and the old rule item is removed in
@@ -196,14 +214,8 @@ object SingBoxConfigFactory {
     private fun addressOf(value: String, fallback: String): String {
         val trimmed = value.trim().ifEmpty { fallback }
         val rest = if (trimmed.contains("://")) trimmed.substringAfter("://") else trimmed
-        return rest.substringBefore('/').substringBeforeLast(':', rest.substringBefore('/'))
-            .removeSurrounding("[", "]")
+        return splitHostPort(rest.substringBefore('/'))?.host.orEmpty()
     }
-
-    /** An address the core can dial without asking anyone: `1.1.1.1`, `2606:4700::1111`. */
-    private fun String.isNumericAddress(): Boolean =
-        isNotEmpty() && all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' } &&
-            (contains('.') || contains(':'))
 
     /**
      * Accepts the DNS field either as a bare address (`8.8.8.8`) or as a URL
@@ -227,8 +239,13 @@ object SingBoxConfigFactory {
         val hostPart = rest.substringBefore('/')
         val path = rest.substringAfter('/', "").let { if (it.isEmpty()) "" else "/$it" }
 
-        val host = hostPart.substringBeforeLast(':', hostPart).removeSurrounding("[", "]")
-        val port = hostPart.substringAfterLast(':', "").toIntOrNull()
+        // Through the shared splitter, which knows an unbracketed IPv6 literal when it sees one.
+        // Cutting on the last colon here turned `2606:4700:4700::1111` into server
+        // "2606:4700:4700:" on port 1111 — a document the core rejects, leaving the user with a
+        // tunnel that refuses to start and no hint that the DNS field was the reason.
+        val parsed = splitHostPort(hostPart)
+        val host = parsed?.host.orEmpty()
+        val port = parsed?.port
 
         return buildJsonObject {
             put(
@@ -395,7 +412,7 @@ object SingBoxConfigFactory {
         // resolver that needs resolving cannot be the thing that resolves.
         put(
             "default_domain_resolver",
-            if (addressOf(settings.directDns, DEFAULT_DIRECT_DNS).isNumericAddress()) {
+            if (isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))) {
                 DNS_DIRECT_TAG
             } else {
                 DNS_BOOTSTRAP_TAG
@@ -435,11 +452,23 @@ object SingBoxConfigFactory {
      * from a configuration we did not import — the core would refuse the whole document over a
      * name it cannot resolve, and a chain is a feature to carry deliberately rather than by
      * accident.
+     *
+     * An unreadable document throws rather than falling back to anything. The fallback used to be
+     * `{"type": "direct"}`, which is the worst failure this file can produce: the core starts,
+     * `route.final` still names this tag, and every packet leaves the phone unencrypted while the
+     * connect screen says the tunnel is up. [com.mydrop.vpn.data.TunnelConfigBuilder] catches
+     * this, writes the reason to the journal and returns null, so the tunnel simply does not come
+     * up — which is the honest answer.
      */
     private fun rawOutbound(raw: ProxySettings.Raw): JsonObject {
         val parsed = runCatching {
             Json.parseToJsonElement(raw.outbound).jsonObject
-        }.getOrElse { return buildJsonObject { put("type", "direct"); put("tag", PROXY_TAG) } }
+        }.getOrElse { error ->
+            // The message stays technical and untranslated: this file has no resources, and the
+            // sentence the user reads is assembled one layer up, where the journal already wraps
+            // whatever went wrong in its own localized line.
+            throw IllegalStateException(error.message ?: "unparsable outbound", error)
+        }
 
         return buildJsonObject {
             parsed.forEach { (key, value) ->
@@ -560,8 +589,10 @@ object SingBoxConfigFactory {
             ProxySettings.Direct -> put("type", "direct")
 
             // Handled before this function is reached; the branch exists so a new settings type
-            // cannot be added without the compiler pointing here.
-            is ProxySettings.Raw -> put("type", "direct")
+            // cannot be added without the compiler pointing here. It throws rather than emitting
+            // `direct` for the same reason [rawOutbound] does: a proxy tag that is not a proxy is
+            // a tunnel that lies about carrying traffic.
+            is ProxySettings.Raw -> error("Raw outbound must be built by rawOutbound()")
         }
 
         node.tls?.let { put("tls", buildTls(it, node.server)) }

@@ -1,16 +1,19 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.parse.SubscriptionBody
 import com.mydrop.vpn.core.parse.SubscriptionParser
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Base64
 import java.util.zip.GZIPInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 /**
  * What a panel with device binding wants to know about the client asking for the list.
@@ -44,6 +47,7 @@ data class DeviceIdentity(
  */
 class SubscriptionService(
     private val logs: LogRepository,
+    private val strings: Strings,
     private val userAgent: String = "Yumi/0.2.0 (Android)",
     private val identity: () -> DeviceIdentity? = { null },
 ) {
@@ -58,8 +62,10 @@ class SubscriptionService(
     suspend fun fetch(subscription: Subscription): SubscriptionUpdate = withContext(Dispatchers.IO) {
         runCatching { fetchInternal(subscription) }
             .getOrElse { error ->
-                val message = error.message ?: error::class.simpleName ?: "Ошибка сети"
-                logs.error("Подписка «${subscription.name}»: $message")
+                val message = error.message
+                    ?: error::class.simpleName
+                    ?: strings.get(R.string.error_network)
+                logs.warn(R.string.log_subscription_message, subscription.name, message)
                 SubscriptionUpdate.Failure(subscription.id, message)
             }
     }
@@ -68,7 +74,10 @@ class SubscriptionService(
         val response = get(subscription.url, subscription)
 
         if (response.code !in 200..299) {
-            return SubscriptionUpdate.Failure(subscription.id, "HTTP ${response.code}")
+            return SubscriptionUpdate.Failure(
+                subscription.id,
+                strings.get(R.string.error_http, response.code),
+            )
         }
 
         return when (val body = SubscriptionParser.parse(response.body, subscription.id)) {
@@ -81,7 +90,9 @@ class SubscriptionService(
                     // replaced by a guess at which of those it was. The rest of the names carry
                     // the instructions and go to the journal.
                     val notice = body.nodes.first().name.trim()
-                    body.nodes.forEach { logs.warn("Подписка «${subscription.name}»: ${it.name}") }
+                    body.nodes.forEach {
+                        logs.warn(R.string.log_subscription_message, subscription.name, it.name)
+                    }
                     android.util.Log.w(
                         "YumiSub",
                         "panel refused: hwidHeaders=${response.hwidRequired} — " +
@@ -92,13 +103,20 @@ class SubscriptionService(
                     if (response.deviceLimitReached) {
                         return SubscriptionUpdate.Failure(
                             subscription.id,
-                            "Лимит устройств исчерпан — отвяжите лишние у провайдера подписки",
+                            strings.get(R.string.error_device_limit),
                         )
                     }
-                    return SubscriptionUpdate.Failure(subscription.id, "Панель: $notice")
+                    return SubscriptionUpdate.Failure(
+                        subscription.id,
+                        strings.get(R.string.error_panel_notice, notice),
+                    )
                 }
 
-                logs.info("Подписка «${subscription.name}»: получено ${body.nodes.size} серверов")
+                logs.info(
+                    R.string.log_subscription_received,
+                    subscription.name,
+                    strings.plural(R.plurals.servers, body.nodes.size),
+                )
                 SubscriptionUpdate.Success(
                     subscription = subscription.copy(
                         userInfo = SubscriptionParser.parseUserInfo(response.userInfoHeader)
@@ -117,11 +135,11 @@ class SubscriptionService(
             is SubscriptionBody.UnsupportedFormat ->
                 SubscriptionUpdate.Failure(
                     subscription.id,
-                    "Формат ${body.format} пока не поддерживается",
+                    strings.get(R.string.error_unsupported_format, body.format),
                 )
 
             is SubscriptionBody.Empty ->
-                SubscriptionUpdate.Failure(subscription.id, body.reason)
+                SubscriptionUpdate.Failure(subscription.id, strings.get(body.reason.messageRes))
         }
     }
 
@@ -145,10 +163,30 @@ class SubscriptionService(
     private fun ProxyNode.isPlaceholder(): Boolean =
         server == "0.0.0.0" || server.isBlank() || port <= 1
 
+    /**
+     * Same host, same scheme, same port — the test for whether this request may still carry the
+     * subscription's credentials.
+     *
+     * Redirects are walked by hand here, and every hop used to be given the `Authorization` header
+     * built from the link's userinfo along with the `x-hwid` identity, whatever host it pointed
+     * at. One `302` from a panel — compromised, or simply hostile — was enough to hand a login and
+     * a device identifier to a third party. A downgrade from https to http counts as a different
+     * origin for the same reason: the credentials would go out in the clear.
+     */
+    private fun sameOrigin(a: URL, b: URL): Boolean =
+        a.protocol.equals(b.protocol, ignoreCase = true) &&
+            a.host.equals(b.host, ignoreCase = true) &&
+            effectivePort(a) == effectivePort(b)
+
+    private fun effectivePort(url: URL): Int =
+        if (url.port != -1) url.port else url.defaultPort
+
     private fun get(url: String, subscription: Subscription): Response {
+        val origin = URL(url)
         var current = url
         repeat(MAX_REDIRECTS) {
             val target = URL(current)
+            val trusted = sameOrigin(origin, target)
             val connection = (target.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MILLIS
@@ -161,15 +199,19 @@ class SubscriptionService(
                 // Credentials written into the link. HttpURLConnection parses them out of the URL
                 // and then never sends them, which reads as a subscription that returns 401 for
                 // no reason at all.
-                target.userInfo?.takeIf { it.isNotEmpty() }?.let { credentials ->
+                target.userInfo?.takeIf { it.isNotEmpty() && trusted }?.let { credentials ->
                     val decoded = java.net.URLDecoder.decode(credentials, "UTF-8")
                     val encoded = Base64.getEncoder().encodeToString(decoded.toByteArray())
                     setRequestProperty("Authorization", "Basic $encoded")
                 }
 
-                // Last, so a provider's own header wins over anything assumed above.
-                subscription.headers.forEach { (name, value) ->
-                    runCatching { setRequestProperty(name, value) }
+                // Last, so a provider's own header wins over anything assumed above. These are
+                // where a panel behind a gateway keeps its token, so they travel under the same
+                // rule as the rest of the credentials.
+                if (trusted) {
+                    subscription.headers.forEach { (name, value) ->
+                        runCatching { setRequestProperty(name, value) }
+                    }
                 }
                 setRequestProperty("Accept", "*/*")
                 setRequestProperty("Accept-Encoding", "gzip")
@@ -181,7 +223,7 @@ class SubscriptionService(
                 setRequestProperty("Pragma", "no-cache")
                 // Panels that do not do device binding ignore these outright; the ones that do
                 // refuse to serve a list without them.
-                identity()?.let {
+                identity()?.takeIf { trusted }?.let {
                     setRequestProperty("x-hwid", it.hwid)
                     setRequestProperty("x-device-os", it.os)
                     setRequestProperty("x-ver-os", it.osVersion)
@@ -200,9 +242,15 @@ class SubscriptionService(
 
                 val stream = (connection.errorStream ?: connection.inputStream)
                     .let { if (connection.contentEncoding == "gzip") GZIPInputStream(it) else it }
-                val body = stream.use { input ->
-                    String(input.readNBytes(MAX_BODY_BYTES.toInt()), Charsets.UTF_8)
+                // One byte past the ceiling, so a body that is merely at the limit still reads
+                // whole while an oversized one is caught. Silently keeping the first 8 MB turned a
+                // truncated document into a valid-looking short list, and every server past the
+                // cut looked like one the provider had removed.
+                val raw = stream.use { input -> input.readAtMost(MAX_BODY_BYTES + 1) }
+                if (raw.size > MAX_BODY_BYTES) {
+                    throw IllegalStateException(strings.get(R.string.error_body_too_large))
                 }
+                val body = String(raw, Charsets.UTF_8)
 
                 return Response(
                     code = code,
@@ -220,7 +268,28 @@ class SubscriptionService(
                 connection.disconnect()
             }
         }
-        throw IllegalStateException("Слишком много перенаправлений")
+        throw IllegalStateException(strings.get(R.string.error_too_many_redirects))
+    }
+
+    /**
+     * Reads up to [limit] bytes, by hand.
+     *
+     * `InputStream.readNBytes` is the obvious way to write this and it is an API 33 method, while
+     * the app runs from API 26 — so on Android 8 through 12 every subscription refresh ended in a
+     * `NoSuchMethodError` rather than a server list. It went unnoticed because nothing built or
+     * ran the app below 33; Android lint is what named it.
+     */
+    private fun InputStream.readAtMost(limit: Long): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        var remaining = limit
+        while (remaining > 0) {
+            val read = read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+            if (read < 0) break
+            out.write(buffer, 0, read)
+            remaining -= read
+        }
+        return out.toByteArray()
     }
 
     /** `profile-title` is often sent as `base64:<...>` to survive non-ASCII provider names. */

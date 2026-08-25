@@ -5,39 +5,31 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.pow
 
+/**
+ * Numbers, and nothing that has to be read in a language.
+ *
+ * The words used to live here — "КБ", "мин назад", "сервера" — which put the whole of the app's
+ * unit vocabulary in a layer that has no way to reach resources. What is left is the arithmetic:
+ * which scale a figure lands on, how many minutes ago something happened. `ui/format/Units.kt`
+ * turns those answers into text, and `data/Strings` does the same for the journal.
+ */
+
 /** Value plus unit kept apart so the UI can typeset them at different sizes. */
 data class ValueAndUnit(val value: String, val unit: String) {
     override fun toString(): String = "$value $unit"
 }
 
-private val byteUnits = arrayOf("Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ")
-private val rateUnits = arrayOf("Б/с", "КБ/с", "МБ/с", "ГБ/с", "ТБ/с")
+/** Binary (1024) scales, smallest first. The index is what a caller resolves to a word. */
+enum class ByteScale { Bytes, Kilo, Mega, Giga, Tera, Peta }
+
+/** A figure already divided down to its scale, with the scale that was used. */
+data class ScaledBytes(val value: String, val scale: ByteScale)
 
 /** Binary (1024) scaling, which is what every VPN client shows for traffic quotas. */
-fun formatBytes(bytes: Long): ValueAndUnit = scale(bytes, byteUnits)
-
-fun formatRate(bytesPerSecond: Long): ValueAndUnit = scale(bytesPerSecond, rateUnits)
-
-/**
- * Megabits, which is the unit a speed test is read in — every provider quotes them and every other
- * speed test shows them, so bytes here would make the number incomparable with the one thing the
- * user wants to compare it against. Decimal megabits (10⁶), not binary: that is what the figure on
- * the contract means.
- */
-fun formatMegabits(bytesPerSecond: Long): ValueAndUnit {
-    val megabits = bytesPerSecond * 8 / 1_000_000.0
-    val text = when {
-        megabits <= 0 -> "0"
-        megabits >= 100 -> String.format(Locale.US, "%.0f", megabits)
-        megabits >= 10 -> String.format(Locale.US, "%.1f", megabits)
-        else -> String.format(Locale.US, "%.2f", megabits)
-    }
-    return ValueAndUnit(text, "Мбит/с")
-}
-
-private fun scale(raw: Long, units: Array<String>): ValueAndUnit {
-    if (raw <= 0L) return ValueAndUnit("0", units[0])
-    val exponent = (ln(abs(raw).toDouble()) / ln(1024.0)).toInt().coerceIn(0, units.lastIndex)
+fun scaleBytes(raw: Long): ScaledBytes {
+    if (raw <= 0L) return ScaledBytes("0", ByteScale.Bytes)
+    val exponent = (ln(abs(raw).toDouble()) / ln(1024.0)).toInt()
+        .coerceIn(0, ByteScale.entries.lastIndex)
     val value = raw / 1024.0.pow(exponent)
     val text = when {
         exponent == 0 -> value.toLong().toString()
@@ -45,7 +37,23 @@ private fun scale(raw: Long, units: Array<String>): ValueAndUnit {
         value >= 10 -> String.format(Locale.US, "%.1f", value)
         else -> String.format(Locale.US, "%.2f", value)
     }
-    return ValueAndUnit(text, units[exponent])
+    return ScaledBytes(text, ByteScale.entries[exponent])
+}
+
+/**
+ * Megabits, which is the unit a speed test is read in — every provider quotes them and every other
+ * speed test shows them, so bytes here would make the number incomparable with the one thing the
+ * user wants to compare it against. Decimal megabits (10⁶), not binary: that is what the figure on
+ * the contract means.
+ */
+fun megabitsValue(bytesPerSecond: Long): String {
+    val megabits = bytesPerSecond * 8 / 1_000_000.0
+    return when {
+        megabits <= 0 -> "0"
+        megabits >= 100 -> String.format(Locale.US, "%.0f", megabits)
+        megabits >= 10 -> String.format(Locale.US, "%.1f", megabits)
+        else -> String.format(Locale.US, "%.2f", megabits)
+    }
 }
 
 /** hh:mm:ss for long sessions, mm:ss for short ones — a leading "00:" is just noise. */
@@ -61,40 +69,27 @@ fun formatDuration(millis: Long): String {
     }
 }
 
-fun formatRelativeTime(epochMillis: Long?, nowMillis: Long = System.currentTimeMillis()): String {
-    if (epochMillis == null) return "никогда"
+/** How long ago something happened, bucketed to the granularity worth showing. */
+sealed interface Elapsed {
+    data object Never : Elapsed
+    data object JustNow : Elapsed
+    data class Minutes(val count: Long) : Elapsed
+    data class Hours(val count: Long) : Elapsed
+    data class Days(val count: Long) : Elapsed
+    data object LongAgo : Elapsed
+}
+
+fun elapsedSince(epochMillis: Long?, nowMillis: Long = System.currentTimeMillis()): Elapsed {
+    if (epochMillis == null) return Elapsed.Never
     val delta = nowMillis - epochMillis
     return when {
-        delta < 60_000 -> "только что"
-        delta < 3_600_000 -> "${delta / 60_000} мин назад"
-        delta < 86_400_000 -> "${delta / 3_600_000} ч назад"
-        delta < 2_592_000_000 -> "${delta / 86_400_000} дн назад"
-        else -> "давно"
+        delta < 60_000 -> Elapsed.JustNow
+        delta < 3_600_000 -> Elapsed.Minutes(delta / 60_000)
+        delta < 86_400_000 -> Elapsed.Hours(delta / 3_600_000)
+        delta < 2_592_000_000 -> Elapsed.Days(delta / 86_400_000)
+        else -> Elapsed.LongAgo
     }
 }
-
-/**
- * Russian plural agreement: 1 сервер, 2 сервера, 5 серверов — with the 11–14 exception, which
- * takes the "many" form despite ending in 1–4.
- */
-fun plural(count: Int, one: String, few: String, many: String): String {
-    val mod100 = count % 100
-    val mod10 = count % 10
-    val form = when {
-        mod100 in 11..14 -> many
-        mod10 == 1 -> one
-        mod10 in 2..4 -> few
-        else -> many
-    }
-    return "$count $form"
-}
-
-fun pluralServers(count: Int): String = plural(count, "сервер", "сервера", "серверов")
-
-fun pluralSources(count: Int): String = plural(count, "источник", "источника", "источников")
-
-fun pluralConnections(count: Int): String =
-    plural(count, "соединение", "соединения", "соединений")
 
 /** Days remaining on a plan, or null when the provider publishes no expiry. */
 fun daysUntil(epochSeconds: Long?, nowMillis: Long = System.currentTimeMillis()): Long? {

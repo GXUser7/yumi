@@ -1,0 +1,130 @@
+name: build
+
+# What this exists to catch: the app module cannot compile without libbox.aar, and that file is
+# not in the repository — so before this workflow, nothing checked a change at all. Not the tests,
+# not the Kotlin, not whether the generated sing-box configuration is one the core accepts.
+#
+# The core is the expensive part (several minutes and a couple of gigabytes of Go modules), so it
+# is cached against the sing-box commit it was built from. A run that changes only app code
+# restores it and takes about as long as a local build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Matches app/build.gradle.kts. The core build wants 17 and refuses 21; see the step below.
+  APP_JAVA: '21'
+  CORE_JAVA: '17'
+  NDK_VERSION: '28.2.13676358'
+  # sing-box commit the core is built from. 77bd326 "Fix naive performance", from the `testing`
+  # branch — the revision every current build has been made against.
+  CORE_REV: '77bd3261367463b970648edf445c88ac541b3bf2'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin the sing-box revision
+        id: core
+        run: |
+          # A commit, never a branch. The first version of this file said `dev-next`, which is a
+          # moving development branch: the core the app links against would then change without a
+          # single line in this repository changing, and the tunnel is the last place to want that.
+          # Bump this deliberately, and test the tunnel afterwards.
+          echo "sha=$CORE_REV" >> "$GITHUB_OUTPUT"
+
+      - name: Restore libbox.aar
+        id: libbox-cache
+        uses: actions/cache@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-${{ steps.core.outputs.sha }}-ndk${{ env.NDK_VERSION }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.CORE_JAVA }}
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+
+      - uses: actions/setup-go@v5
+        with:
+          # Must match sing-box's go.mod. On a newer toolchain the linker rejects the
+          # //go:linkname reach into x/net/http2 that sing-box relies on, and the Android .so
+          # fails with "relocation ... recompile with -fPIC" on every architecture.
+          go-version-file: 'sing-box/go.mod'
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+
+      - name: Build libbox.aar
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ steps.core.outputs.rev }}" \
+            https://github.com/SagerNet/sing-box.git /tmp/sing-box
+          cd /tmp/sing-box
+
+          # setup-go above cannot read a go.mod that did not exist yet at that point, so the
+          # version is taken from the clone and installed here instead.
+          GO_VERSION="$(awk '/^go /{print $2}' go.mod)"
+          go install "golang.org/dl/go${GO_VERSION}@latest"
+          "$(go env GOPATH)/bin/go${GO_VERSION}" download
+          export GOTOOLCHAIN="go${GO_VERSION}"
+
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          export PATH="$(go env GOPATH)/bin:$PATH"
+
+          # gomobile binds against API 24 whatever the app's minSdk says.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-24" "ndk;${NDK_VERSION}" > /dev/null
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
+          export JAVA_HOME="$JAVA_HOME_${CORE_JAVA}_X64"
+
+          go run ./cmd/internal/build_libbox -target android
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp libbox.aar "$GITHUB_WORKSPACE/app/libs/libbox.aar"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.APP_JAVA }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Check the generated configurations against the real core
+        run: |
+          set -euo pipefail
+          # A document that parses in Kotlin can still be refused by sing-box, and only sing-box is
+          # authoritative about its own schema. ConfigDumpTest writes the documents; this runs the
+          # core over every one of them.
+          cd /tmp/sing-box 2>/dev/null || git clone --depth 1 \
+            --branch "${{ steps.core.outputs.rev }}" https://github.com/SagerNet/sing-box.git /tmp/sing-box
+          cd /tmp/sing-box
+          go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
+            -o /tmp/sing-box-cli ./cmd/sing-box
+          cd "$GITHUB_WORKSPACE"
+          for config in app/build/singbox-configs/*.json; do
+            echo "checking $(basename "$config")"
+            /tmp/sing-box-cli check -c "$config"
+          done
+
+      - name: Assemble debug
+        run: ./gradlew :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yumi-debug-apks
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

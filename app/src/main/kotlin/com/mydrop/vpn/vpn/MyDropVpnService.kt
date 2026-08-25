@@ -26,9 +26,9 @@ import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.LogEntry
-import com.mydrop.vpn.core.net.interfaceCidr
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.net.interfaceCidr
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
 import io.nekohasekai.libbox.CommandClient
@@ -50,6 +50,12 @@ import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import java.io.File
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface as JavaNetworkInterface
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -60,12 +66,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.File
-import java.net.Inet4Address
-import java.net.InetSocketAddress
-import java.net.NetworkInterface as JavaNetworkInterface
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Owns the platform tunnel and the sing-box core.
@@ -171,6 +171,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private val logs by lazy { (application as MyDropApplication).container.logs }
 
+    /** Notification copy and failure messages both surface to the user; both follow the setting. */
+    private val strings by lazy { (application as MyDropApplication).container.strings }
+
     // ------------------------------------------------------------ Lifecycle
 
     override fun onCreate() {
@@ -188,7 +191,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 if (config.isNullOrEmpty()) {
-                    _state.value = VpnState.Failed(null, "Пустая конфигурация")
+                    _state.value = VpnState.Failed(null, strings.get(R.string.error_empty_config))
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -225,7 +228,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         scope.launch {
             val node = container.tunnelLauncher.resolveNode()
             if (node == null) {
-                logs.warn("Системный запуск: сервер не выбран")
+                logs.warn(R.string.log_system_start_no_server)
                 stopSelf()
                 return@launch
             }
@@ -233,7 +236,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             // no user present. The system does grant it implicitly when the user turns Always-on
             // VPN on, so this only fires when consent was revoked afterwards.
             if (VpnService.prepare(this@MyDropVpnService) != null) {
-                logs.warn("Системный запуск: нет разрешения VPN")
+                logs.warn(R.string.log_system_start_no_permission)
                 stopSelf()
                 return@launch
             }
@@ -247,13 +250,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             nodeId = node.id
             nodeName = node.name
             updateNotification()
-            logs.info("Системный запуск туннеля: ${node.name}")
+            logs.info(R.string.log_system_start, node.name)
             startTunnel(config, node.id, node.name)
         }
     }
 
     override fun onRevoke() {
-        logs.warn("Разрешение VPN отозвано системой")
+        logs.warn(R.string.log_permission_revoked)
         stopTunnelWhenIdle()
     }
 
@@ -285,7 +288,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 ParcelFileDescriptor.AutoCloseInputStream(pipe[0]).bufferedReader()
                     .forEachLine { line ->
                         android.util.Log.e(NATIVE_TAG, line)
-                        runCatching { logs.error("Ядро: $line") }
+                        runCatching { logs.error(R.string.log_core_line, line) }
                     }
             }
         }.onFailure {
@@ -342,7 +345,10 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     // crash into a sentence on screen.
                     runCatching { Libbox.checkConfig(config) }.onFailure { rejected ->
                         throw IllegalStateException(
-                            "Ядро отклонило конфигурацию: ${rejected.message ?: "без объяснения"}",
+                            strings.get(
+                                R.string.error_core_rejected_config,
+                                rejected.message ?: strings.get(R.string.error_core_no_reason),
+                            ),
                         )
                     }
 
@@ -360,13 +366,18 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     }
                     _state.value = VpnState.Connected(nodeId, sessionStartedAtMillis)
                     logs.info(
-                        if (reloading) "Туннель переключён на $nodeName" else "Туннель поднят: $nodeName",
+                        if (reloading) R.string.log_tunnel_switched else R.string.log_tunnel_up,
+                        nodeName,
                     )
                     updateNotification()
                 } catch (error: Throwable) {
-                    val message =
-                        error.message ?: error::class.simpleName ?: "Не удалось запустить ядро"
-                    logs.error(if (reloading) "Переключение: $message" else "Запуск ядра: $message")
+                    val message = error.message
+                        ?: error::class.simpleName
+                        ?: strings.get(R.string.error_core_start_failed)
+                    logs.error(
+                        if (reloading) R.string.log_switch_failed else R.string.log_start_failed,
+                        message,
+                    )
                     // Also to logcat: the in-app log is an in-memory ring buffer, so a failure that
                     // kills the service leaves no trace anywhere reachable from a development
                     // machine. Diagnosing the empty-DNS crash meant pulling the config off the
@@ -398,7 +409,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     /**
      * Queues the teardown behind whatever the tunnel lock is doing.
      *
-     * Tapping the control during "Подключение" — or the core asking to be stopped from inside one
+     * Tapping the control while it is connecting — or the core asking to be stopped from inside one
      * of its own callbacks — used to close the command server while [startTunnel] was still blocked
      * inside `startOrReloadService` on it. The state is moved eagerly so the button answers the tap
      * straight away; the actual close waits its turn.
@@ -468,7 +479,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         )
         runCatching { client.connect() }
             .onFailure {
-                logs.warn("Не удалось подписаться на статус ядра: ${it.message}")
+                logs.warn(R.string.log_status_subscribe_failed, it.message.orEmpty())
                 // Without this the counters simply stay at zero and there is nothing on screen or
                 // in logcat to say the subscription never happened.
                 android.util.Log.w(NATIVE_TAG, "status subscription failed: ${it.message}", it)
@@ -487,7 +498,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun connected() = Unit
 
         override fun disconnected(message: String?) {
-            if (!message.isNullOrEmpty()) logs.warn("Ядро: $message")
+            if (!message.isNullOrEmpty()) logs.warn(R.string.log_core_line, message)
         }
 
         override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
@@ -514,7 +525,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             if (!message.trafficAvailable) {
                 if (!warnedUnavailable) {
                     warnedUnavailable = true
-                    logs.warn("Ядро не ведёт учёт трафика — счётчики будут пустыми")
+                    logs.warn(R.string.log_no_traffic_accounting)
                     android.util.Log.w(NATIVE_TAG, "status: trafficAvailable = false")
                 }
                 // Totals are kept rather than zeroed. A status message without traffic data says
@@ -588,7 +599,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun serviceReload() {
-        logs.info("Ядро запросило перезагрузку")
+        logs.info(R.string.log_core_reload_requested)
     }
 
     override fun getSystemProxyStatus(): SystemProxyStatus =
@@ -662,7 +673,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
         val descriptor = builder.establish()
-            ?: throw IllegalStateException("VpnService.establish() вернул null: нет разрешения")
+            ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
         // The core dups whatever descriptor it is handed ("dup tun file descriptor"), so this side
         // keeps ownership of the original and has to close it. On a reload openTun runs again while
         // the previous one is still open — without this, every server switch leaked a descriptor
@@ -676,7 +687,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun autoDetectInterfaceControl(fd: Int) {
         // Sockets the core opens itself must bypass the tunnel or they would loop back into it.
-        if (!protect(fd)) throw IllegalStateException("protect($fd) не удался")
+        if (!protect(fd)) throw IllegalStateException(strings.get(R.string.error_protect_failed, fd))
     }
 
     override fun useProcFS(): Boolean = false
@@ -688,12 +699,20 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         destinationAddress: String,
         destinationPort: Int,
     ): ConnectionOwner {
+        // API 29. The core calls this because useProcFS() says no, and on Android 8 and 9 the
+        // method simply does not exist — the call would be a NoSuchMethodError raised inside a JNI
+        // callback from Go, which takes the process down rather than surfacing as an exception.
+        // This method is declared to throw, so refusing is the supported answer.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            throw UnsupportedOperationException(strings.get(R.string.error_no_connection_owner))
+        }
+
         val uid = connectivityManager.getConnectionOwnerUid(
             ipProtocol,
             InetSocketAddress(parseAddress(sourceAddress), sourcePort),
             InetSocketAddress(parseAddress(destinationAddress), destinationPort),
         )
-        if (uid == -1) throw IllegalStateException("Владелец соединения не найден")
+        if (uid == -1) throw IllegalStateException(strings.get(R.string.error_no_connection_owner))
 
         val packages = packageManager.getPackagesForUid(uid).orEmpty()
         return ConnectionOwner().apply {
@@ -852,7 +871,30 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             .setContentText(notification.body)
             .setAutoCancel(true)
         getSystemService(NotificationManager::class.java)
-            ?.notify(notification.identifier.hashCode(), builder.build())
+            ?.notify(coreNotificationId(notification.identifier), builder.build())
+    }
+
+    /**
+     * Takes back a notification the core sent earlier.
+     *
+     * `typeID` groups notifications on platforms that have such a concept; Android identifies them
+     * by the integer passed to `notify`, so the identifier alone decides which one this is and the
+     * type is ignored. It has to derive the id exactly the way [sendNotification] did — hence
+     * [coreNotificationId] rather than the hash written out twice.
+     */
+    override fun cancelNotification(identifier: String?, typeID: Int) {
+        if (identifier.isNullOrEmpty()) return
+        getSystemService(NotificationManager::class.java)?.cancel(coreNotificationId(identifier))
+    }
+
+    /**
+     * The core names its notifications with a string; Android wants an int. Kept away from
+     * [NOTIFICATION_ID] so a colliding hash cannot take down the foreground notification and with
+     * it the tunnel.
+     */
+    private fun coreNotificationId(identifier: String): Int {
+        val hashed = identifier.hashCode()
+        return if (hashed == NOTIFICATION_ID) hashed + 1 else hashed
     }
 
     override fun localDNSTransport(): LocalDNSTransport? = null
@@ -901,12 +943,15 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     // ------------------------------------------------------- Notification
 
     private fun createNotificationChannel() {
+        // Through the resolver rather than getString: the channel name shows up in the system
+        // notification settings, and it should say what the user chose in the app rather than
+        // what the phone is set to.
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.vpn_channel_name),
+            strings.get(R.string.vpn_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = getString(R.string.vpn_channel_description)
+            description = strings.get(R.string.vpn_channel_description)
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
@@ -930,14 +975,16 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (nodeName.isEmpty()) "Yumi" else nodeName)
             .setContentText(
-                when (_state.value) {
-                    is VpnState.Connected -> "Туннель активен"
-                    is VpnState.Connecting -> "Подключение…"
-                    else -> "Остановка…"
-                },
+                strings.get(
+                    when (_state.value) {
+                        is VpnState.Connected -> R.string.notification_tunnel_active
+                        is VpnState.Connecting -> R.string.notification_connecting
+                        else -> R.string.notification_stopping
+                    },
+                ),
             )
             .setContentIntent(openApp)
-            .addAction(0, "Отключить", stop)
+            .addAction(0, strings.get(R.string.notification_disconnect), stop)
             .setOngoing(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

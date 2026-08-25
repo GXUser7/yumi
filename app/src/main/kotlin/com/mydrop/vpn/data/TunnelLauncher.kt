@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import android.content.Intent
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProxyNode
 import kotlinx.coroutines.withTimeoutOrNull
@@ -29,10 +30,12 @@ class TunnelLauncher(
     private val tunnel: TunnelController,
     private val latencyTester: LatencyTester,
     private val logs: LogRepository,
+    private val strings: Strings,
 ) {
 
     suspend fun connect(): ConnectOutcome {
-        val node = resolveNode() ?: return ConnectOutcome.Rejected("Сначала выберите сервер")
+        val node = resolveNode()
+            ?: return ConnectOutcome.Rejected(strings.get(R.string.error_no_server_selected))
 
         tunnel.permissionIntent()?.let { return ConnectOutcome.NeedsConsent(it) }
 
@@ -77,7 +80,7 @@ class TunnelLauncher(
         }
 
         if (fastest == null || fastest.id == chosen.id) return chosen
-        logs.info("Автовыбор: ${fastest.name}")
+        logs.info(R.string.log_autoselect, fastest.name)
         profiles.selectNode(fastest.id)
         return fastest
     }
@@ -85,7 +88,7 @@ class TunnelLauncher(
     // ----------------------------------------------------------- Internals
 
     /** Fastest server with a usable, recent measurement, or null when there is none. */
-    private fun fastestNode(): ProxyNode? {
+    fun fastestNode(): ProxyNode? {
         val latencies = profiles.state.value.latencies
         val freshEnough = System.currentTimeMillis() - FRESH_WINDOW_MILLIS
         return profiles.nodes
@@ -104,13 +107,13 @@ class TunnelLauncher(
      * minute; whatever answered inside the budget is enough to choose from.
      */
     private suspend fun sweep(nodes: List<ProxyNode>) {
-        logs.info("Автовыбор: измеряю задержки (${nodes.size})")
+        logs.info(R.string.log_autoselect_measuring, nodes.size)
         withTimeoutOrNull(SWEEP_BUDGET_MILLIS) {
             latencyTester.measureAll(nodes, settings.value.pingMode) { profiles.recordLatency(it) }
         }
     }
 
-    private companion object {
+    companion object {
         /** Past this, a measurement says more about the last café's Wi-Fi than about the server. */
         const val FRESH_WINDOW_MILLIS = 30 * 60 * 1000L
 

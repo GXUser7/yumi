@@ -3,6 +3,7 @@ package com.mydrop.vpn.ui.screens.connect
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,13 +13,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -58,22 +58,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.core.format.formatBytes
-import com.mydrop.vpn.core.format.formatDuration
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.format.ValueAndUnit
-import com.mydrop.vpn.core.format.formatRate
+import com.mydrop.vpn.core.format.formatDuration
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.ui.MainUiState
-import com.mydrop.vpn.ui.components.TrafficWaves
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.components.TrafficSparkline
+import com.mydrop.vpn.ui.components.TrafficWaves
 import com.mydrop.vpn.ui.components.rememberRateHistory
+import com.mydrop.vpn.ui.format.formatBytes
+import com.mydrop.vpn.ui.format.formatRate
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
 import kotlinx.coroutines.delay
@@ -142,11 +144,15 @@ fun ConnectScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.End,
         ) {
-            TonalIconButton(Icons.Rounded.Article, "Журнал", onOpenLogs)
+            TonalIconButton(Icons.Rounded.Article, stringResource(R.string.connect_logs), onOpenLogs)
             Spacer(Modifier.width(8.dp))
             // Settings kept its place in the navigation pill, so the shortcut here was a second
             // door to the same room. Measuring the tunnel has nowhere else to be reached from.
-            TonalIconButton(Icons.Rounded.Speed, "Проверка скорости", onOpenSpeedTest)
+            TonalIconButton(
+                Icons.Rounded.Speed,
+                stringResource(R.string.connect_speed_test),
+                onOpenSpeedTest,
+            )
         }
 
         Headline(
@@ -234,55 +240,59 @@ private fun Headline(state: MainUiState, statsExpanded: Boolean, modifier: Modif
     when {
         statsExpanded -> {
             kind = "stats"
-            primary = "За сессию"
+            primary = stringResource(R.string.connect_session)
             secondary = formatBytes(state.traffic.downloadBytes + state.traffic.uploadBytes).toString()
             accent = true
         }
 
         connected != null -> {
             kind = "connected"
-            primary = "Защищено"
+            primary = stringResource(R.string.connect_protected)
             secondary = formatDuration(now - connected.connectedAtEpochMillis)
             accent = true
         }
 
         state.vpnState is VpnState.Connecting -> {
             kind = "connecting"
-            primary = "Поднимаем"
-            secondary = "туннель"
+            primary = stringResource(R.string.connect_raising)
+            secondary = stringResource(R.string.connect_tunnel_word)
             accent = false
         }
 
         state.vpnState is VpnState.Disconnecting -> {
             kind = "disconnecting"
-            primary = "Отключаем"
-            secondary = "туннель"
+            primary = stringResource(R.string.connect_stopping)
+            secondary = stringResource(R.string.connect_tunnel_word)
             accent = false
         }
 
         state.vpnState is VpnState.Failed -> {
             kind = "failed"
-            primary = "Не вышло"
-            secondary = "подключиться"
+            primary = stringResource(R.string.connect_failed_primary)
+            secondary = stringResource(R.string.connect_failed_secondary)
             accent = false
         }
 
         else -> {
             kind = "idle"
-            primary = "Туннель"
-            secondary = "выключен"
+            primary = stringResource(R.string.connect_tunnel_primary)
+            secondary = stringResource(R.string.connect_tunnel_secondary)
             accent = false
         }
     }
 
     val subtitle = when {
-        statsExpanded -> "Потяните вниз, чтобы вернуться к потоку"
+        statsExpanded -> stringResource(R.string.connect_pull_to_return)
         state.vpnState is VpnState.Failed -> (state.vpnState as VpnState.Failed).message
-        state.vpnState is VpnState.Connecting ->
-            "${(state.vpnState as VpnState.Connecting).phase.label} с ${node?.name ?: "сервером"}"
-        connected != null -> node?.let { "${it.name} · ${it.protocol.name}" } ?: "Туннель активен"
-        node != null -> "Трафик идёт напрямую · ${node.name} наготове"
-        else -> "Сервер не выбран — откройте вкладку «Серверы»"
+        state.vpnState is VpnState.Connecting -> stringResource(
+            R.string.connect_connecting_with,
+            stringResource((state.vpnState as VpnState.Connecting).phase.labelRes),
+            node?.name ?: stringResource(R.string.connect_the_server),
+        )
+        connected != null -> node?.let { "${it.name} · ${it.protocol.name}" }
+            ?: stringResource(R.string.connect_tunnel_active)
+        node != null -> stringResource(R.string.connect_direct_with_standby, node.name)
+        else -> stringResource(R.string.connect_no_server)
     }
 
     Column(modifier = modifier) {
@@ -295,6 +305,10 @@ private fun Headline(state: MainUiState, statsExpanded: Boolean, modifier: Modif
         // whole line once a second while the timer ticked, which read as flicker; the digits now
         // update in place and only a real state change animates. Tabular figures keep the line
         // from twitching sideways as digit widths change.
+        // The unused target parameter is the point, and lint's objection to it is the bug this
+        // shape avoids: reading the animated state here would mean animating on `secondary`, which
+        // is the session counter and changes every second.
+        @Suppress("UnusedContentLambdaTargetStateParameter")
         AnimatedContent(
             targetState = kind,
             transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
@@ -396,7 +410,9 @@ private fun FlowFigure(
             }
         } else {
             Text(
-                text = if (warming) "поток разогревается" else "поток пуст",
+                text = stringResource(
+                    if (warming) R.string.connect_stream_warming else R.string.connect_stream_empty,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.align(Alignment.BottomStart).padding(22.dp),
@@ -442,7 +458,7 @@ private fun LatencyBadge(
                 },
             )
             Text(
-                text = "МС",
+                text = stringResource(R.string.unit_millis).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -480,8 +496,18 @@ private fun StatsPanel(
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RateTile("Приём", formatRate(traffic.downloadBytesPerSecond), semantic.download, Modifier.weight(1f))
-            RateTile("Отдача", formatRate(traffic.uploadBytesPerSecond), semantic.upload, Modifier.weight(1f))
+            RateTile(
+                stringResource(R.string.connect_rate_download),
+                formatRate(traffic.downloadBytesPerSecond),
+                semantic.download,
+                Modifier.weight(1f),
+            )
+            RateTile(
+                stringResource(R.string.connect_rate_upload),
+                formatRate(traffic.uploadBytesPerSecond),
+                semantic.upload,
+                Modifier.weight(1f),
+            )
         }
 
         Box(
@@ -506,12 +532,18 @@ private fun StatsPanel(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Принято ${formatBytes(traffic.downloadBytes)}",
+                text = stringResource(
+                    R.string.connect_received,
+                    formatBytes(traffic.downloadBytes).toString(),
+                ),
                 style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
                 color = semantic.download,
             )
             Text(
-                text = "Отдано ${formatBytes(traffic.uploadBytes)}",
+                text = stringResource(
+                    R.string.connect_sent,
+                    formatBytes(traffic.uploadBytes).toString(),
+                ),
                 style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodySmall.fontSize),
                 color = semantic.upload,
             )
@@ -527,7 +559,12 @@ private fun StatsPanel(
                 FilterChip(
                     selected = state.settings.routingMode == mode,
                     onClick = { onRoutingModeChange(mode) },
-                    label = { Text(mode.label, style = MaterialTheme.typography.labelMedium) },
+                    label = {
+                    Text(
+                        stringResource(mode.labelRes),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
                 )
             }
         }
@@ -636,13 +673,15 @@ private fun ControlPill(
         Spacer(Modifier.width(12.dp))
 
         Text(
-            text = when (state) {
-                is VpnState.Connected -> "Отключить"
-                is VpnState.Connecting -> "Подключение"
-                VpnState.Disconnecting -> "Отключение"
-                is VpnState.Failed -> "Повторить"
-                VpnState.Disconnected -> "Подключиться"
-            },
+            text = stringResource(
+                when (state) {
+                    is VpnState.Connected -> R.string.connect_button_disconnect
+                    is VpnState.Connecting -> R.string.connect_button_connecting
+                    VpnState.Disconnecting -> R.string.connect_button_disconnecting
+                    is VpnState.Failed -> R.string.action_retry
+                    VpnState.Disconnected -> R.string.connect_button_connect
+                },
+            ),
             style = MaterialTheme.typography.titleLarge,
             textAlign = TextAlign.Center,
             maxLines = 1,
@@ -670,7 +709,7 @@ private fun SimulationBanner(modifier: Modifier = Modifier) {
                 tint = MaterialTheme.colorScheme.onTertiaryContainer,
             )
             Text(
-                text = "Демо-режим: ядро не запущено, трафик никуда не идёт",
+                text = stringResource(R.string.connect_simulated),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
             )

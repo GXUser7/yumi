@@ -2,6 +2,8 @@ package com.mydrop.vpn.core.parse
 
 import com.mydrop.vpn.core.model.DnsProfile
 import java.util.Base64
+import com.mydrop.vpn.core.net.splitHostPort
+import com.mydrop.vpn.core.net.isNumericAddress
 
 /**
  * Recognises the many ways a resolver is written down.
@@ -115,12 +117,18 @@ object DnsUriParser {
         }
     }.getOrNull()
 
+    /**
+     * An address, not a domain: a hostname without a scheme is far more likely to be a typo or a
+     * fragment of prose than a resolver someone meant to add.
+     *
+     * The check used to demand digits, dots and colons only, which quietly refused every IPv6
+     * address containing a hex letter — `2620:fe::fe`, which is Quad9, simply did nothing when
+     * pasted.
+     */
     private fun looksLikeBareAddress(text: String): Boolean {
         if (text.contains("://") || text.contains(' ')) return false
-        val host = text.substringBeforeLast(':', text).removeSurrounding("[", "]")
-        // An address, not a domain: a hostname without a scheme is far more likely to be a typo or
-        // a fragment of prose than a resolver someone meant to add.
-        return host.isNotEmpty() && host.all { it.isDigit() || it == '.' || it == ':' }
+        val parsed = splitHostPort(text) ?: return false
+        return isNumericAddress(parsed.host)
     }
 
     private fun urlDecode(value: String): String =

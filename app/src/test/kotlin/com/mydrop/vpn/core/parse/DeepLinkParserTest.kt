@@ -76,6 +76,11 @@ class DeepLinkParserTest {
     fun `unrecognised payload reports why instead of failing silently`() {
         val result = DeepLinkParser.parse("happ://add/????")
         assertTrue(result is DeepLinkPayload.Unsupported)
-        assertTrue((result as DeepLinkPayload.Unsupported).reason.isNotEmpty())
+        // The code, not a sentence: the wording lives in resources and changes with the language,
+        // while "this was not recognised as anything" is the fact worth pinning down.
+        assertEquals(
+            UnsupportedReason.NotRecognised,
+            (result as DeepLinkPayload.Unsupported).reason,
+        )
     }
 }

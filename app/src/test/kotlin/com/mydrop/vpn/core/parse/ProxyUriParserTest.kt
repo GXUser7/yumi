@@ -228,4 +228,37 @@ class ProxyUriParserTest {
         )
         assertFalse(first.id == different.id)
     }
+
+    /**
+     * `user1234` is valid base64 and decodes to six bytes of binary. The parser used to believe
+     * it, and the username handed to the core was that binary rather than the login.
+     */
+    @Test
+    fun `a socks login that happens to be valid base64 is kept as written`() {
+        val node = requireNotNull(ProxyUriParser.parse("socks://user1234@1.2.3.4:1080"))
+        val settings = node.settings as ProxySettings.Socks
+        assertEquals("user1234", settings.username)
+        assertEquals("", settings.password)
+    }
+
+    @Test
+    fun `socks credentials really encoded as base64 are still decoded`() {
+        val encoded = Base64.getEncoder().encodeToString("alice:s3cret".toByteArray())
+        val node = requireNotNull(ProxyUriParser.parse("socks://$encoded@1.2.3.4:1080"))
+        val settings = node.settings as ProxySettings.Socks
+        assertEquals("alice", settings.username)
+        assertEquals("s3cret", settings.password)
+    }
+
+    @Test
+    fun `a link without a port is refused rather than given an invented one`() {
+        assertNull(ProxyUriParser.parse("vless://11111111-2222-3333-4444-555555555555@example.com"))
+    }
+
+    @Test
+    fun `protocols that need a credential refuse a link without one`() {
+        assertNull(ProxyUriParser.parse("hysteria2://@example.com:443"))
+        assertNull(ProxyUriParser.parse("anytls://@example.com:443"))
+        assertNull(ProxyUriParser.parse("tuic://@example.com:443"))
+    }
 }

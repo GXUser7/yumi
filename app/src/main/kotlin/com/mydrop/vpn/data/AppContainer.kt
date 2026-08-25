@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import com.mydrop.vpn.R
 
 /**
  * Manual dependency graph. The object count here is small enough that a DI framework would add
@@ -11,17 +12,29 @@ import kotlinx.coroutines.SupervisorJob
  */
 class AppContainer(context: Context) {
 
+    private val appContext = context.applicationContext
+
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val versionName: String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
     }.getOrNull()?.substringBefore('-') ?: "0"
 
-    val logs = LogRepository()
-    val profiles = ProfileRepository(context.filesDir, applicationScope)
-    val settings = SettingsRepository(context.filesDir, applicationScope)
+    // Order matters here: the journal writes localized lines, so it needs the resolver, and the
+    // resolver needs somewhere to read the chosen language from.
+    /**
+     * Indirection because the journal is built after the first store that reports into it. Writes
+     * only ever happen after construction, so by the time this is called it points somewhere.
+     */
+    private var reportWriteFailure: (Throwable) -> Unit = {}
+    private val writeFailure: (Throwable) -> Unit = { reportWriteFailure(it) }
+
+    val settings = SettingsRepository(context.filesDir, applicationScope, writeFailure)
+    val strings = Strings(context) { settings.value.language }
+    val logs = LogRepository(strings)
+    val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
     val latencyTester = LatencyTester()
-    val speedTester = SpeedTester(logs)
+    val speedTester = SpeedTester(logs, strings)
 
     /**
      * Identity handed to panels that count devices. Created on first use and kept in settings, so
@@ -30,6 +43,7 @@ class AppContainer(context: Context) {
      */
     val subscriptionService = SubscriptionService(
         logs = logs,
+        strings = strings,
         // Named like every other client does it — version, platform, model. Panels read the agent
         // to decide which format to emit, and the caching front-ends in front of them key on it
         // too, so a bare "Yumi (Android)" shares one cache entry with every other install and can
@@ -67,6 +81,7 @@ class AppContainer(context: Context) {
         tunnel = tunnel,
         latencyTester = latencyTester,
         logs = logs,
+        strings = strings,
     )
 
     /**
@@ -87,6 +102,7 @@ class AppContainer(context: Context) {
         profiles = profiles,
         service = subscriptionService,
         logs = logs,
+        strings = strings,
     )
 
     /** Re-reads server lists on the cadence chosen in settings. */
@@ -107,11 +123,20 @@ class AppContainer(context: Context) {
     )
 
     init {
-        seedDemoContentOnFirstRun()
+        // A store that cannot write is losing the user's servers silently; now it says so.
+        reportWriteFailure = { error ->
+            logs.error(R.string.log_store_write_failed, error.message ?: error::class.simpleName.orEmpty())
+        }
         failoverWatchdog.start()
         staleSelectionPruner.start()
         subscriptionScheduler.start()
     }
+
+    /** Whether the current connection is metered; see MainViewModel.speedTestIsMetered. */
+    fun isActiveNetworkMetered(): Boolean = runCatching {
+        appContext.getSystemService(android.net.ConnectivityManager::class.java)
+            ?.isActiveNetworkMetered == true
+    }.getOrDefault(false)
 
     private fun deviceIdentity(): DeviceIdentity {
         val stored = settings.value.deviceId.ifEmpty {
@@ -125,17 +150,5 @@ class AppContainer(context: Context) {
             osVersion = android.os.Build.VERSION.RELEASE.orEmpty(),
             model = android.os.Build.MODEL.orEmpty(),
         )
-    }
-
-    private fun seedDemoContentOnFirstRun() {
-        if (profiles.state.value.seeded) return
-        val nodes = DemoData.nodes()
-        if (nodes.isEmpty()) {
-            profiles.markSeeded()
-            return
-        }
-        profiles.addNodes(nodes)
-        profiles.addSubscription(DemoData.subscription(nodes.map { it.id }))
-        logs.info("Добавлен демонстрационный набор: ${nodes.size} серверов")
     }
 }

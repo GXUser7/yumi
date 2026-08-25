@@ -1,5 +1,6 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -47,11 +48,8 @@ class StaleSelectionPruner(
                     val lost = chosen.size - kept.size
                     settings.update { it.copy(failoverNodeIds = kept) }
                     logs.info(
-                        if (kept.isEmpty()) {
-                            "Запасные серверы исчезли из подписки ($lost) — выбор снова автоматический"
-                        } else {
-                            "Из списка запасных убрано серверов, которых больше нет: $lost"
-                        },
+                        if (kept.isEmpty()) R.string.log_failover_pruned_all else R.string.log_failover_pruned,
+                        lost,
                     )
                 }
         }

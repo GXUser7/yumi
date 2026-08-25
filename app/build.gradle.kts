@@ -2,15 +2,27 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
 /*
- * Release signing credentials live outside the repository, in ~/.mydrop-signing/. The keystore is
- * the one thing here that cannot be regenerated: Android identifies an app by its signing key, so
- * losing it means friends can never update in place — they would have to uninstall first, losing
- * their servers and settings. Keep a backup somewhere that is not this machine.
+ * Release signing credentials live outside the repository, by default in ~/.mydrop-signing/. The
+ * keystore is the one thing here that cannot be regenerated: Android identifies an app by its
+ * signing key, so losing it means friends can never update in place — they would have to
+ * uninstall first, losing their servers and settings. Keep a backup somewhere that is not this
+ * machine.
+ *
+ * The location is overridable because the default is a guess about the machine rather than about
+ * the project. Point it somewhere else with either:
+ *
+ *     ./gradlew :app:assembleRelease -Pyumi.signingDir=E:/.mydrop-signing
+ *     YUMI_SIGNING_DIR=E:/.mydrop-signing ./gradlew :app:assembleRelease
  *
  * A missing file is not an error; it just leaves the release build unsigned, so the project still
  * builds anywhere else.
  */
-val signingProperties: Properties? = File(System.getProperty("user.home"), ".mydrop-signing/keystore.properties")
+val signingDir: File = providers.gradleProperty("yumi.signingDir")
+    .orElse(providers.environmentVariable("YUMI_SIGNING_DIR"))
+    .map(::File)
+    .getOrElse(File(System.getProperty("user.home"), ".mydrop-signing"))
+
+val signingProperties: Properties? = File(signingDir, "keystore.properties")
     .takeIf { it.isFile }
     ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
 
@@ -31,15 +43,21 @@ android {
         applicationId = "com.mydrop.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.3.3"
         // ABI selection lives in `splits.abi` below; the two cannot both be set.
     }
 
     signingConfigs {
         if (signingProperties != null) {
             create("release") {
-                storeFile = file(signingProperties.getProperty("storeFile"))
+                // `storeFile` is recorded as an absolute path by whichever machine created it,
+                // so it points at that machine and nowhere else. When it is not there, the
+                // keystore sitting beside keystore.properties is the one that was meant — which
+                // is what makes the credentials directory movable at all.
+                storeFile = File(signingProperties.getProperty("storeFile")).let { recorded ->
+                    if (recorded.isFile) recorded else File(signingDir, recorded.name)
+                }
                 storePassword = signingProperties.getProperty("storePassword")
                 keyAlias = signingProperties.getProperty("keyAlias")
                 keyPassword = signingProperties.getProperty("keyPassword")
@@ -142,4 +160,5 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

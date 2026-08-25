@@ -1,5 +1,8 @@
 package com.mydrop.vpn.core.model
 
+import androidx.annotation.StringRes
+import com.mydrop.vpn.R
+
 /**
  * Tunnel lifecycle. [Connecting] is modelled as its own state rather than a boolean flag
  * because the connect screen animates a distinct handshake phase, and a failed handshake has
@@ -9,11 +12,11 @@ sealed interface VpnState {
     data object Disconnected : VpnState
 
     data class Connecting(val nodeId: String, val phase: Phase = Phase.Starting) : VpnState {
-        enum class Phase(val label: String) {
-            Starting("Запуск ядра"),
-            Handshaking("Рукопожатие"),
-            EstablishingTunnel("Поднятие туннеля"),
-            Testing("Проверка соединения"),
+        enum class Phase(@StringRes val labelRes: Int) {
+            Starting(R.string.phase_starting),
+            Handshaking(R.string.phase_handshaking),
+            EstablishingTunnel(R.string.phase_establishing_tunnel),
+            Testing(R.string.phase_testing),
         }
     }
 

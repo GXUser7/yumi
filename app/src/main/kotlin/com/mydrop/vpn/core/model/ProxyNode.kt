@@ -1,7 +1,7 @@
 package com.mydrop.vpn.core.model
 
-import kotlinx.serialization.Serializable
 import java.security.MessageDigest
+import kotlinx.serialization.Serializable
 
 /**
  * One dialable server. A subscription refresh replaces nodes wholesale, so [id] is derived from

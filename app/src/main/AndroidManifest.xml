@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -7,7 +8,24 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!--
+      Split tunnelling has to list the apps that can originate traffic, and on Android 11+ that
+      needs visibility of them.
+
+      This stays a blanket permission rather than a <queries> element because there is no query
+      form that expresses "every app holding INTERNET": <queries> takes <package>, <intent> and
+      <provider>, and nothing else. Narrowing it to <intent> with the LAUNCHER category would drop
+      every app without a launcher icon out of the list, which is exactly the kind of background
+      sync client somebody wants to route around the tunnel.
+
+      The cost is a Google Play submission would need a written justification for it. The app is
+      distributed from GitHub releases, so that cost is currently zero — but it is the one thing
+      here that would have to be argued if that ever changed.
+    -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <!-- Reading a server's QR code. Optional: the phone stays usable without a camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -17,7 +35,9 @@
 
     <application
         android:name=".MyDropApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -47,7 +67,11 @@
                 <data android:scheme="mydrop" />
             </intent-filter>
 
-            <!-- Single proxy links shared from other apps / QR scanners. -->
+            <!--
+              Single proxy links shared from other apps / QR scanners. Every scheme
+              ProxyUriParser understands is listed except http/https: catching those would put
+              this app in the chooser for ordinary web links.
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -58,9 +82,14 @@
                 <data android:scheme="ss" />
                 <data android:scheme="hysteria2" />
                 <data android:scheme="hy2" />
+                <data android:scheme="hysteria" />
+                <data android:scheme="hy" />
                 <data android:scheme="tuic" />
                 <data android:scheme="anytls" />
                 <data android:scheme="socks" />
+                <data android:scheme="wireguard" />
+                <data android:scheme="wg" />
+                <data android:scheme="ssh" />
                 <data android:scheme="sing-box" />
             </intent-filter>
 
@@ -72,8 +101,8 @@
         </activity>
 
         <!--
-          The tunnel itself. Phase 2 plugs sing-box (libbox) in behind this service;
-          it already owns the VpnService lifecycle, the TUN fd and the notification.
+          The tunnel itself: the VpnService that owns the TUN descriptor and the foreground
+          notification, and the platform interface the sing-box core calls back into.
         -->
         <service
             android:name=".vpn.MyDropVpnService"

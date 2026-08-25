@@ -5,11 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddCircleOutline
@@ -61,10 +62,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.annotation.RequiresApi
 import androidx.core.net.toUri
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.PingMode
@@ -111,12 +113,12 @@ private fun ValidatedField(
 
 /** Offered cadences. Anything under half an hour re-reads a list that changes daily. */
 private val UPDATE_INTERVALS = listOf(
-    30 to "30 мин",
-    60 to "1 час",
-    180 to "3 часа",
-    360 to "6 часов",
-    720 to "12 часов",
-    1440 to "Раз в сутки",
+    30 to R.string.settings_interval_30m,
+    60 to R.string.settings_interval_1h,
+    180 to R.string.settings_interval_3h,
+    360 to R.string.settings_interval_6h,
+    720 to R.string.settings_interval_12h,
+    1440 to R.string.settings_interval_1d,
 )
 
 @Composable
@@ -140,13 +142,19 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item("header") {
-            ScreenHeader(title = "Настройки", modifier = Modifier.padding(bottom = 8.dp))
+            ScreenHeader(
+                title = stringResource(R.string.settings_title),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
         }
 
         item("appearance") {
-            SettingsSection(title = "Внешний вид", icon = Icons.Rounded.Palette) {
+            SettingsSection(
+                title = stringResource(R.string.settings_appearance),
+                icon = Icons.Rounded.Palette,
+            ) {
                 Text(
-                    text = "Тема",
+                    text = stringResource(R.string.settings_theme),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -158,7 +166,36 @@ fun SettingsScreen(
                             onCheckedChange = { onUpdate { it.copy(themeMode = mode) } },
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text(mode.label, style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                stringResource(mode.labelRes),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = stringResource(R.string.settings_language),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AppLanguage.entries.forEach { language ->
+                        ToggleButton(
+                            checked = settings.language == language,
+                            onCheckedChange = { onUpdate { it.copy(language = language) } },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            // The endonyms stay in their own language in every locale: somebody
+                            // looking for their language recognises "Русский", not "Russian".
+                            Text(
+                                stringResource(language.labelRes),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
                         }
                     }
                 }
@@ -166,14 +203,14 @@ fun SettingsScreen(
                 Spacer(Modifier.height(4.dp))
 
                 SwitchRow(
-                    title = "Динамические цвета",
-                    subtitle = "Палитра из обоев системы (Android 12+)",
+                    title = stringResource(R.string.settings_dynamic_color),
+                    subtitle = stringResource(R.string.settings_dynamic_color_subtitle),
                     checked = settings.dynamicColor,
                     onCheckedChange = { onUpdate { s -> s.copy(dynamicColor = it) } },
                 )
                 SwitchRow(
-                    title = "AMOLED-чёрный",
-                    subtitle = "Чистый чёрный фон в тёмной теме",
+                    title = stringResource(R.string.settings_amoled),
+                    subtitle = stringResource(R.string.settings_amoled_subtitle),
                     checked = settings.amoled,
                     onCheckedChange = { onUpdate { s -> s.copy(amoled = it) } },
                 )
@@ -181,26 +218,31 @@ fun SettingsScreen(
         }
 
         item("routing") {
-            SettingsSection(title = "Маршрутизация", icon = Icons.Rounded.Router) {
+            SettingsSection(
+                title = stringResource(R.string.settings_routing),
+                icon = Icons.Rounded.Router,
+            ) {
                 SwitchRow(
-                    title = "Локальная сеть напрямую",
-                    subtitle = "Не заворачивать в туннель адреса 192.168.x.x и подобные",
+                    title = stringResource(R.string.settings_bypass_lan),
+                    subtitle = stringResource(R.string.settings_bypass_lan_subtitle),
                     checked = settings.bypassLan,
                     onCheckedChange = { onUpdate { s -> s.copy(bypassLan = it) } },
                 )
                 SwitchRow(
-                    title = "Блокировать рекламу",
-                    subtitle = "Отбрасывать запросы к известным рекламным доменам",
+                    title = stringResource(R.string.settings_block_ads),
+                    subtitle = stringResource(R.string.settings_block_ads_subtitle),
                     checked = settings.blockAds,
                     onCheckedChange = { onUpdate { s -> s.copy(blockAds = it) } },
                 )
 
                 NavigationRow(
-                    title = "Раздельное туннелирование",
+                    title = stringResource(R.string.settings_split_tunnel),
                     subtitle = when (settings.splitTunnelMode) {
-                        SplitTunnelMode.Off -> "Все приложения через VPN"
-                        SplitTunnelMode.AllowList -> "Только выбранные: $splitTunnelAppCount"
-                        SplitTunnelMode.BlockList -> "Исключено приложений: $splitTunnelAppCount"
+                        SplitTunnelMode.Off -> stringResource(R.string.settings_split_tunnel_off)
+                        SplitTunnelMode.AllowList ->
+                            stringResource(R.string.settings_split_tunnel_allow, splitTunnelAppCount)
+                        SplitTunnelMode.BlockList ->
+                            stringResource(R.string.settings_split_tunnel_block, splitTunnelAppCount)
                     },
                     icon = Icons.Rounded.Apps,
                     onClick = onOpenSplitTunnel,
@@ -209,16 +251,19 @@ fun SettingsScreen(
         }
 
         item("tunnel") {
-            SettingsSection(title = "Туннель", icon = Icons.Rounded.Shield) {
+            SettingsSection(
+                title = stringResource(R.string.settings_tunnel),
+                icon = Icons.Rounded.Shield,
+            ) {
                 SwitchRow(
                     title = "IPv6",
-                    subtitle = "Поднимать IPv6-адрес на интерфейсе",
+                    subtitle = stringResource(R.string.settings_ipv6_subtitle),
                     checked = settings.enableIpv6,
                     onCheckedChange = { onUpdate { s -> s.copy(enableIpv6 = it) } },
                 )
                 SwitchRow(
-                    title = "Перехват DNS",
-                    subtitle = "Заворачивать запросы к порту 53 в собственный резолвер",
+                    title = stringResource(R.string.settings_hijack_dns),
+                    subtitle = stringResource(R.string.settings_hijack_dns_subtitle),
                     checked = settings.hijackDns,
                     onCheckedChange = { onUpdate { s -> s.copy(hijackDns = it) } },
                 )
@@ -228,9 +273,9 @@ fun SettingsScreen(
                 ValidatedField(
                     initial = settings.mtu.toString(),
                     label = "MTU",
-                    hint = "От 1280 до 9000",
+                    hint = stringResource(R.string.settings_mtu_hint),
                     // Anything below the IPv6 minimum silently breaks large packets.
-                    error = "Допустимо от 1280 до 9000",
+                    error = stringResource(R.string.settings_mtu_error),
                     isValid = { it.toIntOrNull() in 1280..9000 },
                     onCommit = { raw -> onUpdate { s -> s.copy(mtu = raw.toInt()) } },
                 )
@@ -238,21 +283,24 @@ fun SettingsScreen(
         }
 
         item("dns") {
-            SettingsSection(title = "DNS", icon = Icons.Rounded.Dns) {
+            SettingsSection(
+                title = stringResource(R.string.settings_dns),
+                icon = Icons.Rounded.Dns,
+            ) {
                 ValidatedField(
                     initial = settings.remoteDns,
-                    label = "DNS через прокси",
-                    hint = "Используется для проксируемых доменов",
-                    error = "Адрес не может быть пустым",
+                    label = stringResource(R.string.settings_remote_dns),
+                    hint = stringResource(R.string.settings_remote_dns_hint),
+                    error = stringResource(R.string.settings_dns_empty_error),
                     isValid = { it.isNotBlank() },
                     onCommit = { value -> onUpdate { s -> s.copy(remoteDns = value) } },
                 )
                 Spacer(Modifier.height(8.dp))
                 ValidatedField(
                     initial = settings.directDns,
-                    label = "Прямой DNS",
-                    hint = "Для доменов, идущих мимо прокси",
-                    error = "Адрес не может быть пустым",
+                    label = stringResource(R.string.settings_direct_dns),
+                    hint = stringResource(R.string.settings_direct_dns_hint),
+                    error = stringResource(R.string.settings_dns_empty_error),
                     isValid = { it.isNotBlank() },
                     onCommit = { value -> onUpdate { s -> s.copy(directDns = value) } },
                 )
@@ -260,7 +308,7 @@ fun SettingsScreen(
                 if (dnsProfiles.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "Добавленные резолверы",
+                        text = stringResource(R.string.settings_dns_resolvers),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -269,7 +317,7 @@ fun SettingsScreen(
                     // selected, the fields above are not what the tunnel uses, and a list you
                     // cannot step out of would leave no way to say that.
                     DnsRow(
-                        title = "Из настроек",
+                        title = stringResource(R.string.settings_dns_from_settings),
                         subtitle = settings.remoteDns,
                         badge = null,
                         selected = selectedDnsId == null,
@@ -291,7 +339,10 @@ fun SettingsScreen(
         }
 
         item("ping") {
-            SettingsSection(title = "Замер задержки", icon = Icons.Rounded.NetworkPing) {
+            SettingsSection(
+                title = stringResource(R.string.settings_latency),
+                icon = Icons.Rounded.NetworkPing,
+            ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PingMode.entries.forEach { mode ->
                         ToggleButton(
@@ -299,20 +350,22 @@ fun SettingsScreen(
                             onCheckedChange = { onUpdate { it.copy(pingMode = mode) } },
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text(mode.label, style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                stringResource(mode.labelRes),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
                         }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = settings.pingMode.description,
+                    text = stringResource(settings.pingMode.descriptionRes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Hysteria2 и TUIC работают поверх QUIC и TCP-порта не имеют — " +
-                        "их всегда проверяет UDP-проба, независимо от выбора выше.",
+                    text = stringResource(R.string.settings_quic_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -320,40 +373,46 @@ fun SettingsScreen(
         }
 
         item("behaviour") {
-            SettingsSection(title = "Поведение", icon = Icons.Rounded.Bolt) {
+            SettingsSection(
+                title = stringResource(R.string.settings_behaviour),
+                icon = Icons.Rounded.Bolt,
+            ) {
                 SwitchRow(
-                    title = "Подключаться при загрузке",
-                    subtitle = "Поднимать туннель после перезагрузки телефона",
+                    title = stringResource(R.string.settings_boot),
+                    subtitle = stringResource(R.string.settings_boot_subtitle),
                     checked = settings.autoConnectOnBoot,
                     onCheckedChange = { onUpdate { s -> s.copy(autoConnectOnBoot = it) } },
                 )
                 SwitchRow(
-                    title = "Выбирать быстрый сервер",
-                    subtitle = "Перед подключением брать сервер с наименьшей задержкой",
+                    title = stringResource(R.string.settings_fastest),
+                    subtitle = stringResource(R.string.settings_fastest_subtitle),
                     checked = settings.autoSelectFastest,
                     onCheckedChange = { onUpdate { s -> s.copy(autoSelectFastest = it) } },
                 )
                 SwitchRow(
-                    title = "Уходить с упавшего сервера",
-                    subtitle = "Проверять текущий сервер и переходить на живой, если он упал",
+                    title = stringResource(R.string.settings_failover),
+                    subtitle = stringResource(R.string.settings_failover_subtitle),
                     checked = settings.autoFailover,
                     onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
                 )
                 AnimatedVisibility(visible = settings.autoFailover) {
                     NavigationRow(
-                        title = "Серверы для подмены",
+                        title = stringResource(R.string.settings_failover_servers),
                         subtitle = if (settings.failoverNodeIds.isEmpty()) {
-                            "Выбираются автоматически из текущей подписки"
+                            stringResource(R.string.settings_failover_auto)
                         } else {
-                            "Выбрано вручную: ${settings.failoverNodeIds.size}"
+                            stringResource(
+                                R.string.settings_failover_manual,
+                                settings.failoverNodeIds.size,
+                            )
                         },
                         icon = Icons.Rounded.SwapHoriz,
                         onClick = onOpenFailover,
                     )
                 }
                 SwitchRow(
-                    title = "Автообновление подписок",
-                    subtitle = "Периодически перечитывать список серверов",
+                    title = stringResource(R.string.settings_auto_update),
+                    subtitle = stringResource(R.string.settings_auto_update_subtitle),
                     checked = settings.subscriptionAutoUpdate,
                     onCheckedChange = { onUpdate { s -> s.copy(subscriptionAutoUpdate = it) } },
                 )
@@ -361,7 +420,7 @@ fun SettingsScreen(
                 AnimatedVisibility(visible = settings.subscriptionAutoUpdate) {
                     Column {
                         Text(
-                            text = "Как часто",
+                            text = stringResource(R.string.settings_interval),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -372,20 +431,22 @@ fun SettingsScreen(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            UPDATE_INTERVALS.forEach { (minutes, label) ->
+                            UPDATE_INTERVALS.forEach { (minutes, labelRes) ->
                                 ToggleButton(
                                     checked = settings.subscriptionUpdateMinutes == minutes,
                                     onCheckedChange = {
                                         onUpdate { s -> s.copy(subscriptionUpdateMinutes = minutes) }
                                     },
                                 ) {
-                                    Text(label, style = MaterialTheme.typography.labelMedium)
+                                    Text(
+                                        stringResource(labelRes),
+                                        style = MaterialTheme.typography.labelMedium,
+                                    )
                                 }
                             }
                         }
                         Text(
-                            text = "Обновление происходит, пока приложение запущено — будильник " +
-                                "ради перечитывания списка серверов не стоит расхода батареи",
+                            text = stringResource(R.string.settings_interval_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp),
@@ -397,10 +458,13 @@ fun SettingsScreen(
 
 
         item("diagnostics") {
-            SettingsSection(title = "Диагностика", icon = Icons.Rounded.Article) {
+            SettingsSection(
+                title = stringResource(R.string.settings_diagnostics),
+                icon = Icons.Rounded.Article,
+            ) {
                 NavigationRow(
-                    title = "Журнал",
-                    subtitle = "Логи ядра и подписок",
+                    title = stringResource(R.string.settings_logs),
+                    subtitle = stringResource(R.string.settings_logs_subtitle),
                     icon = Icons.Rounded.Article,
                     onClick = onOpenLogs,
                 )
@@ -423,19 +487,21 @@ fun SettingsScreen(
                     .orEmpty()
             }
 
-            SettingsSection(title = "О приложении", icon = Icons.Rounded.Contrast) {
+            SettingsSection(
+                title = stringResource(R.string.settings_about),
+                icon = Icons.Rounded.Contrast,
+            ) {
                 Text(
                     text = if (version.isEmpty()) "Yumi" else "Yumi $version",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = "Material 3 Expressive · трафик несёт sing-box",
+                    text = stringResource(R.string.settings_about_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "Проверка скорости — бета: замер идёт через выбранный сервер, " +
-                        "и числа ещё уточняются.",
+                    text = stringResource(R.string.settings_speed_beta),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -443,8 +509,8 @@ fun SettingsScreen(
                 Spacer(Modifier.height(4.dp))
 
                 NavigationRow(
-                    title = "Канал в Telegram",
-                    subtitle = "t.me/MaterialYouCloud — сборки и новости",
+                    title = stringResource(R.string.settings_telegram),
+                    subtitle = stringResource(R.string.settings_telegram_subtitle),
                     icon = Icons.Rounded.Send,
                     // An arrow out rather than a chevron: this row leaves the app, and the two
                     // should not look like the same kind of tap.
@@ -623,7 +689,7 @@ private fun DnsRow(
             IconButton(onClick = it) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Удалить",
+                    contentDescription = stringResource(R.string.action_delete),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -637,11 +703,11 @@ private fun QuickTileRow() {
     val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
     NavigationRow(
-        title = "Плитка в шторке",
+        title = stringResource(R.string.settings_tile),
         subtitle = if (supported) {
-            "Добавить переключатель туннеля в быстрые настройки"
+            stringResource(R.string.settings_tile_subtitle)
         } else {
-            "Добавляется вручную: шторка → карандаш → перетащить «Yumi»"
+            stringResource(R.string.settings_tile_manual)
         },
         icon = Icons.Rounded.Widgets,
         trailingIcon = if (supported) Icons.Rounded.AddCircleOutline else Icons.Rounded.ChevronRight,

@@ -88,18 +88,24 @@ class TunnelTileService : TileService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when (state) {
                 is VpnState.Connected -> currentNodeName()
-                is VpnState.Connecting -> "Подключение…"
-                is VpnState.Disconnecting -> "Отключение…"
-                is VpnState.Failed -> "Ошибка"
-                VpnState.Disconnected -> "Выключен"
+                is VpnState.Connecting -> strings.get(R.string.tile_connecting)
+                is VpnState.Disconnecting -> strings.get(R.string.tile_disconnecting)
+                is VpnState.Failed -> strings.get(R.string.tile_error)
+                VpnState.Disconnected -> strings.get(R.string.tile_off)
             }
         }
         tile.updateTile()
     }
 
-    private fun currentNodeName(): String =
-        (application as MyDropApplication).container.profiles.selectedNode()?.name ?: "Подключен"
+    private val strings get() = (application as MyDropApplication).container.strings
 
+    private fun currentNodeName(): String =
+        (application as MyDropApplication).container.profiles.selectedNode()?.name
+            ?: strings.get(R.string.tile_connected)
+
+    // The deprecated overload is only ever reached below API 34, where it is the only one that
+    // exists; lint flags the call site rather than the branch it sits in.
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openApp() {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)

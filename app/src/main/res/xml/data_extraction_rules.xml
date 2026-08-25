@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 31+. `android:allowBackup="false"` already stops cloud backup, but device-to-device
+  transfer is a separate channel that it does not cover — a phone-to-phone migration would
+  still carry the whole data directory across. Both sections are spelled out so neither route
+  moves the stores: profiles.json holds server credentials, private keys and subscription
+  tokens, settings.json holds the panel identifier.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

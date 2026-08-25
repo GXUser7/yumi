@@ -37,23 +37,32 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.format.ValueAndUnit
-import com.mydrop.vpn.core.format.formatMegabits
 import com.mydrop.vpn.core.model.SpeedPhase
 import com.mydrop.vpn.core.model.SpeedTestState
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.SpeedGauge
 import com.mydrop.vpn.ui.components.SpeedTrace
 import com.mydrop.vpn.ui.components.TonalIconButton
+import com.mydrop.vpn.ui.format.formatMegabits
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * The speed test.
@@ -71,6 +80,7 @@ import com.mydrop.vpn.ui.theme.MonoStyle
 @Composable
 fun SpeedTestScreen(
     state: SpeedTestState,
+    isMetered: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
@@ -93,10 +103,16 @@ fun SpeedTestScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(contentPadding)) {
         ScreenHeader(
-            title = "Скорость",
+            title = stringResource(R.string.speed_title),
             subtitle = pathDescription(state),
             modifier = Modifier.padding(bottom = 6.dp),
-            actions = { TonalIconButton(Icons.Rounded.ArrowBack, "Назад", onBack) },
+            actions = {
+                TonalIconButton(
+                    Icons.Rounded.ArrowBack,
+                    stringResource(R.string.action_back),
+                    onBack,
+                )
+            },
         )
 
         AnimatedContent(
@@ -120,10 +136,34 @@ fun SpeedTestScreen(
             }
         }
 
+        var confirmMetered by remember { mutableStateOf(false) }
+
+        if (confirmMetered) {
+            AlertDialog(
+                onDismissRequest = { confirmMetered = false },
+                title = { Text(stringResource(R.string.speed_metered_title)) },
+                text = { Text(stringResource(R.string.speed_metered_body)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmMetered = false
+                            onStart()
+                        },
+                    ) { Text(stringResource(R.string.speed_start)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmMetered = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
+
         Control(
             running = state.running,
             hasResult = state.hasResult,
-            onStart = onStart,
+            // Only on a metered link, and only to start one: stopping never needs asking.
+            onStart = { if (isMetered) confirmMetered = true else onStart() },
             onStop = onStop,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
         )
@@ -131,11 +171,15 @@ fun SpeedTestScreen(
 }
 
 /** What the tunnel was doing when the numbers were taken — never left to be guessed. */
+@Composable
+@ReadOnlyComposable
 private fun pathDescription(state: SpeedTestState): String = when {
-    state.phase == SpeedPhase.Failed -> state.message ?: "Замер не удался"
-    state.throughTunnel && state.serverName != null -> "Через сервер «${state.serverName}»"
-    state.throughTunnel -> "Через туннель"
-    else -> "Напрямую — туннель выключен, это канал самого телефона"
+    state.phase == SpeedPhase.Failed ->
+        state.message ?: stringResource(R.string.speed_phase_failed)
+    state.throughTunnel && state.serverName != null ->
+        stringResource(R.string.speed_through_server, state.serverName)
+    state.throughTunnel -> stringResource(R.string.speed_through_tunnel)
+    else -> stringResource(R.string.speed_direct)
 }
 
 /* ── While it runs ────────────────────────────────────────────────────────────────────────── */
@@ -182,9 +226,16 @@ private fun LiveStage(state: SpeedTestState, accent: Color, modifier: Modifier =
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (state.latencyMillis > 0) Chip("Отклик ${state.latencyMillis} мс")
+            if (state.latencyMillis > 0) {
+                Chip(stringResource(R.string.speed_latency_chip, state.latencyMillis))
+            }
             if (state.downloadBytesPerSecond > 0) {
-                Chip("Приём ${formatMegabits(state.downloadBytesPerSecond)}")
+                Chip(
+                    stringResource(
+                        R.string.speed_download_chip,
+                        formatMegabits(state.downloadBytesPerSecond).toString(),
+                    ),
+                )
             }
         }
     }
@@ -216,7 +267,8 @@ private fun Reading(
             label = "phase",
         ) { current ->
             Text(
-                text = if (current == SpeedPhase.Failed) message ?: current.label else current.label,
+                text = message.takeIf { current == SpeedPhase.Failed }
+                    ?: stringResource(current.labelRes),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -236,7 +288,7 @@ private fun ResultsPanel(state: SpeedTestState, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         ResultCard(
-            label = "Приём",
+            label = stringResource(R.string.connect_rate_download),
             icon = Icons.Rounded.ArrowDownward,
             value = formatMegabits(state.downloadBytesPerSecond),
             samples = state.downloadSeries,
@@ -244,7 +296,7 @@ private fun ResultsPanel(state: SpeedTestState, modifier: Modifier = Modifier) {
             modifier = Modifier.weight(1f),
         )
         ResultCard(
-            label = "Отдача",
+            label = stringResource(R.string.connect_rate_upload),
             icon = Icons.Rounded.ArrowUpward,
             value = formatMegabits(state.uploadBytesPerSecond),
             samples = state.uploadSeries,
@@ -253,9 +305,11 @@ private fun ResultsPanel(state: SpeedTestState, modifier: Modifier = Modifier) {
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Отклик ${state.latencyMillis} мс")
-            Chip("Разброс ${state.jitterMillis} мс")
-            if (state.phase == SpeedPhase.Failed) Chip("Оборвался")
+            Chip(stringResource(R.string.speed_latency_chip, state.latencyMillis))
+            Chip(stringResource(R.string.speed_jitter_chip, state.jitterMillis))
+            if (state.phase == SpeedPhase.Failed) {
+                Chip(stringResource(R.string.speed_interrupted))
+            }
         }
     }
 }
@@ -380,11 +434,13 @@ private fun Control(
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            text = when {
-                running -> "Остановить"
-                hasResult -> "Ещё раз"
-                else -> "Замерить"
-            },
+            text = stringResource(
+                when {
+                    running -> R.string.speed_stop
+                    hasResult -> R.string.speed_again
+                    else -> R.string.speed_start
+                },
+            ),
             style = MaterialTheme.typography.titleLarge,
             maxLines = 1,
         )

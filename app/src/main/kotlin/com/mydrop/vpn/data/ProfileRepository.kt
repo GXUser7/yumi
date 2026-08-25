@@ -1,14 +1,14 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
-import com.mydrop.vpn.core.model.DnsProfile
 import kotlinx.serialization.Serializable
-import java.io.File
 
 @Serializable
 data class ProfileState(
@@ -16,7 +16,6 @@ data class ProfileState(
     val subscriptions: List<Subscription> = emptyList(),
     val selectedNodeId: String? = null,
     val latencies: Map<String, LatencyResult> = emptyMap(),
-    val seeded: Boolean = false,
     /**
      * Resolvers the user has added. Kept beside the servers because they arrive the same way —
      * pasted, scanned, or found inside a subscription — and are chosen the same way.
@@ -26,13 +25,18 @@ data class ProfileState(
     val selectedDnsId: String? = null,
 )
 
-class ProfileRepository(filesDir: File, scope: CoroutineScope) {
+class ProfileRepository(
+    filesDir: File,
+    scope: CoroutineScope,
+    onWriteFailure: (Throwable) -> Unit = {},
+) {
 
     private val store = JsonStore(
         file = File(filesDir, "profiles.json"),
         serializer = ProfileState.serializer(),
         defaultValue = ProfileState(),
         scope = scope,
+        onWriteFailure = onWriteFailure,
     )
 
     val state: StateFlow<ProfileState> = store.state
@@ -40,6 +44,8 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
     val nodes: List<ProxyNode> get() = store.value.nodes
 
     init {
+        dropDemoContent()
+
         // Repair on load, not just on write. Duplicate ids reached the disk before ids were
         // scoped by subscription, and a profile written by that build still crashes the servers
         // list on the first scroll — the write-path guard alone would only heal it at the next
@@ -59,6 +65,31 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
         }
     }
 
+    /**
+     * Removes the sample set earlier versions seeded on first run.
+     *
+     * Dropping the seeding code only helps a fresh install. Everyone who already opened one of
+     * those builds still carries eight servers under `example.com` that cannot be dialled, plus a
+     * subscription pointing at `https://example.com/subscription/demo` — and that subscription is
+     * enabled, so the scheduler keeps asking for it every ten minutes for the life of the process
+     * and writes a failure to the journal each time. It is matched by id rather than by name,
+     * because the name was the user's to change.
+     */
+    private fun dropDemoContent() {
+        if (store.value.subscriptions.none { it.id == DEMO_SUBSCRIPTION_ID }) return
+        store.update { current ->
+            val remaining = current.nodes.filterNot { it.subscriptionId == DEMO_SUBSCRIPTION_ID }
+            current.copy(
+                nodes = remaining,
+                subscriptions = current.subscriptions.filterNot { it.id == DEMO_SUBSCRIPTION_ID },
+                selectedNodeId = current.selectedNodeId
+                    ?.takeIf { id -> remaining.any { it.id == id } }
+                    ?: remaining.firstOrNull()?.id,
+                latencies = current.latencies.filterKeys { id -> remaining.any { it.id == id } },
+            )
+        }
+    }
+
     fun selectNode(nodeId: String) = store.update { it.copy(selectedNodeId = nodeId) }
 
     fun selectedNode(): ProxyNode? = store.value.let { s ->
@@ -75,7 +106,6 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
         current.copy(
             nodes = merged.distinctById(),
             selectedNodeId = current.selectedNodeId ?: newNodes.firstOrNull()?.id,
-            seeded = true,
         )
     }
 
@@ -114,7 +144,7 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
     }
 
     fun addSubscription(subscription: Subscription) = store.update { current ->
-        current.copy(subscriptions = current.subscriptions + subscription, seeded = true)
+        current.copy(subscriptions = current.subscriptions + subscription)
     }
 
     fun removeSubscription(subscriptionId: String) = store.update { current ->
@@ -184,7 +214,6 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
                 selectedNodeId = current.selectedNodeId?.takeIf { id -> nodes.any { it.id == id } }
                     ?: nodes.firstOrNull()?.id,
                 latencies = current.latencies.filterKeys { id -> nodes.any { it.id == id } },
-                seeded = true,
             )
         }
         return added to removed
@@ -207,8 +236,6 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
     }
 
     fun clearLatencies() = store.update { it.copy(latencies = emptyMap()) }
-
-    fun markSeeded() = store.update { it.copy(seeded = true) }
 
     // ------------------------------------------------------------------ DNS
 
@@ -238,6 +265,11 @@ class ProfileRepository(filesDir: File, scope: CoroutineScope) {
 
     fun selectedDnsProfile(): DnsProfile? = store.value.let { state ->
         state.dnsProfiles.firstOrNull { it.id == state.selectedDnsId }
+    }
+
+    private companion object {
+        /** Id the removed sample set was written under; see [dropDemoContent]. */
+        const val DEMO_SUBSCRIPTION_ID = "demo-subscription"
     }
 }
 

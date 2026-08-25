@@ -1,5 +1,6 @@
 package com.mydrop.vpn.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
@@ -40,6 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
@@ -47,13 +49,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mydrop.vpn.R
+import com.mydrop.vpn.ui.components.ImportConfirmDialog
 import com.mydrop.vpn.ui.components.PillNavigationBar
 import com.mydrop.vpn.ui.screens.apps.SplitTunnelScreen
 import com.mydrop.vpn.ui.screens.connect.ConnectScreen
-import com.mydrop.vpn.ui.screens.logs.LogsScreen
-import com.mydrop.vpn.ui.screens.servers.PingAllButtonContent
 import com.mydrop.vpn.ui.screens.failover.FailoverScreen
+import com.mydrop.vpn.ui.screens.logs.LogsScreen
 import com.mydrop.vpn.ui.screens.scan.ScanScreen
+import com.mydrop.vpn.ui.screens.servers.PingAllButtonContent
 import com.mydrop.vpn.ui.screens.servers.ServersScreen
 import com.mydrop.vpn.ui.screens.settings.SettingsScreen
 import com.mydrop.vpn.ui.screens.speed.SpeedTestScreen
@@ -74,13 +78,13 @@ object Routes {
 
 private enum class TopLevel(
     val route: String,
-    val label: String,
+    @StringRes val labelRes: Int,
     val icon: ImageVector,
 ) {
-    Connect(Routes.CONNECT, "Туннель", Icons.Rounded.Shield),
-    Servers(Routes.SERVERS, "Серверы", Icons.Rounded.Dns),
-    Subscriptions(Routes.SUBSCRIPTIONS, "Подписки", Icons.Rounded.Cloud),
-    Settings(Routes.SETTINGS, "Настройки", Icons.Rounded.Settings),
+    Connect(Routes.CONNECT, R.string.nav_tunnel, Icons.Rounded.Shield),
+    Servers(Routes.SERVERS, R.string.nav_servers, Icons.Rounded.Dns),
+    Subscriptions(Routes.SUBSCRIPTIONS, R.string.nav_subscriptions, Icons.Rounded.Cloud),
+    Settings(Routes.SETTINGS, R.string.nav_settings, Icons.Rounded.Settings),
 }
 
 @Composable
@@ -96,6 +100,8 @@ fun MyDropApp(viewModel: MainViewModel) {
     }
 
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
+
+    val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Routes.CONNECT
@@ -113,13 +119,12 @@ fun MyDropApp(viewModel: MainViewModel) {
             ) {
                 PillNavigationBar {
                     TopLevel.entries.forEach { destination ->
+                        val label = stringResource(destination.labelRes)
                         ShortNavigationBarItem(
                             selected = currentRoute == destination.route,
                             onClick = { navController.navigateTopLevel(destination.route) },
-                            icon = {
-                                Icon(destination.icon, contentDescription = destination.label)
-                            },
-                            label = { Text(destination.label) },
+                            icon = { Icon(destination.icon, contentDescription = label) },
+                            label = { Text(label) },
                         )
                     }
                 }
@@ -134,7 +139,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                 Routes.SUBSCRIPTIONS -> ExtendedFloatingActionButton(
                     onClick = { showAddSheet = true },
                     icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text("Добавить") },
+                    text = { Text(stringResource(R.string.action_add)) },
                 )
 
                 else -> Unit
@@ -182,6 +187,7 @@ fun MyDropApp(viewModel: MainViewModel) {
             composable(Routes.SPEED) {
                 SpeedTestScreen(
                     state = speedTest,
+                    isMetered = remember { viewModel.speedTestIsMetered() },
                     onStart = viewModel::startSpeedTest,
                     onStop = viewModel::stopSpeedTest,
                     onBack = { navController.popBackStack() },
@@ -264,6 +270,14 @@ fun MyDropApp(viewModel: MainViewModel) {
                 )
             }
         }
+    }
+
+    pendingImport?.let { pending ->
+        ImportConfirmDialog(
+            pending = pending,
+            onConfirm = viewModel::confirmPendingImport,
+            onDismiss = viewModel::dismissPendingImport,
+        )
     }
 
     if (showAddSheet) {

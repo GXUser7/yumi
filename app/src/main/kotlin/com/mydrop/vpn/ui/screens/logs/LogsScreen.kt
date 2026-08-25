@@ -28,8 +28,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
@@ -69,13 +71,17 @@ fun LogsScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(contentPadding)) {
         ScreenHeader(
-            title = "Журнал",
-            subtitle = "${visible.size} строк из ${entries.size}",
+            title = stringResource(R.string.logs_title),
+            subtitle = stringResource(R.string.logs_subtitle, visible.size, entries.size),
             modifier = Modifier.padding(bottom = 10.dp),
             actions = {
-                TonalIconButton(Icons.Rounded.ArrowBack, "Назад", onBack)
+                TonalIconButton(Icons.Rounded.ArrowBack, stringResource(R.string.action_back), onBack)
                 Spacer(Modifier.width(8.dp))
-                TonalIconButton(Icons.Rounded.DeleteSweep, "Очистить", onClear)
+                TonalIconButton(
+                    Icons.Rounded.DeleteSweep,
+                    stringResource(R.string.action_clear),
+                    onClear,
+                )
             },
         )
 
@@ -102,7 +108,7 @@ fun LogsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text("Записей нет", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.logs_empty), style = MaterialTheme.typography.titleMedium)
             }
             return@Column
         }

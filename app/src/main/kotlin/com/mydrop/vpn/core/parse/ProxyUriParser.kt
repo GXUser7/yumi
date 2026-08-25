@@ -171,7 +171,7 @@ object ProxyUriParser {
             if (at < 0) return null
             val (method, password) = decoded.substring(0, at).split(':', limit = 2)
                 .takeIf { it.size == 2 } ?: return null
-            val (host, port) = splitHostPort(decoded.substring(at + 1)) ?: return null
+            val (host, port) = splitHostAndPort(decoded.substring(at + 1)) ?: return null
             val settings = ProxySettings.Shadowsocks(method, password)
             return ProxyNode(
                 id = ProxyNode.stableId(host, port, settings, subId),
@@ -186,8 +186,7 @@ object ProxyUriParser {
 
         // SIP002: ss://base64(method:password)@host:port?plugin=...#name
         val p = splitUri(uri) ?: return null
-        val userInfo = base64DecodeOrNull(p.userInfo) ?: urlDecode(p.userInfo)
-        val (method, password) = userInfo.split(':', limit = 2).takeIf { it.size == 2 }
+        val (method, password) = credentialPair(p.userInfo).takeIf { it.size == 2 }
             ?: return null
 
         val plugin = p.q("plugin").orEmpty()
@@ -212,8 +211,9 @@ object ProxyUriParser {
 
     private fun parseHysteria2(uri: String, subId: String?): ProxyNode? {
         val p = splitUri(uri) ?: return null
+        val password = urlDecode(p.userInfo).takeIf { it.isNotEmpty() } ?: return null
         val settings = ProxySettings.Hysteria2(
-            password = urlDecode(p.userInfo),
+            password = password,
             obfsType = p.q("obfs").orEmpty(),
             obfsPassword = p.q("obfs-password", "obfspassword").orEmpty(),
             upMbps = p.qInt("upmbps", "up") ?: 0,
@@ -238,8 +238,10 @@ object ProxyUriParser {
     private fun parseTuic(uri: String, subId: String?): ProxyNode? {
         val p = splitUri(uri) ?: return null
         val creds = urlDecode(p.userInfo).split(':', limit = 2)
+        // The uuid is what identifies the session; without it the link is a fragment, not a server.
+        if (creds.getOrElse(0) { "" }.isEmpty()) return null
         val settings = ProxySettings.Tuic(
-            uuid = creds.getOrElse(0) { "" },
+            uuid = creds[0],
             password = creds.getOrElse(1) { "" },
             congestionControl = p.q("congestion_control", "congestioncontrol") ?: "bbr",
             udpRelayMode = p.q("udp_relay_mode", "udprelaymode") ?: "native",
@@ -250,7 +252,8 @@ object ProxyUriParser {
 
     private fun parseAnyTls(uri: String, subId: String?): ProxyNode? {
         val p = splitUri(uri) ?: return null
-        val settings = ProxySettings.AnyTls(password = urlDecode(p.userInfo))
+        val password = urlDecode(p.userInfo).takeIf { it.isNotEmpty() } ?: return null
+        val settings = ProxySettings.AnyTls(password = password)
         return node(p, settings, subId, uri, tlsDefaultOn = true)
     }
 
@@ -294,8 +297,12 @@ object ProxyUriParser {
 
     private fun parseSocks(uri: String, subId: String?): ProxyNode? {
         val p = splitUri(uri) ?: return null
-        // Some panels base64 the whole "user:pass" pair rather than percent-encoding it.
-        val creds = (base64DecodeOrNull(p.userInfo) ?: urlDecode(p.userInfo)).split(':', limit = 2)
+        // Some panels base64 the whole "user:pass" pair rather than percent-encoding it, so the
+        // encoded form is tried first — but only accepted when it decodes to something that
+        // actually looks like a credential pair. An ordinary login of letters and digits whose
+        // length happens to be a multiple of four is valid base64: "user1234" decodes cleanly to
+        // six bytes of binary, and the username reaching the core used to be that binary.
+        val creds = credentialPair(p.userInfo)
         val settings = ProxySettings.Socks(
             version = if (p.scheme == "socks4") "4" else "5",
             username = creds.getOrElse(0) { "" },
@@ -398,6 +405,18 @@ object ProxyUriParser {
             protocol = q("mux-protocol") ?: "h2mux",
             maxConnections = qInt("mux-max-connections") ?: 4,
         )
+    }
+
+    /**
+     * `user:password` from a link's userinfo, base64 or percent-encoded.
+     *
+     * A base64 decode is only believed when the result is printable and carries the colon that
+     * makes it a pair; anything else falls back to plain percent-decoding. See [parseSocks].
+     */
+    private fun credentialPair(userInfo: String): List<String> {
+        val decoded = base64DecodeOrNull(userInfo)
+            ?.takeIf { it.contains(':') && it.all { ch -> ch == '	' || ch.code in 0x20..0x7e } }
+        return (decoded ?: urlDecode(userInfo)).split(':', limit = 2)
     }
 
     /** vmess JSON mixes strings and numbers for the same field depending on the panel. */

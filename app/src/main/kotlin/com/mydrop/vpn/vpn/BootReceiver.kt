@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.mydrop.vpn.MyDropApplication
+import com.mydrop.vpn.R
 import com.mydrop.vpn.data.ConnectOutcome
 import kotlinx.coroutines.launch
 
@@ -29,18 +30,15 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 when (val outcome = container.tunnelLauncher.connect()) {
                     is ConnectOutcome.Started ->
-                        container.logs.info("Автоподключение после загрузки: ${outcome.node.name}")
+                        container.logs.info(R.string.log_boot_connected, outcome.node.name)
 
                     // Nothing here can show the system consent dialog, and asking for it out of a
                     // boot broadcast would be a dialog over whatever the user is actually doing.
                     is ConnectOutcome.NeedsConsent ->
-                        container.logs.warn(
-                            "Автоподключение отменено: нет разрешения VPN. " +
-                                "Подключитесь один раз вручную, чтобы выдать его",
-                        )
+                        container.logs.warn(R.string.log_boot_no_permission)
 
                     is ConnectOutcome.Rejected ->
-                        container.logs.warn("Автоподключение отменено: ${outcome.reason}")
+                        container.logs.warn(R.string.log_boot_rejected, outcome.reason)
                 }
             } finally {
                 pending.finish()

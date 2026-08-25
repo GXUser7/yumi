@@ -1,0 +1,23 @@
+# Line endings are decided here rather than by whoever happens to check the repository out.
+#
+# The project is now built from Windows as well as Linux, and `core.autocrlf` is a per-machine
+# setting: without this file, a checkout on Windows can commit `gradlew` back with CRLF, at which
+# point it stops being executable by /bin/sh and every Linux build and CI run dies on a script
+# that looks unchanged in the diff.
+
+* text=auto eol=lf
+
+# Shell scripts must keep LF whatever the host does; the Windows launcher must keep CRLF.
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Left alone entirely: the compiled rule-sets and fonts are content, not text, and "fixing" a
+# newline inside one corrupts it.
+*.jar binary
+*.aar binary
+*.srs binary
+*.ttf binary
+*.png binary
+*.jks binary
+*.keystore binary

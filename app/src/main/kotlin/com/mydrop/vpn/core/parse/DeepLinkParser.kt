@@ -11,7 +11,28 @@ sealed interface DeepLinkPayload {
     /** Resolvers: `tls://`, `quic://`, a DoH URL, or an `sdns://` stamp. */
     data class AddDns(val profiles: List<DnsProfile>) : DeepLinkPayload
 
-    data class Unsupported(val raw: String, val reason: String) : DeepLinkPayload
+    data class Unsupported(
+        val raw: String,
+        val reason: UnsupportedReason,
+        /** Only for [UnsupportedReason.UnsupportedAction]: the verb the link asked for. */
+        val action: String? = null,
+    ) : DeepLinkPayload
+}
+
+/**
+ * Why a link could not be turned into anything.
+ *
+ * A code rather than a sentence, so this file stays free of user-facing text — and therefore of
+ * any opinion about which language the reader has. The wording lives in resources and is picked
+ * up where the payload is shown; see `DeepLinkPayload.describe` in the data layer.
+ */
+enum class UnsupportedReason {
+    EmptyLink,
+    BadDnsAddress,
+    NoPayload,
+    UnknownFormat,
+    UnsupportedAction,
+    NotRecognised,
 }
 
 /**
@@ -27,7 +48,7 @@ object DeepLinkParser {
 
     fun parse(raw: String): DeepLinkPayload {
         val text = raw.trim()
-        if (text.isEmpty()) return DeepLinkPayload.Unsupported(text, "Пустая ссылка")
+        if (text.isEmpty()) return DeepLinkPayload.Unsupported(text, UnsupportedReason.EmptyLink)
 
         val scheme = text.substringBefore("://", missingDelimiterValue = "").lowercase()
 
@@ -41,7 +62,7 @@ object DeepLinkParser {
 
             "sdns", "tls", "quic" -> DnsUriParser.parse(text)
                 ?.let { DeepLinkPayload.AddDns(listOf(it)) }
-                ?: DeepLinkPayload.Unsupported(text, "Не удалось разобрать адрес DNS")
+                ?: DeepLinkPayload.Unsupported(text, UnsupportedReason.BadDnsAddress)
 
             else -> parseProxyPayload(text)
         }
@@ -52,7 +73,7 @@ object DeepLinkParser {
         val action = rest.substringBefore('/', missingDelimiterValue = "").lowercase()
         val payloadWithQuery = rest.substringAfter('/', missingDelimiterValue = "")
         if (payloadWithQuery.isEmpty()) {
-            return DeepLinkPayload.Unsupported(text, "В ссылке нет данных")
+            return DeepLinkPayload.Unsupported(text, UnsupportedReason.NoPayload)
         }
 
         val name = parseQuery(payloadWithQuery.substringAfter('?', ""))["name"]
@@ -67,9 +88,17 @@ object DeepLinkParser {
 
             decoded.contains("://") -> parseProxyPayload(decoded, name)
 
+            action.isEmpty() -> DeepLinkPayload.Unsupported(text, UnsupportedReason.UnknownFormat)
+
+            // A verb we understand, carrying something we cannot read: the payload is what failed,
+            // and saying "action «add» is not supported" sends the reader after the wrong thing.
+            action in subscriptionActions ->
+                DeepLinkPayload.Unsupported(text, UnsupportedReason.NotRecognised)
+
             else -> DeepLinkPayload.Unsupported(
                 text,
-                if (action.isEmpty()) "Неизвестный формат ссылки" else "Действие «$action» не поддерживается",
+                UnsupportedReason.UnsupportedAction,
+                action = action,
             )
         }
     }
@@ -94,6 +123,6 @@ object DeepLinkParser {
             }
         }
 
-        return DeepLinkPayload.Unsupported(text, "Не распознан ни как сервер, ни как подписка")
+        return DeepLinkPayload.Unsupported(text, UnsupportedReason.NotRecognised)
     }
 }

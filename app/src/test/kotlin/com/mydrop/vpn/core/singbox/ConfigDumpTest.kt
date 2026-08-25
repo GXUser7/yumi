@@ -98,6 +98,22 @@ class ConfigDumpTest {
             AppSettings(),
             ProbeEndpoint(port = 41234, username = "probe-user", password = "probe-secret"),
         )
+        // An IPv6 resolver, bare and bracketed. Both used to be cut on their last colon, which
+        // produced `"server": "2606:4700:4700:"` with a port of 1111 — a document the core
+        // rejects, so choosing an IPv6 DNS meant a tunnel that would not start.
+        dump(
+            "dns-ipv6",
+            "vless://11111111-2222-3333-4444-555555555555@nl.example.com:443?security=tls#v6",
+            AppSettings(
+                remoteDns = "https://[2606:4700:4700::1111]/dns-query",
+                directDns = "2620:fe::fe",
+            ),
+        )
+        dump(
+            "rules-routing",
+            "vless://11111111-2222-3333-4444-555555555555@de.example.com:443?security=tls#rules",
+            AppSettings(routingMode = RoutingMode.Rules),
+        )
         // Emptied DNS fields, which is what a half-finished edit in settings used to persist.
         // sing-box rejects `"server": ""` outright, so this case has to survive `sing-box check`
         // exactly like the rest.

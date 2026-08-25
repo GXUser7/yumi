@@ -36,19 +36,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.layout.Spacer
 
 internal data class InstalledApp(
     val packageName: String,
     val label: String,
-    val icon: BitmapPainter?,
     val isSystem: Boolean,
 )
 
@@ -70,10 +72,16 @@ fun SplitTunnelScreen(
 
     Column(modifier = modifier.fillMaxSize().padding(contentPadding)) {
         ScreenHeader(
-            title = "Раздельное\nтуннелирование",
+            title = stringResource(R.string.split_tunnel_title),
             titleStyle = MaterialTheme.typography.headlineLarge,
             modifier = Modifier.padding(bottom = 10.dp),
-            actions = { TonalIconButton(Icons.Rounded.ArrowBack, "Назад", onBack) },
+            actions = {
+                TonalIconButton(
+                    Icons.Rounded.ArrowBack,
+                    stringResource(R.string.action_back),
+                    onBack,
+                )
+            },
         )
 
         Row(
@@ -86,17 +94,19 @@ fun SplitTunnelScreen(
                     onCheckedChange = { onUpdate { it.copy(splitTunnelMode = mode) } },
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(mode.label, style = MaterialTheme.typography.labelMedium)
+                    Text(stringResource(mode.labelRes), style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
 
         Text(
-            text = when (settings.splitTunnelMode) {
-                SplitTunnelMode.Off -> "Через туннель идут все приложения"
-                SplitTunnelMode.AllowList -> "Через туннель пойдут только отмеченные приложения"
-                SplitTunnelMode.BlockList -> "Отмеченные приложения пойдут мимо туннеля"
-            },
+            text = stringResource(
+                when (settings.splitTunnelMode) {
+                    SplitTunnelMode.Off -> R.string.split_tunnel_off_hint
+                    SplitTunnelMode.AllowList -> R.string.split_tunnel_allow_hint
+                    SplitTunnelMode.BlockList -> R.string.split_tunnel_block_hint
+                },
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -106,7 +116,7 @@ fun SplitTunnelScreen(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
-            placeholder = { Text("Поиск приложения") },
+            placeholder = { Text(stringResource(R.string.split_tunnel_search)) },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
             singleLine = true,
             shape = RoundedCornerShape(18.dp),
@@ -179,19 +189,7 @@ internal fun AppRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (app.icon != null) {
-            Image(
-                painter = app.icon,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Rounded.Search,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-            )
-        }
+        AppIcon(app.packageName)
 
         Column(Modifier.weight(1f)) {
             Text(app.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
@@ -207,8 +205,41 @@ internal fun AppRow(
     }
 }
 
+/**
+ * The list, without the icons.
+ *
+ * Rasterising every launcher icon here produced a few hundred 96×96 bitmaps up front — some
+ * eleven megabytes on a well-stocked phone — and held every one of them for as long as the screen
+ * was open, including the ones scrolled far out of sight. [AppIcon] loads each one when its row is
+ * actually composed. `GET_META_DATA` went with them: nothing here reads metadata.
+ */
+/** One icon, decoded when its row appears and dropped with it. */
+@Composable
+private fun AppIcon(packageName: String) {
+    val context = LocalContext.current
+    val painter by produceState<BitmapPainter?>(initialValue = null, packageName) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                BitmapPainter(
+                    context.packageManager.getApplicationIcon(packageName)
+                        .toBitmap(96, 96)
+                        .asImageBitmap(),
+                )
+            }.getOrNull()
+        }
+    }
+
+    val current = painter
+    if (current != null) {
+        Image(painter = current, contentDescription = null, modifier = Modifier.size(36.dp))
+    } else {
+        // A placeholder of the same size, so a row does not jump when its icon lands.
+        Spacer(Modifier.size(36.dp))
+    }
+}
+
 internal fun loadApps(packageManager: PackageManager): List<InstalledApp> {
-    val installed = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+    val installed = packageManager.getInstalledApplications(0)
     return installed
         .asSequence()
         // Only apps that can actually originate traffic are worth listing; without the INTERNET
@@ -223,11 +254,6 @@ internal fun loadApps(packageManager: PackageManager): List<InstalledApp> {
             InstalledApp(
                 packageName = info.packageName,
                 label = packageManager.getApplicationLabel(info).toString(),
-                icon = runCatching {
-                    BitmapPainter(
-                        packageManager.getApplicationIcon(info).toBitmap(96, 96).asImageBitmap(),
-                    )
-                }.getOrNull(),
                 isSystem = info.flags and ApplicationInfo.FLAG_SYSTEM != 0,
             )
         }

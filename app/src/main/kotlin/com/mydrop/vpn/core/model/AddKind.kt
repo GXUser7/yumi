@@ -1,5 +1,8 @@
 package com.mydrop.vpn.core.model
 
+import androidx.annotation.StringRes
+import com.mydrop.vpn.R
+
 /**
  * What the user says they are pasting.
  *
@@ -9,9 +12,9 @@ package com.mydrop.vpn.core.model
  * authoritative. Detection stays the default because it is right most of the time; naming the kind
  * is there for when it is not, and it settles the question instead of arguing with a heuristic.
  */
-enum class AddKind(val label: String) {
-    Auto("Определить"),
-    Subscription("Подписка"),
-    Server("Сервер"),
-    Dns("DNS"),
+enum class AddKind(@StringRes val labelRes: Int) {
+    Auto(R.string.add_kind_auto),
+    Subscription(R.string.add_kind_subscription),
+    Server(R.string.add_kind_server),
+    Dns(R.string.add_kind_dns),
 }

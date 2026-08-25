@@ -9,9 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * The seam between the UI and whatever actually moves packets.
  *
- * Phase 1 ships [SimulatedTunnelController] so the interface, the state machine and every
- * animation driven by them can be exercised. Phase 2 adds a sing-box implementation behind the
- * same contract; nothing above this interface changes when it lands.
+ * [SingBoxTunnelController] is the real one. [SimulatedTunnelController] implements the same
+ * contract and is kept deliberately: it is the only way to walk the connect screen through every
+ * state without a working server, and swapping it in is a one-line change in `AppContainer`.
  */
 interface TunnelController {
     val state: StateFlow<VpnState>

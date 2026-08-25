@@ -9,7 +9,15 @@ sealed interface SubscriptionBody {
     /** Recognised but not yet supported; surfaced to the user instead of failing silently. */
     data class UnsupportedFormat(val format: String) : SubscriptionBody
 
-    data class Empty(val reason: String) : SubscriptionBody
+    data class Empty(val reason: EmptyReason) : SubscriptionBody
+}
+
+/** Why a body yielded no servers. Kept as a code for the same reason as [UnsupportedReason]. */
+enum class EmptyReason {
+    EmptyResponse,
+    LinksUnreadable,
+    NotBase64,
+    NoSupportedServers,
 }
 
 object SubscriptionParser {
@@ -26,7 +34,7 @@ object SubscriptionParser {
      */
     fun parse(body: String, subscriptionId: String): SubscriptionBody {
         val trimmed = body.trim()
-        if (trimmed.isEmpty()) return SubscriptionBody.Empty("Пустой ответ сервера")
+        if (trimmed.isEmpty()) return SubscriptionBody.Empty(EmptyReason.EmptyResponse)
 
         structured(trimmed, subscriptionId)?.let { return it }
 
@@ -35,21 +43,21 @@ object SubscriptionParser {
         if (looksLikeLinkList(trimmed)) {
             val nodes = ProxyUriParser.parseAll(trimmed, subscriptionId)
             return if (nodes.isEmpty()) {
-                SubscriptionBody.Empty("Ссылки не распознаны")
+                SubscriptionBody.Empty(EmptyReason.LinksUnreadable)
             } else {
                 SubscriptionBody.Nodes(nodes)
             }
         }
 
         val decoded = base64DecodeOrNull(trimmed)
-            ?: return SubscriptionBody.Empty("Не base64 и не список ссылок")
+            ?: return SubscriptionBody.Empty(EmptyReason.NotBase64)
 
         // A base64 body can hold a document just as easily as a list of links.
         structured(decoded, subscriptionId)?.let { return it }
 
         val nodes = ProxyUriParser.parseAll(decoded, subscriptionId)
         return if (nodes.isEmpty()) {
-            SubscriptionBody.Empty("В подписке нет поддерживаемых серверов")
+            SubscriptionBody.Empty(EmptyReason.NoSupportedServers)
         } else {
             SubscriptionBody.Nodes(nodes)
         }

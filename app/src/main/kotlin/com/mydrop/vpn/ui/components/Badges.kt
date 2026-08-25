@@ -22,8 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
@@ -98,10 +100,13 @@ fun LatencyChip(
         isMeasuring -> "…" to semantic.latencyDead
         result == null -> "—" to semantic.latencyDead
         result.failed && unmeasurableHint -> "UDP" to semantic.latencyDead
-        result.failed -> "нет" to semantic.latencySlow
-        result.millis < 150 -> "${result.millis} мс" to semantic.latencyFast
-        result.millis < 400 -> "${result.millis} мс" to semantic.latencyMedium
-        else -> "${result.millis} мс" to semantic.latencySlow
+        result.failed -> stringResource(R.string.servers_latency_failed) to semantic.latencySlow
+        result.millis < 150 ->
+            stringResource(R.string.servers_latency_value, result.millis) to semantic.latencyFast
+        result.millis < 400 ->
+            stringResource(R.string.servers_latency_value, result.millis) to semantic.latencyMedium
+        else ->
+            stringResource(R.string.servers_latency_value, result.millis) to semantic.latencySlow
     }
 
     AnimatedContent(

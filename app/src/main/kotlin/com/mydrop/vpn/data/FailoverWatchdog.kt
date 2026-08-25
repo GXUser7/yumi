@@ -1,7 +1,9 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
+import com.mydrop.vpn.core.model.FailoverPolicy
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +56,20 @@ class FailoverWatchdog(
     /** The replacement this watchdog installed, so its own doing is distinguishable from a tap. */
     private var autoChosenId: String? = null
 
+    /**
+     * When this watchdog last moved the tunnel, in either direction. Every automatic switch waits
+     * out [SWITCH_COOLDOWN_MILLIS] from here — see [restartWatch] for why the rate matters more
+     * than the decision.
+     */
+    private var lastSwitchAtMillis = 0L
+
+    /**
+     * How many times the tunnel has been sent back to a given server. A server that needed
+     * returning to more than [MAX_FAILBACKS] times is not recovering, it is flapping, and the
+     * tunnel stops chasing it.
+     */
+    private val failbacks = mutableMapOf<String, Int>()
+
     /** Follows the tunnel: a watch runs for exactly as long as one connection lives. */
     fun start() {
         scope.launch {
@@ -98,37 +114,63 @@ class FailoverWatchdog(
                 val home = homeNode?.let { saved -> profiles.nodes.firstOrNull { it.id == saved.id } }
                 if (homeNode != null && home == null) forgetHome()
 
+                // Probed first, and always: the count of good probes in a row is what the
+                // policy weighs against the count of bad ones.
                 if (home != null) {
                     val revived = latencyTester.measure(home, settings.value.pingMode)
                     profiles.recordLatency(revived)
                     recoveries = if (revived.failed) 0 else recoveries + 1
-                    // Same reasoning as the swap: one answered probe is a coincidence, and going
-                    // home on it would flap the tunnel between two servers every forty seconds.
-                    if (recoveries >= PROBES_BEFORE_FAILBACK) {
-                        recoveries = 0
-                        forgetHome()
-                        logs.info("«${home.name}» снова отвечает — возвращаюсь на него")
-                        launcher.switchTo(home)
-                        continue
-                    }
+                } else {
+                    recoveries = 0
                 }
 
                 val result = latencyTester.measure(current, settings.value.pingMode)
-                if (!result.failed) {
-                    failures = 0
-                    continue
+                failures = if (result.failed) failures + 1 else 0
+                if (result.failed && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
+                    logs.debug(
+                        R.string.log_failover_no_answer,
+                        current.name,
+                        failures,
+                        FailoverPolicy.FAILURES_BEFORE_SWAP,
+                    )
                 }
 
-                failures++
-                // One failed probe is a lost packet or a moment of bad signal. Switching on that
-                // would drop every connection the user has, repeatedly, on a working tunnel.
-                if (failures < FAILURES_BEFORE_SWAP) {
-                    logs.debug("«${current.name}» не ответил ($failures/$FAILURES_BEFORE_SWAP)")
-                    continue
-                }
+                val decision = FailoverPolicy.decide(
+                    consecutiveFailures = failures,
+                    consecutiveHomeRecoveries = recoveries,
+                    hasHome = home != null,
+                    failbacksSoFar = failbacks[home?.id] ?: 0,
+                    millisSinceLastSwitch = System.currentTimeMillis() - lastSwitchAtMillis,
+                )
 
-                failures = 0
-                swapAwayFrom(current)
+                when (decision) {
+                    // Counters are left standing: whatever the policy is waiting for, it is still
+                    // true, and resetting them here would make the wait restart every probe.
+                    FailoverPolicy.Decision.Hold -> Unit
+
+                    FailoverPolicy.Decision.AbandonHome -> {
+                        home ?: continue
+                        recoveries = 0
+                        failbacks[home.id] = FailoverPolicy.MAX_FAILBACKS + 1
+                        forgetHome()
+                        logs.info(R.string.log_failover_home_abandoned, home.name)
+                    }
+
+                    FailoverPolicy.Decision.ReturnHome -> {
+                        home ?: continue
+                        recoveries = 0
+                        failbacks[home.id] = (failbacks[home.id] ?: 0) + 1
+                        forgetHome()
+                        logs.info(R.string.log_failover_home_back, home.name)
+                        lastSwitchAtMillis = System.currentTimeMillis()
+                        launcher.switchTo(home)
+                    }
+
+                    FailoverPolicy.Decision.LeaveCurrent -> {
+                        failures = 0
+                        swapAwayFrom(current)
+                    }
+                }
             }
         }
     }
@@ -143,6 +185,23 @@ class FailoverWatchdog(
         autoChosenId = null
     }
 
+    /**
+     * Whether enough time has passed since the last automatic move.
+     *
+     * This is the part 0.3.2 was missing, and its absence is what turned a reasonable idea into
+     * dropped connections. Switching servers reloads the core, which kills every connection the
+     * tunnel is carrying — so the cost of a switch is paid by the user immediately, while the
+     * benefit is speculative: the probe is a bare TCP handshake against the endpoint and says
+     * nothing about whether the proxy behind it works.
+     *
+     * With a probe that weak, the rate of switching matters more than the accuracy of any single
+     * decision. Leaving a genuinely dead server a few minutes later is a small cost. Bouncing
+     * between two servers every forty seconds is the connection dropping over and over, which is
+     * exactly what it looked like from the outside.
+     */
+    private fun maySwitchNow(): Boolean =
+        System.currentTimeMillis() - lastSwitchAtMillis >= FailoverPolicy.SWITCH_COOLDOWN_MILLIS
+
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val candidates = FailoverGroup.candidates(
             nodes = profiles.nodes,
@@ -152,11 +211,11 @@ class FailoverWatchdog(
             chosen = settings.value.failoverNodeIds,
         )
         if (candidates.isEmpty()) {
-            logs.warn("«${dead.name}» не отвечает, но заменить его нечем")
+            logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
             return
         }
 
-        logs.warn("«${dead.name}» не отвечает — проверяю ${candidates.size} запасных")
+        logs.warn(R.string.log_failover_probing, dead.name, candidates.size)
         // Measured now, not read from the profile: what mattered an hour ago says nothing about
         // which servers are up during the outage this is reacting to.
         val fresh = mutableMapOf<String, com.mydrop.vpn.core.model.LatencyResult>()
@@ -167,16 +226,19 @@ class FailoverWatchdog(
 
         val chosen = FailoverChoice.pick(candidates, fresh)
         if (chosen == null) {
-            logs.warn("Ни один запасной сервер не ответил — остаюсь на «${dead.name}»")
+            logs.warn(R.string.log_failover_all_dead, dead.name)
             return
         }
 
-        logs.info("Переключаюсь на «${chosen.name}» (${fresh[chosen.id]?.millis} мс)")
+        logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
         // Recorded before the switch, because moving the tunnel takes this coroutine down with it.
         // Only the first departure counts: hop twice and home is still the server the user chose,
         // not the replacement this watchdog installed on the way.
-        if (homeNode == null) homeNode = dead
+        // A server already given up on does not become home again; otherwise the give-up counter
+        // would reset itself every time the tunnel wandered back past it.
+        if (homeNode == null && (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS) homeNode = dead
         autoChosenId = chosen.id
+        lastSwitchAtMillis = System.currentTimeMillis()
         launcher.switchTo(chosen)
     }
 
@@ -184,10 +246,6 @@ class FailoverWatchdog(
         const val GRACE_MILLIS = 15_000L
         const val PROBE_INTERVAL_MILLIS = 20_000L
 
-        /** Consecutive failed probes before the tunnel is moved. */
-        const val FAILURES_BEFORE_SWAP = 2
-
-        /** Consecutive answered probes before the tunnel returns to the user's own server. */
-        const val PROBES_BEFORE_FAILBACK = 2
+        // The thresholds themselves live in FailoverPolicy, which is where they are tested.
     }
 }

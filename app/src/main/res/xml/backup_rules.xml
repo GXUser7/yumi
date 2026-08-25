@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 30 and below. Redundant next to `android:allowBackup="false"` and kept deliberately:
+  the flag is one attribute away from being flipped back on, and this file is what decides
+  what would happen then.
+-->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+</full-backup-content>

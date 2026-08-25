@@ -1,10 +1,11 @@
 package com.mydrop.vpn.ui
 
 import android.content.Intent
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.mydrop.vpn.core.format.pluralServers
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
@@ -18,12 +19,14 @@ import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
-import com.mydrop.vpn.core.parse.DnsUriParser
-import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.core.parse.DeepLinkParser
 import com.mydrop.vpn.core.parse.DeepLinkPayload
+import com.mydrop.vpn.core.parse.DnsUriParser
+import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.ConnectOutcome
+import com.mydrop.vpn.data.describe
+import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,7 +38,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 data class MainUiState(
     val nodes: List<ProxyNode> = emptyList(),
@@ -60,6 +62,12 @@ data class MainUiState(
     }
 }
 
+/** What an external link wants to add, and where it says it came from. */
+data class PendingImport(
+    val payload: DeepLinkPayload,
+    val source: String,
+)
+
 private data class TransientState(
     val pingingNodeIds: Set<String> = emptySet(),
     val refreshingSubscriptionIds: Set<String> = emptySet(),
@@ -76,6 +84,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val permissionRequests = _permissionRequests.asSharedFlow()
 
     private var pendingConnectNodeId: String? = null
+
+    /**
+     * An import from outside the app, waiting to be looked at. Null whenever there is nothing
+     * pending; see [importFromExternalLink].
+     */
+    private val _pendingImport = MutableStateFlow<PendingImport?>(null)
+    val pendingImport: StateFlow<PendingImport?> = _pendingImport.asStateFlow()
+
+    /** Snackbars are user-facing text, so they follow the chosen language like the screens do. */
+    private val strings = container.strings
 
     val logs: StateFlow<List<LogEntry>> = container.logs.entries
 
@@ -116,6 +134,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      * tunnel that is merely connecting — or one whose configuration could not claim a loopback
      * port — measures the phone's own connection and the screen says so.
      */
+    /**
+     * True when the phone is on a connection somebody pays for by the megabyte.
+     *
+     * The test opens six streams and moves up to a few hundred megabytes each way inside its
+     * budget. On Wi-Fi that is nothing; on a metered plan it is a bill, and the screen used to
+     * start moving bytes the instant the button was pressed. The tunnel does not hide this — the
+     * measurement leaves through the phone's own connection either way.
+     */
+    fun speedTestIsMetered(): Boolean = container.isActiveNetworkMetered()
+
     fun startSpeedTest() {
         if (speedTestJob?.isActive == true) return
         val connected = uiState.value.vpnState is VpnState.Connected
@@ -201,7 +229,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val nodeId = pendingConnectNodeId
         pendingConnectNodeId = null
         if (!granted) {
-            emit("Без разрешения VPN туннель не поднять")
+            emit(R.string.message_no_vpn_permission)
             return
         }
         val node = container.profiles.nodes.firstOrNull { it.id == nodeId } ?: return
@@ -234,7 +262,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
         container.tunnelLauncher.connectTo(node)
-        emit("Режим «${mode.label}» применён")
+        emit(R.string.message_routing_applied, strings.get(mode.labelRes))
     }
 
     /**
@@ -249,10 +277,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.profiles.setTlsInsecure(nodeId, insecure)
         emit(
             if (insecure) {
-                "«${node.name}»: сертификат не проверяется"
+                R.string.message_certificate_skipped
             } else {
-                "«${node.name}»: проверка сертификата включена"
+                R.string.message_certificate_verified
             },
+            node.name,
         )
 
         if (!uiState.value.vpnState.isActive) return
@@ -282,22 +311,22 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - result.nodeId) }
             }
             transient.update { it.copy(pingingNodeIds = emptySet()) }
-            emit("Проверка задержек завершена")
+            emit(R.string.message_latency_done)
         }
     }
 
     fun selectFastest() {
-        val latencies = uiState.value.latencies
-        val fastest = uiState.value.nodes
-            .mapNotNull { node -> latencies[node.id]?.takeIf { !it.failed }?.let { node to it.millis } }
-            .minByOrNull { it.second }
-            ?.first
+        // Through the launcher rather than a second implementation here. This one used to sort on
+        // whatever measurements existed, however old, while the launcher discarded anything past
+        // half an hour — so the same button picked different servers depending on which code path
+        // reached it.
+        val fastest = container.tunnelLauncher.fastestNode()
         if (fastest == null) {
-            emit("Сначала измерьте задержки")
+            emit(R.string.message_measure_first)
             return
         }
         selectNode(fastest.id)
-        emit("Выбран ${fastest.name}")
+        emit(R.string.message_selected, fastest.name)
     }
 
     // ------------------------------------------------------- Subscriptions
@@ -325,7 +354,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return
         if (uiState.value.subscriptions.any { it.url == trimmed }) {
-            emit("Такая подписка уже добавлена")
+            emit(R.string.message_subscription_exists)
             return
         }
         val subscription = Subscription(
@@ -339,7 +368,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun removeSubscription(subscriptionId: String) {
         container.profiles.removeSubscription(subscriptionId)
-        emit("Подписка удалена")
+        emit(R.string.message_subscription_removed)
     }
 
     fun setSubscriptionEnabled(subscriptionId: String, enabled: Boolean) =
@@ -363,7 +392,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
             AddKind.Subscription -> {
                 if (!text.startsWith("http", ignoreCase = true)) {
-                    emit("Подписка — это ссылка http:// или https://")
+                    emit(R.string.message_not_a_subscription)
                     return
                 }
                 addSubscription(text, name)
@@ -372,12 +401,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             AddKind.Server -> {
                 val nodes = ProxyUriParser.parseAll(text)
                 if (nodes.isEmpty()) {
-                    emit("Это не похоже на сервер — ссылка не разобралась")
+                    emit(R.string.message_not_a_server)
                     return
                 }
                 container.profiles.addNodes(nodes)
-                container.logs.info("Импортировано серверов: ${nodes.size}")
-                emit("Добавлено серверов: ${nodes.size}")
+                container.logs.info(R.string.log_servers_imported, nodes.size)
+                emit(R.string.message_servers_added, nodes.size)
+                warnAboutInsecure(nodes)
             }
 
             AddKind.Dns -> {
@@ -387,12 +417,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     listOfNotNull(DnsUriParser.parse(text) ?: dnsFromPlainUrl(text, name))
                 }
                 if (profiles.isEmpty()) {
-                    emit("Это не похоже на адрес DNS")
+                    emit(R.string.message_not_a_dns)
                     return
                 }
                 container.profiles.addDnsProfiles(profiles)
-                container.logs.info("Импортировано DNS: ${profiles.size}")
-                emit("DNS добавлен: ${profiles.first().name}")
+                container.logs.info(R.string.log_dns_imported, profiles.size)
+                emit(R.string.message_dns_added, profiles.first().name)
             }
         }
     }
@@ -411,30 +441,90 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         )
     }
 
-    /** Single entry point for QR scans, pasted text, shared text and `happ://` deep links. */
-    fun importText(raw: String) {
-        when (val payload = DeepLinkParser.parse(raw)) {
+    /**
+     * Text the user put in themselves: pasted into the add sheet, or read off a QR code they
+     * pointed the camera at. They asked for it, so it applies straight away.
+     */
+    fun importText(raw: String) = applyImport(DeepLinkParser.parse(raw))
+
+    /**
+     * Text that arrived from outside — a `happ://` link tapped in a browser, a share from another
+     * app — which is a different thing entirely and gets a confirmation first.
+     *
+     * The schemes are declared `BROWSABLE` in the manifest, so any web page can navigate to
+     * `happ://add/<base64 of a subscription url>` and, until this existed, the app would add that
+     * subscription and immediately fetch it. From there `addNodes` fills a blank `selectedNodeId`,
+     * and with "pick the fastest" or failover on, somebody else's server can end up carrying the
+     * traffic. Nothing about that requires the user to have agreed to anything.
+     *
+     * An unreadable link is reported rather than confirmed: there is nothing to agree to.
+     */
+    fun importFromExternalLink(raw: String) {
+        val payload = DeepLinkParser.parse(raw)
+        if (payload is DeepLinkPayload.Unsupported) {
+            emit(strings.describe(payload))
+            return
+        }
+        _pendingImport.value = PendingImport(payload = payload, source = originOf(raw))
+    }
+
+    fun confirmPendingImport() {
+        val pending = _pendingImport.value ?: return
+        _pendingImport.value = null
+        applyImport(pending.payload)
+    }
+
+    fun dismissPendingImport() {
+        _pendingImport.value = null
+    }
+
+    /** Where a link claims to come from, for the confirmation to show. */
+    private fun originOf(raw: String): String {
+        val body = raw.trim().substringAfter("://", missingDelimiterValue = "")
+        val host = body.substringBefore('/').substringAfter('@').substringBefore('?')
+        return host.ifEmpty { raw.trim().take(40) }
+    }
+
+    private fun applyImport(payload: DeepLinkPayload) {
+        when (payload) {
             is DeepLinkPayload.AddSubscription -> addSubscription(payload.url, payload.name)
 
             is DeepLinkPayload.AddNodes -> {
                 container.profiles.addNodes(payload.nodes)
-                container.logs.info("Импортировано серверов: ${payload.nodes.size}")
-                emit("Добавлено серверов: ${payload.nodes.size}")
+                container.logs.info(R.string.log_servers_imported, payload.nodes.size)
+                emit(R.string.message_servers_added, payload.nodes.size)
+                warnAboutInsecure(payload.nodes)
             }
 
             is DeepLinkPayload.AddDns -> {
                 container.profiles.addDnsProfiles(payload.profiles)
-                container.logs.info("Импортировано DNS: ${payload.profiles.size}")
-                emit(
-                    if (payload.profiles.size == 1) {
-                        "DNS добавлен: ${payload.profiles.single().name}"
-                    } else {
-                        "Добавлено DNS: ${payload.profiles.size}"
-                    },
-                )
+                container.logs.info(R.string.log_dns_imported, payload.profiles.size)
+                if (payload.profiles.size == 1) {
+                    emit(R.string.message_dns_added, payload.profiles.single().name)
+                } else {
+                    emit(R.string.message_dns_added_many, payload.profiles.size)
+                }
             }
 
-            is DeepLinkPayload.Unsupported -> emit(payload.reason)
+            is DeepLinkPayload.Unsupported -> emit(strings.describe(payload))
+        }
+    }
+
+    /**
+     * Names the servers that arrived asking for certificate checking to be skipped.
+     *
+     * `allowInsecure=1` rides in a link's query string, where nobody reads it, and it decides
+     * whether the connection can be read by whoever carries it. Setting it by hand already
+     * produces a snackbar; arriving with it set used to produce nothing but a small badge in the
+     * list, which is not where somebody looks right after pasting forty servers.
+     */
+    private fun warnAboutInsecure(nodes: List<ProxyNode>) {
+        val count = nodes.count { node ->
+            node.tls?.let { it.enabled && it.insecure && it.reality == null } == true
+        }
+        if (count > 0) {
+            container.logs.warn(R.string.log_imported_insecure, count)
+            emit(R.string.message_imported_insecure, count)
         }
     }
 
@@ -456,7 +546,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun selectDns(id: String?) {
         if (uiState.value.selectedDnsId == id) return
         container.profiles.selectDnsProfile(id)
-        applyDnsToRunningTunnel(container.profiles.selectedDnsProfile()?.name ?: "из настроек")
+        applyDnsToRunningTunnel(
+            container.profiles.selectedDnsProfile()?.name
+                ?: strings.get(R.string.message_dns_from_settings),
+        )
     }
 
     fun removeDns(id: String) {
@@ -464,14 +557,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // running configuration exactly like selecting another one.
         val wasSelected = uiState.value.selectedDnsId == id
         container.profiles.removeDnsProfile(id)
-        if (wasSelected) applyDnsToRunningTunnel("из настроек")
+        if (wasSelected) {
+            applyDnsToRunningTunnel(strings.get(R.string.message_dns_from_settings))
+        }
     }
 
     private fun applyDnsToRunningTunnel(name: String) {
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
         container.tunnelLauncher.connectTo(node)
-        emit("DNS применён: $name")
+        emit(R.string.message_dns_applied, name)
     }
 
     fun clearLogs() = container.logs.clear()
@@ -479,11 +574,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     // ----------------------------------------------------------- Helpers
 
     private fun guessName(url: String): String =
-        runCatching { java.net.URL(url).host }.getOrNull()?.removePrefix("www.") ?: "Подписка"
+        runCatching { java.net.URL(url).host }.getOrNull()?.removePrefix("www.")
+            ?: strings.get(R.string.message_default_subscription_name)
 
     private fun emit(message: String) {
         _messages.tryEmit(message)
     }
+
+    private fun emit(@StringRes id: Int, vararg args: Any) = emit(strings.get(id, *args))
 
     private companion object {
         /** One phase's worth of 150 ms samples, which is exactly the window the trace shows. */

@@ -1,13 +1,16 @@
 package com.mydrop.vpn.core.model
 
+import androidx.annotation.StringRes
+import com.mydrop.vpn.R
+
 /** Stages of one measurement, in the order they run. */
-enum class SpeedPhase(val label: String) {
-    Idle("Готов к замеру"),
-    Latency("Отклик"),
-    Download("Приём"),
-    Upload("Отдача"),
-    Done("Замер завершён"),
-    Failed("Замер не удался"),
+enum class SpeedPhase(@StringRes val labelRes: Int) {
+    Idle(R.string.speed_phase_idle),
+    Latency(R.string.speed_phase_latency),
+    Download(R.string.speed_phase_download),
+    Upload(R.string.speed_phase_upload),
+    Done(R.string.speed_phase_done),
+    Failed(R.string.speed_phase_failed),
 }
 
 /**

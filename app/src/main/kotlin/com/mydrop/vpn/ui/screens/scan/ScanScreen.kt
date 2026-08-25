@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -56,10 +57,12 @@ import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.mydrop.vpn.R
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Reads a server or subscription straight off someone else's screen.
@@ -101,7 +104,11 @@ fun ScanScreen(
             horizontalArrangement = Arrangement.Start,
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Rounded.ArrowBack, contentDescription = "Назад", tint = Color.White)
+                Icon(
+                    Icons.Rounded.ArrowBack,
+                    contentDescription = stringResource(R.string.action_back),
+                    tint = Color.White,
+                )
             }
         }
     }
@@ -119,9 +126,21 @@ private fun CameraViewfinder(onResult: (String) -> Unit, onBack: () -> Unit) {
     val consumed = remember { AtomicBoolean(false) }
     val previewView = remember { PreviewView(context) }
     val executor = remember { Executors.newSingleThreadExecutor() }
+    val boundProvider = remember { AtomicReference<ProcessCameraProvider?>(null) }
 
+    /**
+     * Leaving the screen has to release the camera, and in that order.
+     *
+     * `bindToLifecycle` binds to the *Activity*, which outlives this composable by the whole rest
+     * of the app — so navigating away used to leave the camera running, the indicator lit and the
+     * battery draining until the Activity died. Shutting the executor down was all this did, and
+     * it did it while the analyzer was still bound, so the next frame arrived at a closed pool.
+     */
     DisposableEffect(Unit) {
-        onDispose { executor.shutdown() }
+        onDispose {
+            boundProvider.getAndSet(null)?.let { runCatching { it.unbindAll() } }
+            executor.shutdown()
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -159,6 +178,7 @@ private fun CameraViewfinder(onResult: (String) -> Unit, onBack: () -> Unit) {
                 preview,
                 analysis,
             )
+            boundProvider.set(provider)
         }
     }
 
@@ -190,14 +210,13 @@ private fun PermissionPrompt(onGrant: () -> Unit, modifier: Modifier = Modifier)
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = "Чтобы прочитать QR-код, нужен доступ к камере. " +
-                "Кадры не сохраняются и никуда не отправляются — они разбираются на устройстве.",
+            text = stringResource(R.string.scan_permission_rationale),
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onGrant) { Text("Разрешить") }
+        Button(onClick = onGrant) { Text(stringResource(R.string.action_allow)) }
     }
 }
 

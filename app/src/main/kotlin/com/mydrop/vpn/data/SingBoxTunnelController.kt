@@ -3,6 +3,7 @@ package com.mydrop.vpn.data
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
@@ -49,7 +50,7 @@ class SingBoxTunnelController(
         scope.launch {
             buildLock.withLock {
                 val config = configs.build(node) ?: return@withLock
-                logs.info("Подключение к ${node.name} (${node.protocol.label}, ${node.address})")
+                logs.info(R.string.log_connecting_to, node.name, node.protocol.label, node.address)
                 MyDropVpnService.start(context, config, node.id, node.name)
             }
         }
