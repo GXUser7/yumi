@@ -88,7 +88,13 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-24" "ndk;${NDK_VERSION}" > /dev/null
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          export JAVA_HOME="$JAVA_HOME_${CORE_JAVA}_X64"
+
+          # Indirect, because `$JAVA_HOME_${CORE_JAVA}_X64` is not one variable name to bash: it
+          # reads as `${JAVA_HOME_}` followed by the literal expansion of CORE_JAVA, and under
+          # `set -u` that is an unbound variable rather than the JDK path.
+          core_java_home="JAVA_HOME_${CORE_JAVA}_X64"
+          export JAVA_HOME="${!core_java_home:-$JAVA_HOME}"
+          echo "core builds with $("$JAVA_HOME/bin/java" -version 2>&1 | head -1)"
 
           go run ./cmd/internal/build_libbox -target android
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
