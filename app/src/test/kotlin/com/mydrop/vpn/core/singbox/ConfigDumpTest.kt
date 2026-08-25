@@ -12,6 +12,12 @@ import java.io.File
  * Writes representative configurations to `build/singbox-configs/` so they can be validated
  * with the real `sing-box check` binary. A JSON document that parses in Kotlin can still be
  * rejected by the core, and only the core is authoritative about its own schema.
+ *
+ * These files are a side effect, not a declared task output, and Gradle therefore has no idea
+ * they exist: an up-to-date or cached test run skips this class and leaves the directory holding
+ * whatever it held before — nothing at all on a clean checkout, or documents from an older
+ * revision. Anything that validates them has to force this class to run first, which is what the
+ * CI workflow does. Declaring a real output would be better; until then, this is the trap.
  */
 class ConfigDumpTest {
 

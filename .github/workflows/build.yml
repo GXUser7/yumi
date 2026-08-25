@@ -147,6 +147,15 @@ jobs:
           go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
             -o /tmp/sing-box-cli ./cmd/sing-box
           cd "$GITHUB_WORKSPACE"
+
+          # Regenerated rather than assumed. ConfigDumpTest writes these files as a side effect
+          # that Gradle does not track as a task output, so a cached or up-to-date test run leaves
+          # the directory exactly as it was — empty on a fresh runner, or full of stale documents
+          # from a previous revision. Both make this step a lie: the first checks nothing and
+          # passes, the second checks the wrong thing.
+          rm -rf app/build/singbox-configs
+          ./gradlew :app:testDebugUnitTest --tests '*ConfigDumpTest*' --rerun
+
           shopt -s nullglob
           configs=(app/build/singbox-configs/*.json)
           if [ ${#configs[@]} -eq 0 ]; then
