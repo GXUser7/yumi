@@ -35,9 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # restore/save rather than the combined action: the combined one only writes the cache in
+      # a post step when the whole job succeeds, so a failure anywhere after this threw away
+      # fifteen minutes of core build and the next run started from nothing again.
       - name: Restore libbox.aar
         id: libbox-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: app/libs/libbox.aar
           key: libbox-${{ env.CORE_REV }}-ndk${{ env.NDK_VERSION }}
@@ -59,6 +62,26 @@ jobs:
           git -C "$CORE_DIR" checkout -q --detach FETCH_HEAD
           echo "sing-box at $(git -C "$CORE_DIR" rev-parse --short HEAD)"
 
+          # Everything that compiles sing-box has to use the Go its go.mod names — the core here
+          # and the CLI further down alike. Pinning it inside one step is not enough: each `run`
+          # is its own shell, and the CLI step then built with whatever the runner had.
+          #
+          # GOTOOLCHAIN=auto does not save it either, because auto only ever upgrades. The runner
+          # ships a Go newer than the directive, so the directive is satisfied and ignored, and
+          # the //go:linkname reach into x/net/http2 that sing-box relies on stops linking:
+          # "relocation target golang.org/x/net/http2.(*Transport).connPool not defined".
+          GO_VERSION="$(awk '/^go /{print $2}' "$CORE_DIR/go.mod")"
+          go install "golang.org/dl/go${GO_VERSION}@latest"
+          pinned="$(go env GOPATH)/bin/go${GO_VERSION}"
+          "$pinned" download
+
+          # Put the pinned SDK first on PATH rather than leaning on GOTOOLCHAIN to fetch it: this
+          # way plain `go` in every later step is the right one, and `local` then forbids Go from
+          # quietly switching to another toolchain behind that.
+          echo "$("$pinned" env GOROOT)/bin" >> "$GITHUB_PATH"
+          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+          echo "pinned Go toolchain: $("$pinned" version)"
+
       - uses: actions/setup-java@v4
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         with:
@@ -70,14 +93,6 @@ jobs:
         run: |
           set -euo pipefail
           cd "$CORE_DIR"
-
-          # The core must be built with the Go its go.mod names. On anything newer the linker
-          # rejects the //go:linkname reach into x/net/http2 that sing-box relies on, and the
-          # Android .so fails to link with "recompile with -fPIC" on every architecture.
-          GO_VERSION="$(awk '/^go /{print $2}' go.mod)"
-          go install "golang.org/dl/go${GO_VERSION}@latest"
-          "$(go env GOPATH)/bin/go${GO_VERSION}" download
-          export GOTOOLCHAIN="go${GO_VERSION}"
 
           go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
@@ -99,6 +114,15 @@ jobs:
           go run ./cmd/internal/build_libbox -target android
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp libbox.aar "$GITHUB_WORKSPACE/app/libs/libbox.aar"
+
+      # Immediately, while the thing exists. Everything after this is cheap by comparison and can
+      # fail without costing another core build.
+      - name: Save libbox.aar
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-${{ env.CORE_REV }}-ndk${{ env.NDK_VERSION }}
 
       - uses: actions/setup-java@v4
         with:
