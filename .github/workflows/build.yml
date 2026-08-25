@@ -18,13 +18,15 @@ permissions:
   contents: read
 
 env:
-  # Matches app/build.gradle.kts. The core build wants 17 and refuses 21; see the step below.
+  # Matches app/build.gradle.kts. The core build wants 17 and refuses 21; see the steps below.
   APP_JAVA: '21'
   CORE_JAVA: '17'
   NDK_VERSION: '28.2.13676358'
-  # sing-box commit the core is built from. 77bd326 "Fix naive performance", from the `testing`
-  # branch — the revision every current build has been made against.
+  # A commit, never a branch. A branch would change the core the app links against without a
+  # single line in this repository changing, and the tunnel is the last place to want that.
+  # 77bd326 "Fix naive performance". Bump deliberately, and test the tunnel afterwards.
   CORE_REV: '77bd3261367463b970648edf445c88ac541b3bf2'
+  CORE_DIR: /tmp/sing-box
 
 jobs:
   build:
@@ -33,47 +35,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pin the sing-box revision
-        id: core
-        run: |
-          # A commit, never a branch. The first version of this file said `dev-next`, which is a
-          # moving development branch: the core the app links against would then change without a
-          # single line in this repository changing, and the tunnel is the last place to want that.
-          # Bump this deliberately, and test the tunnel afterwards.
-          echo "sha=$CORE_REV" >> "$GITHUB_OUTPUT"
-
       - name: Restore libbox.aar
         id: libbox-cache
         uses: actions/cache@v4
         with:
           path: app/libs/libbox.aar
-          key: libbox-${{ steps.core.outputs.sha }}-ndk${{ env.NDK_VERSION }}
+          key: libbox-${{ env.CORE_REV }}-ndk${{ env.NDK_VERSION }}
+
+      # Unconditional: the configuration check below builds the sing-box CLI whether or not the
+      # core came out of the cache, and it needs a toolchain to do that with.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Fetch the pinned sing-box revision
+        run: |
+          set -euo pipefail
+          # `clone --branch` takes a name, not a commit, so the pin is fetched directly. Shallow,
+          # because one commit is all this needs and the history is large.
+          git init -q "$CORE_DIR"
+          git -C "$CORE_DIR" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$CORE_DIR" fetch -q --depth 1 origin "$CORE_REV"
+          git -C "$CORE_DIR" checkout -q --detach FETCH_HEAD
+          echo "sing-box at $(git -C "$CORE_DIR" rev-parse --short HEAD)"
 
       - uses: actions/setup-java@v4
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         with:
           distribution: temurin
           java-version: ${{ env.CORE_JAVA }}
-        if: steps.libbox-cache.outputs.cache-hit != 'true'
-
-      - uses: actions/setup-go@v5
-        with:
-          # Must match sing-box's go.mod. On a newer toolchain the linker rejects the
-          # //go:linkname reach into x/net/http2 that sing-box relies on, and the Android .so
-          # fails with "relocation ... recompile with -fPIC" on every architecture.
-          go-version-file: 'sing-box/go.mod'
-        if: steps.libbox-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
 
       - name: Build libbox.aar
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "${{ steps.core.outputs.rev }}" \
-            https://github.com/SagerNet/sing-box.git /tmp/sing-box
-          cd /tmp/sing-box
+          cd "$CORE_DIR"
 
-          # setup-go above cannot read a go.mod that did not exist yet at that point, so the
-          # version is taken from the clone and installed here instead.
+          # The core must be built with the Go its go.mod names. On anything newer the linker
+          # rejects the //go:linkname reach into x/net/http2 that sing-box relies on, and the
+          # Android .so fails to link with "recompile with -fPIC" on every architecture.
           GO_VERSION="$(awk '/^go /{print $2}' go.mod)"
           go install "golang.org/dl/go${GO_VERSION}@latest"
           "$(go env GOPATH)/bin/go${GO_VERSION}" download
@@ -83,7 +83,8 @@ jobs:
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
           export PATH="$(go env GOPATH)/bin:$PATH"
 
-          # gomobile binds against API 24 whatever the app's minSdk says.
+          # gomobile binds against API 24 whatever the app's minSdk says, and without that
+          # platform the build runs to completion and dies on its very last step.
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-24" "ndk;${NDK_VERSION}" > /dev/null
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
@@ -103,19 +104,26 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest
 
+      - name: Lint
+        run: ./gradlew :app:lintRelease
+
       - name: Check the generated configurations against the real core
         run: |
           set -euo pipefail
           # A document that parses in Kotlin can still be refused by sing-box, and only sing-box is
-          # authoritative about its own schema. ConfigDumpTest writes the documents; this runs the
-          # core over every one of them.
-          cd /tmp/sing-box 2>/dev/null || git clone --depth 1 \
-            --branch "${{ steps.core.outputs.rev }}" https://github.com/SagerNet/sing-box.git /tmp/sing-box
-          cd /tmp/sing-box
+          # authoritative about its own schema. ConfigDumpTest writes the documents during the test
+          # run above; this puts the core itself over every one of them.
+          cd "$CORE_DIR"
           go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
             -o /tmp/sing-box-cli ./cmd/sing-box
           cd "$GITHUB_WORKSPACE"
-          for config in app/build/singbox-configs/*.json; do
+          shopt -s nullglob
+          configs=(app/build/singbox-configs/*.json)
+          if [ ${#configs[@]} -eq 0 ]; then
+            echo "ConfigDumpTest produced nothing — the check would pass by being empty"
+            exit 1
+          fi
+          for config in "${configs[@]}"; do
             echo "checking $(basename "$config")"
             /tmp/sing-box-cli check -c "$config"
           done
