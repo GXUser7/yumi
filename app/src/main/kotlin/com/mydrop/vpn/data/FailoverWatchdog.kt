@@ -178,7 +178,8 @@ class FailoverWatchdog(
                         "home=${home?.name ?: "-"} recover=$recoveries/" +
                         "${FailoverPolicy.PROBES_BEFORE_FAILBACK} " +
                         "failbacks=${failbacks[home?.id] ?: 0} " +
-                        "sinceSwitch=${sinceSwitch / 1000}s -> $decision",
+                        "sinceSwitch=${if (lastSwitchAtMillis == 0L) "never" else "${sinceSwitch / 1000}s"} " +
+                        "-> $decision",
                 )
 
                 when (decision) {
