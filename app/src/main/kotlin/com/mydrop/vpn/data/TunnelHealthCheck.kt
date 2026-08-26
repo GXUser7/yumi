@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
  * number: putting a full-chain figure next to direct handshake times in the server list would
  * make the working server look like the slow one.
  */
-class TunnelHealthCheck {
+class TunnelHealthCheck(private val logs: LogRepository? = null) {
 
     /**
      * @return true when traffic flows, false when it does not, and null when there is nothing to
@@ -38,14 +38,14 @@ class TunnelHealthCheck {
      */
     suspend fun passes(probe: ProbeEndpoint?): Boolean? {
         probe ?: run {
-            android.util.Log.i(TAG, "no probe inbound — falling back to the direct measurement")
+            trace(TAG, "no probe inbound — falling back to the direct measurement")
             return null
         }
         return withContext(Dispatchers.IO) {
             val started = System.nanoTime()
             runCatching { fetch(probe) }
                 .onSuccess {
-                    android.util.Log.i(
+                    trace(
                         TAG,
                         "through tunnel: ${if (it) "204 ok" else "wrong status"} " +
                             "in ${(System.nanoTime() - started) / 1_000_000} ms",
@@ -54,7 +54,7 @@ class TunnelHealthCheck {
                 .onFailure {
                     // The reason matters: a refused loopback means the inbound is not there, a
                     // timeout means the chain past it is not carrying anything.
-                    android.util.Log.w(
+                    trace(
                         TAG,
                         "through tunnel failed after ${(System.nanoTime() - started) / 1_000_000} ms: " +
                             "${it::class.simpleName}: ${it.message}",
@@ -96,6 +96,10 @@ class TunnelHealthCheck {
         // page instead is not the endpoint answering — it is a portal, an injected block page, or
         // something else that replaced the response, and none of those mean the tunnel works.
         status.split(' ').getOrNull(1) == "204"
+    }
+
+    private fun trace(tag: String, message: String) {
+        logs?.trace(tag, message) ?: android.util.Log.i(tag, message)
     }
 
     private companion object {

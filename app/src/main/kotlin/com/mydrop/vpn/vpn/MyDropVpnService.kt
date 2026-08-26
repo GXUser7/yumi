@@ -604,14 +604,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun writeOutbounds(message: io.nekohasekai.libbox.OutboundGroupItemIterator?) = Unit
     }
 
-    /** sing-box log levels follow syslog severity: lower is more severe. */
-    private fun Int.toLogLevel(): LogEntry.Level = when (this) {
-        0, 1, 2, 3 -> LogEntry.Level.Error
-        4 -> LogEntry.Level.Warn
-        5, 6 -> LogEntry.Level.Info
-        7 -> LogEntry.Level.Debug
-        else -> LogEntry.Level.Trace
-    }
+    private fun Int.toLogLevel(): LogEntry.Level = LogEntry.levelFromCore(this)
 
     // --------------------------------------------------- CommandServerHandler
 
@@ -835,7 +828,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             val previousName = lastReportedInterfaceName
             reportedInterface = network
             lastReportedInterfaceName = name
-            android.util.Log.i(NATIVE_TAG, "defaultInterface -> $name#$index expensive=$expensive")
+            logs.trace(NATIVE_TAG, "defaultInterface -> $name#$index expensive=$expensive")
             setUnderlying(network)
             runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
 
@@ -847,7 +840,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             // Only on an actual handover: the first interface a tunnel gets is not a change, and
             // resetting there would throw away the connections the core has just opened.
             if (previousName != null && previousName != name) {
-                android.util.Log.i(NATIVE_TAG, "handover $previousName -> $name, resetting network")
+                logs.trace(NATIVE_TAG, "handover $previousName -> $name, resetting network")
                 resetCoreNetwork()
             }
         }
@@ -891,7 +884,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     }
 
                     reportedInterface = null
-                    android.util.Log.i(NATIVE_TAG, "defaultInterface -> (none)")
+                    logs.trace(NATIVE_TAG, "defaultInterface -> (none)")
                     setUnderlying(null)
                     runCatching { listener.updateDefaultInterface("", -1, false, false) }
                 }
@@ -978,7 +971,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      */
     private fun resetCoreNetwork() {
         runCatching { commandServer?.resetNetwork() }
-            .onFailure { android.util.Log.w(NATIVE_TAG, "resetNetwork failed: ${it.message}") }
+            .onFailure { logs.trace(NATIVE_TAG, "resetNetwork failed: ${it.message}") }
     }
 
     /**

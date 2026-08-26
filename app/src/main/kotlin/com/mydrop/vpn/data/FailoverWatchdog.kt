@@ -94,10 +94,12 @@ class FailoverWatchdog(
     private fun restartWatch() {
         watching?.cancel()
         watching = scope.launch {
-            android.util.Log.i(
+            logs.trace(
                 TAG,
                 "watch started, grace ${GRACE_MILLIS / 1000}s then every " +
-                    "${PROBE_INTERVAL_MILLIS / 1000}s (autoFailover=${settings.value.autoFailover})",
+                    "${FailoverPolicy.PROBE_INTERVAL_MILLIS / 1000}s " +
+                    "(${FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS / 1000}s after a failure, " +
+                    "autoFailover=${settings.value.autoFailover})",
             )
             // A tunnel that just came up has not had time to break, and the core is still
             // settling. Probing into that only produces a false alarm.
@@ -105,7 +107,9 @@ class FailoverWatchdog(
             var failures = 0
             var recoveries = 0
             while (isActive) {
-                delay(PROBE_INTERVAL_MILLIS)
+                // Slow while the server answers, fast once one probe has failed: the wait shrinks
+                // exactly when the user is sitting through an outage. See the policy for why.
+                delay(FailoverPolicy.nextProbeDelayMillis(failures))
                 if (!settings.value.autoFailover) {
                     failures = 0
                     continue
@@ -171,7 +175,7 @@ class FailoverWatchdog(
                 // policy saw and the verdict it reached, so a decision that looks wrong on the
                 // phone can be read back afterwards instead of guessed at. The journal stays for
                 // the user; this is for whoever is holding a cable.
-                android.util.Log.i(
+                logs.trace(
                     TAG,
                     "probe current=${current.name} tunnel=${throughTunnel ?: "n/a"} alive=$alive " +
                         "fail=$failures/${FailoverPolicy.FAILURES_BEFORE_SWAP} " +
@@ -207,7 +211,7 @@ class FailoverWatchdog(
 
                     FailoverPolicy.Decision.LeaveCurrent -> {
                         failures = 0
-                        android.util.Log.w(TAG, "leaving ${current.name}: dead for good")
+                        logs.trace(TAG, "leaving ${current.name}: dead for good")
                         swapAwayFrom(current)
                     }
                 }
@@ -270,7 +274,6 @@ class FailoverWatchdog(
         const val TAG = "YumiFailover"
 
         const val GRACE_MILLIS = 15_000L
-        const val PROBE_INTERVAL_MILLIS = 20_000L
 
         // The thresholds themselves live in FailoverPolicy, which is where they are tested.
     }

@@ -31,6 +31,12 @@ object FailoverPolicy {
     /** Consecutive failed probes before the tunnel leaves the server it is on. */
     const val FAILURES_BEFORE_SWAP = 2
 
+    /** Gap between probes while the server is answering. */
+    const val PROBE_INTERVAL_MILLIS = 20_000L
+
+    /** Gap between probes once one has already failed. */
+    const val SUSPECT_PROBE_INTERVAL_MILLIS = 5_000L
+
     /** Consecutive answered probes before the tunnel returns to the user's own server. */
     const val PROBES_BEFORE_FAILBACK = 5
 
@@ -39,6 +45,25 @@ object FailoverPolicy {
 
     /** Round trips to one server before it stops being treated as somewhere to go back to. */
     const val MAX_FAILBACKS = 2
+
+    /**
+     * How long to wait before the next probe.
+     *
+     * The two intervals answer different questions. While the server answers, the probe is only
+     * asking whether anything changed, and asking every twenty seconds costs a request through the
+     * user's own tunnel for nothing — so it stays slow. Once a probe has failed, the question is
+     * whether that was a lost packet or a dead server, and until it is answered the user has no
+     * internet: every second of the wait is an outage they are sitting through.
+     *
+     * So the wait shrinks exactly when it is expensive, and the steady-state cost does not move.
+     * With [FAILURES_BEFORE_SWAP] at two this takes the worst case from 20+5 twice — fifty
+     * seconds with a five-second probe timeout — down to 20+5 then 5+5, about thirty-five.
+     *
+     * Confirming faster is not the same as confirming on less: it still takes two failures. One
+     * would put back the flapping that made 0.3.2 drop connections.
+     */
+    fun nextProbeDelayMillis(consecutiveFailures: Int): Long =
+        if (consecutiveFailures > 0) SUSPECT_PROBE_INTERVAL_MILLIS else PROBE_INTERVAL_MILLIS
 
     sealed interface Decision {
         /** Nothing to do, or something to do that has to wait for the cooldown. */

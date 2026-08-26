@@ -63,4 +63,27 @@ data class LogEntry(
     val message: String,
 ) {
     enum class Level { Trace, Debug, Info, Warn, Error }
+
+    companion object {
+        /**
+         * Turns a sing-box log level into ours.
+         *
+         * The core numbers its levels the way logrus does — `Panic 0, Fatal 1, Error 2, Warn 3,
+         * Info 4, Debug 5, Trace 6` — and this used to read them as syslog severities, where the
+         * scale is longer and the numbers land elsewhere. Everything the core said therefore
+         * arrived one step too severe: routine `INFO` lines were filed as warnings and painted as
+         * such in the journal, while per-connection `TRACE` chatter was filed as `Info` and so
+         * could not be told apart from anything worth reading.
+         *
+         * Anything past the known range is treated as trace rather than as an error: a level this
+         * side does not recognise is a newer, more verbose one, not a more urgent one.
+         */
+        fun levelFromCore(level: Int): Level = when (level) {
+            0, 1, 2 -> Level.Error
+            3 -> Level.Warn
+            4 -> Level.Info
+            5 -> Level.Debug
+            else -> Level.Trace
+        }
+    }
 }

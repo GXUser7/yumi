@@ -31,10 +31,21 @@ class AppContainer(context: Context) {
 
     val settings = SettingsRepository(context.filesDir, applicationScope, writeFailure)
     val strings = Strings(context) { settings.value.language }
-    val logs = LogRepository(strings)
+    /**
+     * On disk only when the build is debuggable — the flag Android itself sets, so no build
+     * plumbing and no way for a release to switch it on by accident. See [DiagnosticLog] for why
+     * this is not something to hand to everybody.
+     */
+    val diagnostics = DiagnosticLog(
+        directory = java.io.File(context.filesDir, "diagnostics"),
+        enabled = (appContext.applicationInfo.flags and
+            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+    )
+
+    val logs = LogRepository(strings, diagnostics)
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
     val latencyTester = LatencyTester()
-    val tunnelHealth = TunnelHealthCheck()
+    val tunnelHealth = TunnelHealthCheck(logs)
     val speedTester = SpeedTester(logs, strings)
 
     /**

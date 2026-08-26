@@ -81,6 +81,43 @@ class FailoverPolicyTest {
         assertEquals(Decision.LeaveCurrent, decide(failures = 2, recoveries = 99, hasHome = false))
     }
 
+    @Test
+    fun `the probe speeds up only once something has failed`() {
+        assertEquals(
+            FailoverPolicy.PROBE_INTERVAL_MILLIS,
+            FailoverPolicy.nextProbeDelayMillis(0),
+        )
+        assertEquals(
+            FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS,
+            FailoverPolicy.nextProbeDelayMillis(1),
+        )
+        assertTrue(
+            "a suspect server has to be re-checked sooner than a healthy one",
+            FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS < FailoverPolicy.PROBE_INTERVAL_MILLIS,
+        )
+    }
+
+    /**
+     * The point of the adaptive interval, stated as time rather than as constants: confirming a
+     * dead server has to take meaningfully less than the fifty seconds a flat twenty-second
+     * cadence cost, while still taking two failures to be sure.
+     */
+    @Test
+    fun `confirming a dead server takes well under the flat cadence it replaced`() {
+        val probeTimeout = 5_000L
+        var elapsed = 0L
+        var failures = 0
+        while (failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
+            elapsed += FailoverPolicy.nextProbeDelayMillis(failures) + probeTimeout
+            failures++
+        }
+
+        val flatCadence = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) *
+            FailoverPolicy.FAILURES_BEFORE_SWAP
+        assertTrue("took ${elapsed}ms, flat cadence was ${flatCadence}ms", elapsed < flatCadence)
+        assertTrue("took ${elapsed}ms, expected under 40s", elapsed <= 40_000L)
+    }
+
     /**
      * The regression itself, played out.
      *
@@ -95,7 +132,6 @@ class FailoverPolicyTest {
      */
     @Test
     fun `a server that comes and goes cannot bounce the tunnel more than the cooldown allows`() {
-        val probeIntervalMillis = 20_000L
         val runMillis = 20 * 60_000L
 
         var now = 0L
@@ -108,7 +144,9 @@ class FailoverPolicyTest {
         var probe = 0
 
         while (now < runMillis) {
-            now += probeIntervalMillis
+            // The adaptive interval, so the guarantee is measured against what actually runs:
+            // probing faster while suspicious must not buy any extra switches.
+            now += FailoverPolicy.nextProbeDelayMillis(failures)
             // Two down, two up, repeating.
             val answering = (probe / 2) % 2 == 1
             probe++
