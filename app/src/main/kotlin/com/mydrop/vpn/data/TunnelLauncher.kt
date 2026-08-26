@@ -39,12 +39,12 @@ class TunnelLauncher(
 
         tunnel.permissionIntent()?.let { return ConnectOutcome.NeedsConsent(it) }
 
-        connectTo(node)
+        connectTo(node, "launcher.connect")
         return ConnectOutcome.Started(node)
     }
 
     /** Connects to a server the caller has already chosen, e.g. a tap in the server list. */
-    fun connectTo(node: ProxyNode) = tunnel.connect(node)
+    fun connectTo(node: ProxyNode, reason: String = "connectTo") = tunnel.connect(node, reason)
 
     /**
      * Moves the tunnel onto [node] and records it as the selection, so the server list, the
@@ -52,7 +52,7 @@ class TunnelLauncher(
      */
     fun switchTo(node: ProxyNode) {
         profiles.selectNode(node.id)
-        tunnel.connect(node)
+        tunnel.connect(node, "failover")
     }
 
     fun disconnect() = tunnel.disconnect()

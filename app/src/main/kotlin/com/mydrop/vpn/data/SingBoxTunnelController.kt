@@ -46,10 +46,11 @@ class SingBoxTunnelController(
      */
     override fun permissionIntent(): Intent? = VpnService.prepare(context)
 
-    override fun connect(node: ProxyNode) {
+    override fun connect(node: ProxyNode, reason: String) {
         scope.launch {
             buildLock.withLock {
                 val config = configs.build(node) ?: return@withLock
+                logs.trace("YumiCore", "connect requested by $reason -> ${node.name}")
                 logs.info(R.string.log_connecting_to, node.name, node.protocol.label, node.address)
                 MyDropVpnService.start(context, config, node.id, node.name)
             }

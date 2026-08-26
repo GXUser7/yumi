@@ -51,6 +51,21 @@ object ProxyUriParser {
         }.getOrNull()
     }
 
+    /**
+     * Transports named in [text] that the core cannot carry, counted by name.
+     *
+     * Refusing those lines is right — see [node] — but refusing them silently means a server the
+     * provider lists simply is not there, with nothing to say why. This is what lets the import
+     * report it instead.
+     */
+    fun unsupportedTransports(text: String): Map<String, Int> =
+        text.lineSequence()
+            .map(String::trim)
+            .filter { it.contains("://") }
+            .mapNotNull { line -> splitUri(line)?.unsupportedTransport() }
+            .groupingBy { it }
+            .eachCount()
+
     /** Parses every recognised link in a blob, skipping junk lines. */
     fun parseAll(text: String, subscriptionId: String? = null): List<ProxyNode> =
         text.lineSequence()

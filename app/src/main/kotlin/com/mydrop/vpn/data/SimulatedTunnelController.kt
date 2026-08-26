@@ -37,7 +37,7 @@ class SimulatedTunnelController(
 
     private var job: Job? = null
 
-    override fun connect(node: ProxyNode) {
+    override fun connect(node: ProxyNode, reason: String) {
         job?.cancel()
         _traffic.value = TrafficStats.Zero
         job = scope.launch {

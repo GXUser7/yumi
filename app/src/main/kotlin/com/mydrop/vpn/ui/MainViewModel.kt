@@ -233,7 +233,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
         val node = container.profiles.nodes.firstOrNull { it.id == nodeId } ?: return
-        container.tunnelLauncher.connectTo(node)
+        container.tunnelLauncher.connectTo(node, "routing mode changed")
     }
 
     fun selectNode(nodeId: String) {
@@ -246,7 +246,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         if (!state.isActive || state.activeNodeId == nodeId) return
         container.profiles.nodes
             .firstOrNull { it.id == nodeId }
-            ?.let(container.tunnelLauncher::connectTo)
+            ?.let { container.tunnelLauncher.connectTo(it, "server tapped") }
     }
 
     /**
@@ -261,7 +261,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
-        container.tunnelLauncher.connectTo(node)
+        container.tunnelLauncher.connectTo(node, "vpn consent granted")
         emit(R.string.message_routing_applied, strings.get(mode.labelRes))
     }
 
@@ -286,7 +286,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         if (!uiState.value.vpnState.isActive) return
         if (container.profiles.selectedNode()?.id != nodeId) return
-        container.tunnelLauncher.connectTo(node.copy(tls = tls.copy(insecure = insecure)))
+        container.tunnelLauncher.connectTo(node.copy(tls = tls.copy(insecure = insecure)), "certificate flag changed")
     }
 
     // ------------------------------------------------------------ Latency
@@ -565,7 +565,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private fun applyDnsToRunningTunnel(name: String) {
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
-        container.tunnelLauncher.connectTo(node)
+        container.tunnelLauncher.connectTo(node, "certificate flag changed")
         emit(R.string.message_dns_applied, name)
     }
 

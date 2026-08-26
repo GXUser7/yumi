@@ -5,6 +5,7 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.parse.SubscriptionBody
+import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.core.parse.SubscriptionParser
 import java.net.HttpURLConnection
 import java.net.URL
@@ -117,6 +118,20 @@ class SubscriptionService(
                     subscription.name,
                     strings.plural(R.plurals.servers, body.nodes.size),
                 )
+
+                // Named rather than hidden. A server the provider lists and the app refuses is
+                // worth a line: without one the count simply comes up short, which reads as a
+                // parsing failure rather than as the deliberate refusal it is.
+                ProxyUriParser.unsupportedTransports(response.body)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { skipped ->
+                        logs.warn(
+                            R.string.log_skipped_unsupported_transport,
+                            skipped.values.sum(),
+                            skipped.keys.joinToString(", "),
+                        )
+                    }
+
                 SubscriptionUpdate.Success(
                     subscription = subscription.copy(
                         userInfo = SubscriptionParser.parseUserInfo(response.userInfoHeader)

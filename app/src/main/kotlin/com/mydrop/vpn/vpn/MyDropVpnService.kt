@@ -201,13 +201,22 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onCreate() {
         super.onCreate()
+        // Instance identity in the trace. A tunnel that "restarts itself" looks identical in the
+        // journal whether the service reloaded the core or Android destroyed and recreated the
+        // whole service — and those have completely different causes.
+        logs.trace(NATIVE_TAG, "service onCreate #${hashCode()}")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        logs.trace(
+            NATIVE_TAG,
+            "onStartCommand #${hashCode()} action=${intent?.action ?: "(none)"} " +
+                "flags=$flags startId=$startId",
+        )
         when (intent?.action) {
             ACTION_STOP -> {
-                stopTunnelWhenIdle()
+                stopTunnelWhenIdle("ACTION_STOP intent")
                 return START_NOT_STICKY
             }
 
@@ -280,10 +289,11 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onRevoke() {
         logs.warn(R.string.log_permission_revoked)
-        stopTunnelWhenIdle()
+        stopTunnelWhenIdle("onRevoke: system withdrew VPN consent")
     }
 
     override fun onDestroy() {
+        logs.trace(NATIVE_TAG, "service onDestroy #${hashCode()}")
         stopTunnel()
         scope.cancel()
         super.onDestroy()
@@ -437,13 +447,15 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * inside `startOrReloadService` on it. The state is moved eagerly so the button answers the tap
      * straight away; the actual close waits its turn.
      */
-    private fun stopTunnelWhenIdle() {
+    private fun stopTunnelWhenIdle(reason: String) {
+        logs.trace(NATIVE_TAG, "stop requested: $reason")
         if (_state.value.isActive) _state.value = VpnState.Disconnecting
         scope.launch { tunnelLock.withLock { stopTunnel() } }
     }
 
     private fun stopTunnel() {
         if (_state.value is VpnState.Disconnected) return
+        logs.trace(NATIVE_TAG, "tearing the core down")
 
         // A failure has to survive the teardown it triggers. The old code set Failed, called this,
         // and had it overwrite the state with Disconnecting on the next line — so the check further
@@ -611,7 +623,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun serviceStop() {
         // Reached from inside a core callback, so the teardown is queued rather than run here:
         // closing the service from within one of its own calls is how a reentrancy abort starts.
-        stopTunnelWhenIdle()
+        stopTunnelWhenIdle("the core asked to stop")
     }
 
     override fun serviceReload() {

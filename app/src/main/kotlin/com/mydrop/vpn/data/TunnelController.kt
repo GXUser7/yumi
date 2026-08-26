@@ -26,7 +26,11 @@ interface TunnelController {
      */
     fun permissionIntent(): Intent? = null
 
-    fun connect(node: ProxyNode)
+    /**
+     * @param reason who asked, for the trace. Every path here ends in the same core reload, so
+     *   without it a switch made by the watchdog, by a tap and by a settings change are one line.
+     */
+    fun connect(node: ProxyNode, reason: String)
 
     fun disconnect()
 }

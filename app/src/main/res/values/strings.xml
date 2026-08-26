@@ -449,4 +449,5 @@
     <string name="speed_metered_title">Measure over mobile data?</string>
     <string name="speed_metered_body">The test opens several streams and can move a few hundred megabytes each way. On a metered plan that is charged.</string>
     <string name="log_failover_home_abandoned">“%1$s” keeps dropping out — staying on the replacement</string>
+    <string name="log_skipped_unsupported_transport">Skipped %1$d servers: the core cannot carry %2$s</string>
 </resources>
