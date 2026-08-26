@@ -37,9 +37,30 @@ class TunnelHealthCheck {
      *   a direct measurement rather than read the absence as a failure.
      */
     suspend fun passes(probe: ProbeEndpoint?): Boolean? {
-        probe ?: return null
+        probe ?: run {
+            android.util.Log.i(TAG, "no probe inbound — falling back to the direct measurement")
+            return null
+        }
         return withContext(Dispatchers.IO) {
-            runCatching { fetch(probe) }.getOrDefault(false)
+            val started = System.nanoTime()
+            runCatching { fetch(probe) }
+                .onSuccess {
+                    android.util.Log.i(
+                        TAG,
+                        "through tunnel: ${if (it) "204 ok" else "wrong status"} " +
+                            "in ${(System.nanoTime() - started) / 1_000_000} ms",
+                    )
+                }
+                .onFailure {
+                    // The reason matters: a refused loopback means the inbound is not there, a
+                    // timeout means the chain past it is not carrying anything.
+                    android.util.Log.w(
+                        TAG,
+                        "through tunnel failed after ${(System.nanoTime() - started) / 1_000_000} ms: " +
+                            "${it::class.simpleName}: ${it.message}",
+                    )
+                }
+                .getOrDefault(false)
         }
     }
 
@@ -78,6 +99,8 @@ class TunnelHealthCheck {
     }
 
     private companion object {
+        const val TAG = "YumiFailover"
+
         /**
          * Chosen for being boring: no body, no redirect, no TLS, and run by an operator whose
          * whole business is answering it quickly from everywhere. Reachability is judged from the

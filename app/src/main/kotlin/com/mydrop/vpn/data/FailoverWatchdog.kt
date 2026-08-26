@@ -94,6 +94,11 @@ class FailoverWatchdog(
     private fun restartWatch() {
         watching?.cancel()
         watching = scope.launch {
+            android.util.Log.i(
+                TAG,
+                "watch started, grace ${GRACE_MILLIS / 1000}s then every " +
+                    "${PROBE_INTERVAL_MILLIS / 1000}s (autoFailover=${settings.value.autoFailover})",
+            )
             // A tunnel that just came up has not had time to break, and the core is still
             // settling. Probing into that only produces a false alarm.
             delay(GRACE_MILLIS)
@@ -153,12 +158,27 @@ class FailoverWatchdog(
                     )
                 }
 
+                val sinceSwitch = System.currentTimeMillis() - lastSwitchAtMillis
                 val decision = FailoverPolicy.decide(
                     consecutiveFailures = failures,
                     consecutiveHomeRecoveries = recoveries,
                     hasHome = home != null,
                     failbacksSoFar = failbacks[home?.id] ?: 0,
-                    millisSinceLastSwitch = System.currentTimeMillis() - lastSwitchAtMillis,
+                    millisSinceLastSwitch = sinceSwitch,
+                )
+
+                // One line per probe cycle, to logcat rather than the journal. Every input the
+                // policy saw and the verdict it reached, so a decision that looks wrong on the
+                // phone can be read back afterwards instead of guessed at. The journal stays for
+                // the user; this is for whoever is holding a cable.
+                android.util.Log.i(
+                    TAG,
+                    "probe current=${current.name} tunnel=${throughTunnel ?: "n/a"} alive=$alive " +
+                        "fail=$failures/${FailoverPolicy.FAILURES_BEFORE_SWAP} " +
+                        "home=${home?.name ?: "-"} recover=$recoveries/" +
+                        "${FailoverPolicy.PROBES_BEFORE_FAILBACK} " +
+                        "failbacks=${failbacks[home?.id] ?: 0} " +
+                        "sinceSwitch=${sinceSwitch / 1000}s -> $decision",
                 )
 
                 when (decision) {
@@ -186,6 +206,7 @@ class FailoverWatchdog(
 
                     FailoverPolicy.Decision.LeaveCurrent -> {
                         failures = 0
+                        android.util.Log.w(TAG, "leaving ${current.name}: dead for good")
                         swapAwayFrom(current)
                     }
                 }
@@ -244,6 +265,9 @@ class FailoverWatchdog(
     }
 
     private companion object {
+        /** Filter for the live trace: `adb logcat -s YumiFailover`. */
+        const val TAG = "YumiFailover"
+
         const val GRACE_MILLIS = 15_000L
         const val PROBE_INTERVAL_MILLIS = 20_000L
 
