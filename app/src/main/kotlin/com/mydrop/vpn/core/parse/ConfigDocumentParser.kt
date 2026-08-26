@@ -147,6 +147,12 @@ object ConfigDocumentParser {
         }
 
         val stream = outbound["streamSettings"]?.jsonObject
+        // An Xray document can name a transport sing-box has no implementation of — xhttp and
+        // splithttp are the common ones. Translating everything but the transport would produce a
+        // server that dials and carries nothing.
+        stream?.str("network")?.lowercase()?.let { declared ->
+            if (declared !in KNOWN_NETWORKS && declared !in PLAIN_NETWORKS) return null
+        }
         return ProxyNode(
             id = ProxyNode.stableId(server, port, proxySettings, subscriptionId),
             name = label?.takeIf { it.isNotBlank() } ?: outbound.str("tag") ?: "$server:$port",
@@ -158,6 +164,10 @@ object ConfigDocumentParser {
             subscriptionId = subscriptionId,
         )
     }
+
+    /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
+    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun xrayTls(stream: JsonObject): TlsOptions? {
         val security = stream.str("security")?.lowercase()

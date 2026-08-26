@@ -323,13 +323,43 @@ object ProxyUriParser {
 
     // -------------------------------------------------------------- Shared
 
+    /**
+     * Stream transports the core can carry. Exactly the five sing-box implements — anything else
+     * named in a link is a wrapper it has never heard of.
+     */
+    private val KNOWN_TRANSPORTS =
+        setOf("ws", "websocket", "grpc", "http", "h2", "httpupgrade", "quic")
+
+    /** Spellings that all mean "no wrapper at all", which is a perfectly good answer. */
+    private val PLAIN_TRANSPORTS = setOf("tcp", "raw", "none", "original")
+
+    /**
+     * The transport a link asks for and this core cannot provide, or null when it can.
+     *
+     * Reads `type` and `net` only, never `obfs`: on Hysteria2 that field carries `salamander`,
+     * which is an obfuscator handled inside the protocol rather than a stream transport, and
+     * treating it as one would reject every obfuscated Hysteria2 node.
+     */
+    private fun ParsedUri.unsupportedTransport(): String? {
+        val declared = q("type", "net")?.lowercase() ?: return null
+        return declared.takeUnless { it in KNOWN_TRANSPORTS || it in PLAIN_TRANSPORTS }
+    }
+
     private fun node(
         p: ParsedUri,
         settings: ProxySettings,
         subId: String?,
         sourceUri: String,
         tlsDefaultOn: Boolean = false,
-    ): ProxyNode {
+    ): ProxyNode? {
+        // A transport the core cannot speak makes the whole node unusable, and dropping just the
+        // transport is the worst way to find that out: the link parses, the server appears in the
+        // list looking like any other, the tunnel comes up — and then every connection dies with
+        // "reality verification failed", because the server is framing a protocol we are not
+        // speaking. XHTTP is the one that turned up in the wild; sing-box implements five stream
+        // transports and that is not among them. Refusing the line says so at import instead.
+        p.unsupportedTransport()?.let { return null }
+
         val transport = p.transport()
         return ProxyNode(
             id = ProxyNode.stableId(p.host, p.port, settings, subId),

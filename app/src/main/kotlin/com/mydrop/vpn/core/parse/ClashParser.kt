@@ -74,6 +74,13 @@ object ClashParser {
         val server = fields["server"] ?: return null
         val port = fields["port"]?.toIntOrNull() ?: return null
 
+        // Same reasoning as in ProxyUriParser: a stream transport the core cannot speak makes the
+        // node unusable, and keeping it minus the transport produces a server that connects and
+        // then carries nothing.
+        fields["network"]?.lowercase()?.let { declared ->
+            if (declared !in KNOWN_NETWORKS && declared !in PLAIN_NETWORKS) return null
+        }
+
         val settings = when (fields["type"]?.lowercase()) {
             "vless" -> ProxySettings.Vless(
                 uuid = fields["uuid"] ?: return null,
@@ -148,6 +155,10 @@ object ClashParser {
             },
         )
     }
+
+    /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
+    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun transport(fields: Map<String, String>): TransportOptions? =
         when (fields["network"]?.lowercase()) {
