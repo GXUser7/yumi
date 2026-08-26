@@ -763,12 +763,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     /**
      * Watches the system's default network and reports it to the core.
      *
-     * Two deliberate choices, both of which were the other way round in the build that aborted:
+     * Two deliberate choices.
      *
-     * A plain [ConnectivityManager.registerDefaultNetworkCallback] rather than `requestNetwork` or
-     * `registerBestMatchingNetworkCallback`. This is pure observation — `requestNetwork` asks the
-     * system to bring a network up and hold it, which is not what a VPN service wants to be doing,
-     * and it is the only reason the manifest needed CHANGE_NETWORK_STATE.
+     * A callback that tracks the single system default — `registerBestMatchingNetworkCallback` on
+     * Android 12+, `registerDefaultNetworkCallback` below it — rather than
+     * `registerNetworkCallback(request)`, which reports every matching network at once and let the
+     * core dial through whichever one reported last. Both are pure observation, so neither needs
+     * `CHANGE_NETWORK_STATE`; `requestNetwork`, which would, is avoided. See the registration for
+     * the failure this cost.
      *
      * And the current network is reported through [Handler.post] instead of inline. The core calls
      * this method and waits; calling `listener.updateDefaultInterface` before returning re-enters
@@ -824,28 +826,42 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         networkCallback = callback
 
-        // Matches physical networks only. NetworkRequest.Builder already implies NOT_VPN, but it
-        // is spelled out because that implication is the entire point of this request.
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            // NOT_RESTRICTED, matching the upstream client: a restricted network is one the app is
+            // not allowed to use anyway, so dialling the core out through it would only fail. The
+            // implicit NOT_VPN of a NetworkRequest keeps our own tunnel out of the match.
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
             .build()
-        // registerNetworkCallback observes; it does not ask the system to bring a network up, so
-        // unlike requestNetwork it needs no CHANGE_NETWORK_STATE and cannot fight the VPN.
-        connectivityManager.registerNetworkCallback(request, callback)
 
-        // Seeded out of band, because a tunnel started on an already-connected phone would
-        // otherwise wait for a change that never comes.
-        Handler(Looper.getMainLooper()).post {
+        val handler = Handler(Looper.getMainLooper())
+        // The API tier is the whole point of this method, and it was the wrong one. The code used
+        // registerNetworkCallback(request), which fires for *every* network matching the request.
+        // With Wi-Fi and cellular both up — cellular is routinely kept warm behind Wi-Fi — the
+        // last callback to arrive won, so the core could be handed cellular as "the default" while
+        // the route and the real default were Wi-Fi; and onLost for Wi-Fi then did nothing, because
+        // the reported interface was cellular. Outbound dialling stalled until some later
+        // capability change happened to re-report the right one — the internet "dropping" for a
+        // stretch with nothing on screen to explain it. Both calls below track exactly one network,
+        // the system default, and follow it across a Wi-Fi/cellular handover.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            connectivityManager.registerBestMatchingNetworkCallback(request, callback, handler)
+        } else {
+            // This app excludes itself from its own tunnel (addDisallowedApplication above), so its
+            // default network stays the underlying physical one rather than becoming the VPN —
+            // which is what makes the plain default callback report the right interface here and
+            // not tun0.
+            connectivityManager.registerDefaultNetworkCallback(callback, handler)
+        }
+
+        // A belt-and-suspenders seed. All the registrations above deliver an initial callback with
+        // the current match, so this is rarely what reports first; when it is, activeNetwork is the
+        // real default, where the old seed took the arbitrary first entry of allNetworks.
+        handler.post {
             // Not if a reload has installed a newer monitor in the meantime: the seed would then
             // be reporting to a listener the core has already discarded.
             if (interfaceListener != listener) return@post
-            connectivityManager.allNetworks.firstOrNull { candidate ->
-                connectivityManager.getNetworkCapabilities(candidate)?.let {
-                    it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                        !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                } == true
-            }?.let(::notify)
+            connectivityManager.activeNetwork?.let(::notify)
         }
     }
 

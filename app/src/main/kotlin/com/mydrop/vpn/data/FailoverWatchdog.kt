@@ -185,23 +185,6 @@ class FailoverWatchdog(
         autoChosenId = null
     }
 
-    /**
-     * Whether enough time has passed since the last automatic move.
-     *
-     * This is the part 0.3.2 was missing, and its absence is what turned a reasonable idea into
-     * dropped connections. Switching servers reloads the core, which kills every connection the
-     * tunnel is carrying — so the cost of a switch is paid by the user immediately, while the
-     * benefit is speculative: the probe is a bare TCP handshake against the endpoint and says
-     * nothing about whether the proxy behind it works.
-     *
-     * With a probe that weak, the rate of switching matters more than the accuracy of any single
-     * decision. Leaving a genuinely dead server a few minutes later is a small cost. Bouncing
-     * between two servers every forty seconds is the connection dropping over and over, which is
-     * exactly what it looked like from the outside.
-     */
-    private fun maySwitchNow(): Boolean =
-        System.currentTimeMillis() - lastSwitchAtMillis >= FailoverPolicy.SWITCH_COOLDOWN_MILLIS
-
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val candidates = FailoverGroup.candidates(
             nodes = profiles.nodes,
