@@ -693,6 +693,14 @@ object SingBoxConfigFactory {
             }
 
             TransportOptions.Quic -> put("type", "quic")
+
+            // sing-box implements five stream transports and XHTTP is not among them, so there is
+            // nothing to emit here and nothing that could be emitted. Refusing loudly is the whole
+            // point: the alternative, dropping the transport, is what produced servers that
+            // connected and carried nothing.
+            is TransportOptions.Xhttp -> throw IllegalArgumentException(
+                "sing-box не умеет XHTTP",
+            )
         }
     }
 

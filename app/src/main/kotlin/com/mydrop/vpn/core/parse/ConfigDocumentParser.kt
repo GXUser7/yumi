@@ -165,8 +165,10 @@ object ConfigDocumentParser {
         )
     }
 
-    /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
-    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    /** What the app can carry; see [ProxyUriParser] for what happens when it cannot. */
+    private val KNOWN_NETWORKS = setOf(
+        "ws", "grpc", "http", "h2", "httpupgrade", "quic", "xhttp", "splithttp",
+    )
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun xrayTls(stream: JsonObject): TlsOptions? {
@@ -214,6 +216,17 @@ object ConfigDocumentParser {
                 TransportOptions.HttpUpgrade(
                     host = upgrade?.str("host").orEmpty(),
                     path = upgrade?.str("path") ?: "/",
+                )
+            }
+
+            // Xray writes it under either key and answers to either name, so a document produced
+            // by one version has to be readable by a client built against another.
+            "xhttp", "splithttp" -> {
+                val x = (stream["xhttpSettings"] ?: stream["splithttpSettings"])?.jsonObject
+                TransportOptions.Xhttp(
+                    path = x?.str("path") ?: "/",
+                    host = x?.str("host").orEmpty(),
+                    mode = x?.str("mode")?.ifEmpty { null } ?: "auto",
                 )
             }
 

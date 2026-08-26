@@ -116,6 +116,11 @@ object ProxyUriParser {
             "grpc" -> TransportOptions.Grpc(serviceName = o.str("path").orEmpty())
             "h2", "http" -> TransportOptions.Http(host = splitCsv(headerHost), path = path)
             "httpupgrade" -> TransportOptions.HttpUpgrade(host = headerHost, path = path)
+            "xhttp", "splithttp" -> TransportOptions.Xhttp(
+                path = path,
+                host = headerHost,
+                mode = o.str("mode").orEmpty().ifEmpty { "auto" },
+            )
             "quic" -> TransportOptions.Quic
             else -> null
         }
@@ -343,7 +348,10 @@ object ProxyUriParser {
      * named in a link is a wrapper it has never heard of.
      */
     private val KNOWN_TRANSPORTS =
-        setOf("ws", "websocket", "grpc", "http", "h2", "httpupgrade", "quic")
+        setOf(
+            "ws", "websocket", "grpc", "http", "h2", "httpupgrade", "quic",
+            "xhttp", "splithttp",
+        )
 
     /** Spellings that all mean "no wrapper at all", which is a perfectly good answer. */
     private val PLAIN_TRANSPORTS = setOf("tcp", "raw", "none", "original")
@@ -405,6 +413,11 @@ object ProxyUriParser {
             )
             "http", "h2" -> TransportOptions.Http(host = splitCsv(hostHeader), path = path)
             "httpupgrade" -> TransportOptions.HttpUpgrade(host = hostHeader, path = path)
+            "xhttp", "splithttp" -> TransportOptions.Xhttp(
+                path = path,
+                host = hostHeader,
+                mode = q("mode")?.ifEmpty { null } ?: "auto",
+            )
             "quic" -> TransportOptions.Quic
             else -> null
         }

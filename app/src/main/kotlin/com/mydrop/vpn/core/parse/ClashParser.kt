@@ -156,8 +156,10 @@ object ClashParser {
         )
     }
 
-    /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
-    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    /** What the app can carry; see [ProxyUriParser] for what happens when it cannot. */
+    private val KNOWN_NETWORKS = setOf(
+        "ws", "grpc", "http", "h2", "httpupgrade", "quic", "xhttp", "splithttp",
+    )
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun transport(fields: Map<String, String>): TransportOptions? =
@@ -178,6 +180,12 @@ object ClashParser {
             "httpupgrade" -> TransportOptions.HttpUpgrade(
                 host = fields["host"].orEmpty(),
                 path = fields["path"] ?: "/",
+            )
+
+            "xhttp", "splithttp" -> TransportOptions.Xhttp(
+                path = fields["path"] ?: "/",
+                host = fields["host"].orEmpty(),
+                mode = fields["mode"]?.ifEmpty { null } ?: "auto",
             )
 
             else -> null
