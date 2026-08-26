@@ -34,6 +34,7 @@ class AppContainer(context: Context) {
     val logs = LogRepository(strings)
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
     val latencyTester = LatencyTester()
+    val tunnelHealth = TunnelHealthCheck()
     val speedTester = SpeedTester(logs, strings)
 
     /**
@@ -94,6 +95,8 @@ class AppContainer(context: Context) {
         tunnel = tunnel,
         launcher = tunnelLauncher,
         latencyTester = latencyTester,
+        tunnelHealth = tunnelHealth,
+        configs = tunnelConfigs,
         logs = logs,
         scope = applicationScope,
     )

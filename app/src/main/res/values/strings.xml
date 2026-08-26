@@ -246,6 +246,8 @@
     <string name="settings_bypass_lan_subtitle">Do not route 192.168.x.x and friends into the tunnel</string>
     <string name="settings_block_ads">Block ads</string>
     <string name="settings_block_ads_subtitle">Drop requests to known advertising domains</string>
+    <string name="settings_block_quic">Block QUIC</string>
+    <string name="settings_block_quic_subtitle">Makes browsers fall back to TLS over TCP. Helps where UDP is throttled</string>
     <string name="settings_split_tunnel">Split tunnelling</string>
     <string name="settings_split_tunnel_off">Every app through the VPN</string>
     <string name="settings_split_tunnel_allow">Selected only: %1$d</string>
@@ -369,6 +371,7 @@
 
     <string name="log_failover_home_back">“%1$s” answers again — going back to it</string>
     <string name="log_failover_no_answer">“%1$s” did not answer (%2$d/%3$d)</string>
+    <string name="log_failover_no_traffic">“%1$s” answers but carries nothing (%2$d/%3$d)</string>
     <string name="log_failover_nothing_to_swap">“%1$s” is not answering, and there is nothing to replace it with</string>
     <string name="log_failover_probing">“%1$s” is not answering — checking %2$d spares</string>
     <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>

@@ -120,6 +120,13 @@ class ConfigDumpTest {
             "vless://11111111-2222-3333-4444-555555555555@de.example.com:443?security=tls#rules",
             AppSettings(routingMode = RoutingMode.Rules),
         )
+        // The QUIC reject rule. A new rule shape is exactly the kind of thing that parses in
+        // Kotlin and is refused by the core, so it has to reach `sing-box check` like the rest.
+        dump(
+            "block-quic",
+            "vless://11111111-2222-3333-4444-555555555555@de.example.com:443?security=tls#quic",
+            AppSettings(blockQuic = true),
+        )
         // Emptied DNS fields, which is what a half-finished edit in settings used to persist.
         // sing-box rejects `"server": ""` outright, so this case has to survive `sing-box check`
         // exactly like the rest.

@@ -242,6 +242,8 @@
     <string name="settings_bypass_lan_subtitle">Не заворачивать в туннель адреса 192.168.x.x и подобные</string>
     <string name="settings_block_ads">Блокировать рекламу</string>
     <string name="settings_block_ads_subtitle">Отбрасывать запросы к известным рекламным доменам</string>
+    <string name="settings_block_quic">Блокировать QUIC</string>
+    <string name="settings_block_quic_subtitle">Браузеры перейдут на TLS поверх TCP. Помогает там, где режут UDP</string>
     <string name="settings_split_tunnel">Раздельное туннелирование</string>
     <string name="settings_split_tunnel_off">Все приложения через VPN</string>
     <string name="settings_split_tunnel_allow">Только выбранные: %1$d</string>
@@ -365,6 +367,7 @@
 
     <string name="log_failover_home_back">«%1$s» снова отвечает — возвращаюсь на него</string>
     <string name="log_failover_no_answer">«%1$s» не ответил (%2$d/%3$d)</string>
+    <string name="log_failover_no_traffic">«%1$s» отвечает, но не пропускает трафик (%2$d/%3$d)</string>
     <string name="log_failover_nothing_to_swap">«%1$s» не отвечает, но заменить его нечем</string>
     <string name="log_failover_probing">«%1$s» не отвечает — проверяю %2$d запасных</string>
     <string name="log_failover_all_dead">Ни один запасной сервер не ответил — остаюсь на «%1$s»</string>

@@ -41,6 +41,8 @@ class FailoverWatchdog(
     private val tunnel: TunnelController,
     private val launcher: TunnelLauncher,
     private val latencyTester: LatencyTester,
+    private val tunnelHealth: TunnelHealthCheck,
+    private val configs: TunnelConfigBuilder,
     private val logs: LogRepository,
     private val scope: CoroutineScope,
 ) {
@@ -124,11 +126,27 @@ class FailoverWatchdog(
                     recoveries = 0
                 }
 
-                val result = latencyTester.measure(current, settings.value.pingMode)
-                failures = if (result.failed) failures + 1 else 0
-                if (result.failed && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
+                // The server carrying traffic is asked of the tunnel, not of its own port.
+                //
+                // A direct probe answers "is the port open", and the failure this watchdog exists
+                // to catch is a server whose port is open and whose sessions die anyway — the
+                // ordinary shape of DPI interference. Only the through-tunnel check sees that.
+                // Candidates and the home node keep the direct probe below: there is no tunnel to
+                // them to ask through.
+                val throughTunnel = tunnelHealth.passes(configs.probe.value)
+                val alive = throughTunnel
+                    ?: !latencyTester.measure(current, settings.value.pingMode).failed
+                failures = if (alive) 0 else failures + 1
+                if (!alive && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
                     logs.debug(
-                        R.string.log_failover_no_answer,
+                        // Two different diagnoses, and telling them apart is most of the value of
+                        // reading this journal: a server that stopped answering is somebody else's
+                        // outage, one that answers while carrying nothing is being interfered with.
+                        if (throughTunnel == false) {
+                            R.string.log_failover_no_traffic
+                        } else {
+                            R.string.log_failover_no_answer
+                        },
                         current.name,
                         failures,
                         FailoverPolicy.FAILURES_BEFORE_SWAP,

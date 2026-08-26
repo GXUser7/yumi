@@ -78,6 +78,17 @@ data class AppSettings(
     val routingMode: RoutingMode = RoutingMode.Rules,
     val bypassLan: Boolean = true,
     val blockAds: Boolean = false,
+    /**
+     * Rejects QUIC on 443 so browsers fall back to TLS over TCP.
+     *
+     * UDP is throttled hard enough on Russian networks that a QUIC request usually neither
+     * succeeds nor fails quickly — it sits until a timeout, which is what
+     * `listen packet connection ... context deadline exceeded` in the journal is. A rejected
+     * attempt is answered immediately and Chrome switches protocol on the spot, so blocking it
+     * is faster than letting it through. Off by default: on a network that does not throttle
+     * UDP, QUIC is the better transport and this only takes it away.
+     */
+    val blockQuic: Boolean = false,
 
     // Tunnel
     val enableIpv6: Boolean = false,
@@ -98,7 +109,16 @@ data class AppSettings(
     val deviceId: String = "",
 
     // Behaviour
-    val pingMode: PingMode = PingMode.Tcp,
+    /**
+     * TLS rather than TCP, because a bare handshake answers the wrong question here.
+     *
+     * Russian DPI routinely lets the TCP connection to a blocked server complete and kills the
+     * session after the ClientHello. A TCP probe sees the SYN-ACK, calls the server alive, and
+     * [com.mydrop.vpn.data.FailoverWatchdog] never moves off a server that carries nothing. A
+     * full handshake is the cheapest probe that fails when the thing the user cares about fails —
+     * and for REALITY it is the difference between "the port is open" and "the disguise works".
+     */
+    val pingMode: PingMode = PingMode.Tls,
     val autoConnectOnBoot: Boolean = false,
     val autoSelectFastest: Boolean = false,
     // Hands the core a group of servers instead of one, so a server that stops answering is

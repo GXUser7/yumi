@@ -234,6 +234,12 @@ fun SettingsScreen(
                     checked = settings.blockAds,
                     onCheckedChange = { onUpdate { s -> s.copy(blockAds = it) } },
                 )
+                SwitchRow(
+                    title = stringResource(R.string.settings_block_quic),
+                    subtitle = stringResource(R.string.settings_block_quic_subtitle),
+                    checked = settings.blockQuic,
+                    onCheckedChange = { onUpdate { s -> s.copy(blockQuic = it) } },
+                )
 
                 NavigationRow(
                     title = stringResource(R.string.settings_split_tunnel),

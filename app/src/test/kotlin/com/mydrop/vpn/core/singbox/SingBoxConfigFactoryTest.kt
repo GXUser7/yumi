@@ -21,6 +21,24 @@ import org.junit.Test
 
 class SingBoxConfigFactoryTest {
 
+    /**
+     * The rule is only worth having if it is narrow: a reject on all UDP would take DNS over
+     * QUIC and WireGuard down with it, which is a bigger outage than the one it is fixing.
+     */
+    @Test
+    fun `blocking QUIC rejects only 443 and only when asked`() {
+        val off = config("vless://uuid@se.example.com:443?security=tls#N").routeRules
+        assertTrue(off.none { it["action"]?.jsonPrimitive?.content == "reject" })
+
+        val on = config(
+            "vless://uuid@se.example.com:443?security=tls#N",
+            AppSettings(blockQuic = true),
+        ).routeRules
+        val rule = on.first { it["action"]?.jsonPrimitive?.content == "reject" }
+        assertEquals("quic", rule["protocol"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals(443, rule["port"]!!.jsonArray.single().jsonPrimitive.int)
+    }
+
     private fun config(uri: String, settings: AppSettings = AppSettings()): JsonObject {
         val node = requireNotNull(ProxyUriParser.parse(uri))
         return Json.parseToJsonElement(SingBoxConfigFactory.build(node, settings, "/rule-sets")).jsonObject

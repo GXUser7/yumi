@@ -369,6 +369,22 @@ object SingBoxConfigFactory {
                 }
             }
 
+            // Rejected rather than routed anywhere, and only on 443. `reject` answers the client
+            // immediately, which is the entire benefit: a browser that is refused QUIC retries
+            // over TLS at once, where one that is silently dropped waits out its own timeout.
+            // Restricting to 443 leaves other UDP alone — DNS over QUIC, WireGuard, games, and
+            // the app's own probes to QUIC-only nodes all live on other ports.
+            //
+            // This sits after the ad rule and before the bypass rules deliberately: matching is
+            // first-wins, and a blocked ad host should not need a second rule to also be QUIC.
+            if (settings.blockQuic) {
+                addJsonObject {
+                    putJsonArray("protocol") { add("quic") }
+                    putJsonArray("port") { add(443) }
+                    put("action", "reject")
+                }
+            }
+
             if (settings.bypassLan) {
                 addJsonObject {
                     put("ip_is_private", true)

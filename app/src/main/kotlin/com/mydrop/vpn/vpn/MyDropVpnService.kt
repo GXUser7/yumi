@@ -88,6 +88,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val CHANNEL_ID = "mydrop_tunnel"
         private const val NATIVE_TAG = "YumiCore"
 
+        /**
+         * How long a lost default interface is given to be replaced before the core is told it
+         * has none. Long enough to cover a Wi-Fi → cellular handover, short enough that a real
+         * loss is not hidden from the core for a noticeable stretch.
+         */
+        private const val INTERFACE_LOSS_GRACE_MILLIS = 600L
+
         /** fd 2 is process-wide, so the redirect is installed exactly once. */
         private val stderrCaptured = AtomicBoolean(false)
 
@@ -168,6 +175,22 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     /** The physical network last reported to the core, so onLost can tell it apart. */
     private var reportedInterface: Network? = null
+
+    /**
+     * Shared by the monitor's registration, its seed and its loss debounce, so all three run on
+     * one thread and `removeCallbacks` can actually find what `postDelayed` queued.
+     */
+    private val interfaceHandler = Handler(Looper.getMainLooper())
+
+    /** A loss waiting to be confirmed; see the callback's `onLost` for why it waits. */
+    private var pendingInterfaceLoss: Runnable? = null
+
+    /**
+     * Name of the interface last reported to the core, kept to tell a handover from a first
+     * report. Cleared with the monitor, so a fresh tunnel does not inherit the previous one's idea
+     * of where it was.
+     */
+    private var lastReportedInterfaceName: String? = null
 
     private val logs by lazy { (application as MyDropApplication).container.logs }
 
@@ -801,11 +824,32 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             }.getOrDefault(-1)
             if (index < 0) return
 
+            // A usable network arrived, so whatever loss was waiting to be confirmed did not
+            // happen — this is the ordinary end of a handover.
+            cancelPendingInterfaceLoss()
+
             val expensive =
                 !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            // Kept before the report, because the reset below needs to know whether this is a
+            // handover or the first interface this tunnel ever had.
+            val previousName = lastReportedInterfaceName
             reportedInterface = network
+            lastReportedInterfaceName = name
             android.util.Log.i(NATIVE_TAG, "defaultInterface -> $name#$index expensive=$expensive")
+            setUnderlying(network)
             runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
+
+            // Telling the core about the new interface does not rescue the connections that were
+            // pinned to the old one — those are already dead, and nothing else reaps them. The
+            // watchdog would only notice forty-odd seconds later and then draw the wrong
+            // conclusion, switching servers over a server that was never at fault.
+            //
+            // Only on an actual handover: the first interface a tunnel gets is not a change, and
+            // resetting there would throw away the connections the core has just opened.
+            if (previousName != null && previousName != name) {
+                android.util.Log.i(NATIVE_TAG, "handover $previousName -> $name, resetting network")
+                resetCoreNetwork()
+            }
         }
 
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -819,9 +863,40 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 // Only the interface we actually reported: any other network going away leaves
                 // the core's underlying route perfectly usable.
                 if (network != reportedInterface) return
-                reportedInterface = null
-                android.util.Log.i(NATIVE_TAG, "defaultInterface -> (none)")
-                runCatching { listener.updateDefaultInterface("", -1, false, false) }
+
+                // Not blanked here, and that is the whole point of this change.
+                //
+                // On a clean Wi-Fi/cellular handover `onAvailable` for the replacement arrives
+                // first and `notify` cancels this before it ever runs. On an unclean one — Wi-Fi
+                // simply vanishing, which is the common case walking out of range — the
+                // replacement is a few hundred milliseconds behind, and reporting ("", -1) into
+                // that gap is what writes `network: missing default interface` to the journal and
+                // takes every in-flight connection down with `software caused connection abort`
+                // in the same second. The wait costs nothing when the loss is real: the interface
+                // is gone either way, and half a second later the core is told so.
+                cancelPendingInterfaceLoss()
+                val confirm = Runnable {
+                    pendingInterfaceLoss = null
+                    // A reload may have installed a newer monitor while this was queued.
+                    if (interfaceListener != listener) return@Runnable
+
+                    // A replacement that came up without a callback of its own still counts.
+                    val current = connectivityManager.activeNetwork
+                    val currentCaps = current?.let(connectivityManager::getNetworkCapabilities)
+                    if (current != null && currentCaps != null &&
+                        !currentCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    ) {
+                        notify(current)
+                        return@Runnable
+                    }
+
+                    reportedInterface = null
+                    android.util.Log.i(NATIVE_TAG, "defaultInterface -> (none)")
+                    setUnderlying(null)
+                    runCatching { listener.updateDefaultInterface("", -1, false, false) }
+                }
+                pendingInterfaceLoss = confirm
+                interfaceHandler.postDelayed(confirm, INTERFACE_LOSS_GRACE_MILLIS)
             }
         }
         networkCallback = callback
@@ -834,7 +909,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
             .build()
 
-        val handler = Handler(Looper.getMainLooper())
+        val handler = interfaceHandler
         // The API tier is the whole point of this method, and it was the wrong one. The code used
         // registerNetworkCallback(request), which fires for *every* network matching the request.
         // With Wi-Fi and cellular both up — cellular is routinely kept warm behind Wi-Fi — the
@@ -874,10 +949,53 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun stopDefaultInterfaceMonitor() {
+        cancelPendingInterfaceLoss()
         networkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
         networkCallback = null
         interfaceListener = null
         reportedInterface = null
+        lastReportedInterfaceName = null
+    }
+
+    private fun cancelPendingInterfaceLoss() {
+        pendingInterfaceLoss?.let(interfaceHandler::removeCallbacks)
+        pendingInterfaceLoss = null
+    }
+
+    /**
+     * Drops the connections the core is holding, so they are rebuilt on the interface that now
+     * exists.
+     *
+     * A Wi-Fi → cellular handover leaves every socket the core opened bound to an interface that
+     * is gone. They do not fail fast; they sit until their own timeouts, which is the stall the
+     * user sees after the network changes even once the new interface has been reported. The core
+     * exposes exactly this on its command server, and it is what the upstream client calls in the
+     * same situation.
+     *
+     * `resetNetwork` is declared without `throws`, which on a gomobile binding means the Go side
+     * will not turn an exception into an error — so nothing may escape into it, and nothing here
+     * may escape out of it either.
+     */
+    private fun resetCoreNetwork() {
+        runCatching { commandServer?.resetNetwork() }
+            .onFailure { android.util.Log.w(NATIVE_TAG, "resetNetwork failed: ${it.message}") }
+    }
+
+    /**
+     * Names the physical network the tunnel is riding on.
+     *
+     * `VpnService.Builder` decides the TUN's capabilities once, at `establish`, and nothing
+     * revisits them afterwards — including the `setMetered(false)` in [openTun]. So after a
+     * Wi-Fi → cellular handover the VPN network still advertises whatever was true when the
+     * tunnel came up, and applications inside it read a stale validated/metered state: the core
+     * is dialling fine while the phone insists there is no internet. Handing the platform the
+     * current underlying network keeps that derived state honest across the handover.
+     *
+     * Null gives the decision back to the system default, which is the only sensible answer when
+     * there is no underlying network left to name.
+     */
+    private fun setUnderlying(network: Network?) {
+        runCatching { setUnderlyingNetworks(network?.let { arrayOf(it) }) }
     }
 
     override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {
