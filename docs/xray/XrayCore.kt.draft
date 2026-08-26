@@ -1,0 +1,68 @@
+package com.mydrop.vpn.vpn
+
+import android.util.Log
+import com.mydrop.vpn.xray.yumi.Protector
+import com.mydrop.vpn.xray.yumi.Yumi
+
+/**
+ * The Kotlin face of the Xray core.
+ *
+ * Everything gomobile generates is static, untyped where Kotlin would rather be typed, and speaks
+ * `long` where the rest of the app says `Int` — a Go `int` is 64-bit and crosses the boundary as a
+ * Java `long`, so the file descriptor arrives here as one. Wrapping it once keeps that detail from
+ * spreading, and gives the failure modes somewhere to live.
+ *
+ * The core is a process-wide singleton whether we like it or not: it registers itself in the
+ * package-level tables of the Go runtime inside this process, and there is exactly one of those.
+ * So this is an object rather than something injectable, and [running] is the truth about the
+ * process, not about any particular service instance.
+ */
+object XrayCore {
+
+    private const val TAG = "YumiCore"
+
+    /**
+     * The revision this core was built from, or null when the native library will not load at all.
+     *
+     * Read defensively because it is the first thing that touches the .so, and an ABI mismatch or a
+     * missing library surfaces here as an `UnsatisfiedLinkError` from a static initialiser — which
+     * would otherwise take down whatever happened to touch the core first, with a stack trace
+     * pointing at the caller rather than at the cause.
+     */
+    val version: String? by lazy {
+        runCatching { Yumi.version() }
+            .onFailure { Log.e(TAG, "xray core will not load", it) }
+            .getOrNull()
+    }
+
+    val running: Boolean
+        get() = runCatching { Yumi.isRunning() }.getOrDefault(false)
+
+    /**
+     * Names the directory holding geoip.dat and geosite.dat.
+     *
+     * Must be called before [start]: rules written as `geoip:ru` are resolved while the
+     * configuration is being parsed, and a missing file rejects the whole document rather than
+     * skipping the one rule that needed it.
+     */
+    fun setAssetPath(dir: String) {
+        runCatching { Yumi.setAssetPath(dir) }
+            .onFailure { Log.e(TAG, "asset path rejected", it) }
+    }
+
+    /**
+     * @param tunFd the descriptor from `VpnService.Builder.establish()`. Unlike sing-box, Xray does
+     *   not dup it — `AndroidTun` takes the number as given and its `Close()` is empty — so the
+     *   caller must keep the `ParcelFileDescriptor` open for as long as the core runs, and is the
+     *   one that closes it afterwards.
+     * @param protect excludes a socket from the tunnel; returning false fails that dial rather than
+     *   letting it loop back into the tunnel it came from and hang with no error anywhere.
+     */
+    fun start(config: String, tunFd: Int, protect: (Int) -> Boolean) {
+        Yumi.start(config, tunFd.toLong(), Protector { fd -> protect(fd.toInt()) })
+    }
+
+    fun stop() {
+        Yumi.stop()
+    }
+}
