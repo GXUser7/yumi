@@ -11,8 +11,12 @@ captures/
 *.keystore
 !debug.keystore
 
-# Ядро sing-box: 117 МБ на архитектуру, выше лимита GitHub в 100 МБ на файл.
-# Собирается по инструкции в DEVELOPMENT.md и кладётся сюда руками.
+# Ядро: десятки мегабайт на архитектуру, у sing-box — выше лимита GitHub в 100 МБ на файл.
+# libyumi.aar (Xray) собирается скриптом tools/build-core.sh, libbox.aar (sing-box) — по
+# инструкции в DEVELOPMENT.md. В репозитории не хранится ни то, ни другое.
 app/libs/*.aar
 
 __pycache__/
+
+# Побочный продукт gomobile bind рядом с .aar.
+core-xray/*-sources.jar
