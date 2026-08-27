@@ -3,7 +3,7 @@
 *Read this in [Russian](README.md).*
 
 A VPN client for Android: subscriptions, servers from a link or a QR code, DNS resolvers, a tunnel
-on the [sing-box](https://github.com/SagerNet/sing-box) core and a Material 3 Expressive interface.
+on the [Xray](https://github.com/XTLS/Xray-core) core and a Material 3 Expressive interface.
 
 **[Download the latest release](https://github.com/GXUser7/yumi/releases/latest)** ·
 [Telegram channel](https://t.me/MaterialYouCloud)
@@ -20,7 +20,7 @@ another app. Subscriptions are read in any of the formats panels hand them out i
 (base64 or plain text), **Clash YAML**, **sing-box JSON**, **Xray/v2ray JSON** and **SIP008**. When adding something you can say outright what you are
 pasting — a subscription, a server or a DNS resolver — or leave the detection to the app.
 
-sing-box configurations travel **verbatim**: whatever the app's own model cannot express —
+Xray configurations travel **verbatim**: whatever the app's own model cannot express —
 chains, multiplexing, ECH — reaches the core untouched.
 
 **DNS resolvers** are objects just like servers: added by a link (`tls://`, `quic://`, a DoH
@@ -81,7 +81,8 @@ export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
 ./gradlew :app:testDebugUnitTest
 ```
 
-**The core is not in the repository.** `app/libs/libbox.aar` weighs 117 MB — more than GitHub's
+**The core is not in the repository.** `app/libs/libyumi.aar` weighs tens of megabytes per
+architecture — more than GitHub's
 100 MB per-file limit — so you have to build it yourself and drop it in by hand. The build command,
 and everything else worth knowing about the internals, is in [DEVELOPMENT.md](DEVELOPMENT.md): why
 the TUN stack is gvisor, how core failures are caught, where the geo rules come from, and how all
@@ -89,5 +90,5 @@ of it is checked without a device.
 
 ## Acknowledgements
 
-The core is [sing-box](https://github.com/SagerNet/sing-box) by SagerNet. The geo rules come from
+The core is [Xray-core](https://github.com/XTLS/Xray-core) by XTLS. The geo databases come from
 its own `sing-geosite` and `sing-geoip` repositories.

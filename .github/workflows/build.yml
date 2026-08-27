@@ -18,8 +18,6 @@ permissions:
 env:
   APP_JAVA: '21'
   NDK_VERSION: '28.2.13676358'
-  # Where the Xray CLI used to validate the generated configurations is built.
-  CORE_DIR: /tmp/xray-core
 
 jobs:
   build:
@@ -129,14 +127,14 @@ jobs:
           # looking for a free one through netlink, which Linux allows and Android has refused
           # since 11 — a document that passed here and was rejected on a phone. A pass here means
           # the schema is right, not that the tunnel will come up.
+          # Built straight out of the module the binding already pins, rather than cloned. The
+          # first attempt cloned and fetched the commit from the pseudo-version, which cannot work:
+          # that carries only a twelve-character prefix and git will not fetch a short ref. Building
+          # from the module graph is both shorter and stronger — the CLI validating these documents
+          # and the core reading them on a phone are now the same bytes by construction.
           version="$(cd core-xray && go list -m -f '{{.Version}}' github.com/xtls/xray-core)"
           echo "validating against xray-core $version"
-          git init -q "$CORE_DIR"
-          git -C "$CORE_DIR" remote add origin https://github.com/XTLS/Xray-core.git
-          # A pseudo-version ends in the short commit it was cut from, which is what to fetch.
-          git -C "$CORE_DIR" fetch -q --depth 1 origin "${version##*-}"
-          git -C "$CORE_DIR" checkout -q --detach FETCH_HEAD
-          (cd "$CORE_DIR" && go build -o /tmp/xray ./main)
+          (cd core-xray && CGO_ENABLED=0 go build -o /tmp/xray github.com/xtls/xray-core/main)
 
           # The geo databases, because the routing rules reference them and Xray resolves those
           # while parsing: without the files every document naming `geoip:` or `geosite:` is
