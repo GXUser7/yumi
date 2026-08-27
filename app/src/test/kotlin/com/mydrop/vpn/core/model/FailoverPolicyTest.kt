@@ -274,4 +274,186 @@ class FailoverPolicyTest {
 
         assertTrue("the old thresholds moved it only $moves times", moves >= 25)
     }
+
+    // ------------------------------------------------------------------ Worst cases
+
+    /**
+     * Runs the policy against a scripted server for a stretch of time and reports *when* the
+     * tunnel moved.
+     *
+     * Times rather than a count, because the count alone cannot tell a flap from a design: two
+     * moves five minutes apart are a departure and a considered return, while two moves twenty
+     * seconds apart are the fault this policy exists to prevent.
+     *
+     * @param answering what the probe returns, by probe number.
+     * @param handoverEveryMillis how often the network changes underneath, or null for never.
+     *   A handover cuts the wait short and then costs the settle, exactly as the watchdog does it.
+     */
+    private fun simulate(
+        runMillis: Long,
+        handoverEveryMillis: Long? = null,
+        answering: (Int) -> Boolean,
+    ): List<Long> {
+        var now = 0L
+        var lastSwitch = -SWITCH_COOLDOWN_MILLIS
+        var nextHandover = handoverEveryMillis ?: Long.MAX_VALUE
+        var failures = 0
+        var recoveries = 0
+        var failbacks = 0
+        var hasHome = false
+        val moves = mutableListOf<Long>()
+        var probe = 0
+
+        while (now < runMillis) {
+            val wait = FailoverPolicy.nextProbeDelayMillis(failures)
+            val handover = now + wait >= nextHandover
+            if (handover) {
+                now = nextHandover + FailoverPolicy.HANDOVER_SETTLE_MILLIS
+                nextHandover += handoverEveryMillis ?: 0L
+            } else {
+                now += wait
+            }
+
+            val alive = answering(probe)
+            probe++
+
+            recoveries = if (hasHome && alive) recoveries + 1 else 0
+            failures = if (alive) 0 else failures + 1
+
+            when (
+                FailoverPolicy.decide(
+                    consecutiveFailures = failures,
+                    consecutiveHomeRecoveries = recoveries,
+                    hasHome = hasHome,
+                    failbacksSoFar = failbacks,
+                    millisSinceLastSwitch = now - lastSwitch,
+                    afterHandover = handover,
+                )
+            ) {
+                Decision.Hold -> Unit
+                Decision.AbandonHome -> { hasHome = false; recoveries = 0 }
+                Decision.ReturnHome -> {
+                    moves += now; lastSwitch = now; hasHome = false; recoveries = 0; failbacks++
+                }
+                Decision.LeaveCurrent -> {
+                    moves += now; lastSwitch = now; hasHome = true; failures = 0
+                }
+            }
+        }
+        return moves
+    }
+
+    /**
+     * The pattern the new threshold makes dangerous, and the reason this section exists.
+     *
+     * A server that fails every other probe never accumulated two failures in a row, so under the
+     * old threshold of two it tripped nothing at all — it was invisible. At one failure it trips on
+     * every single bad probe, which is precisely the flapping 0.3.2 was cured of. Nothing but the
+     * cooldown stands between that pattern and a tunnel that reloads every twenty-five seconds.
+     */
+    @Test
+    fun `a server failing every other probe cannot bounce the tunnel`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis) { probe -> probe % 2 == 0 }
+        val ceiling = (runMillis / SWITCH_COOLDOWN_MILLIS).toInt() + 1
+        assertTrue(
+            "moved ${moves.size} times in 20 minutes, ceiling is $ceiling",
+            moves.size <= ceiling,
+        )
+    }
+
+    /** The same, at the worst rate there is: nothing ever answers. */
+    @Test
+    fun `a permanently dead server cannot bounce the tunnel either`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis) { false }
+        val ceiling = (runMillis / SWITCH_COOLDOWN_MILLIS).toInt() + 1
+        assertTrue(
+            "moved ${moves.size} times in 20 minutes, ceiling is $ceiling",
+            moves.size <= ceiling,
+        )
+    }
+
+    /**
+     * The false positive that would matter most, because it is the everyday case: walking through
+     * a building, in and out of Wi-Fi, with a server that is perfectly fine the whole time.
+     *
+     * A handover shortens the wait and lowers the rate limit, so if it also lowered the evidence
+     * this would move the tunnel on every step. It must move it exactly never.
+     */
+    @Test
+    fun `a handover storm cannot move a tunnel whose server is answering`() {
+        val moves = simulate(runMillis = 20 * 60_000L, handoverEveryMillis = 10_000L) { true }
+        assertEquals("a healthy server was moved ${moves.size} times by handovers", 0, moves.size)
+    }
+
+    /**
+     * And the genuinely worst case: the network flapping every ten seconds *and* the server dead.
+     *
+     * Here the handover cooldown is doing the bounding rather than the ordinary one, which is the
+     * whole point of it being separate — so the ceiling is higher, and it has to be checked rather
+     * than assumed. The backstop this cannot see is in the watchdog: when every candidate is dead
+     * too, `swapAwayFrom` logs it and moves nothing, so a total outage does not churn at all.
+     */
+    @Test
+    fun `a handover storm over a dead server stays within the handover cooldown`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis, handoverEveryMillis = 10_000L) { false }
+        val ceiling = (runMillis / FailoverPolicy.HANDOVER_COOLDOWN_MILLIS).toInt() + 1
+        assertTrue(
+            "moved ${moves.size} times in 20 minutes, ceiling is $ceiling",
+            moves.size <= ceiling,
+        )
+        assertTrue("a dead server in a storm should still be left once", moves.isNotEmpty())
+        // The spacing is the guarantee, not the count: no two moves closer than the limit allows.
+        moves.zipWithNext { a, b ->
+            assertTrue(
+                "two moves ${b - a}ms apart, limit is ${FailoverPolicy.HANDOVER_COOLDOWN_MILLIS}ms",
+                b - a >= FailoverPolicy.HANDOVER_COOLDOWN_MILLIS,
+            )
+        }
+    }
+
+    /**
+     * The shape that used to be the regression, re-checked at the new threshold: down for a while,
+     * up for a while, which clears both directions and can therefore cycle.
+     */
+    @Test
+    fun `a server that comes and goes cannot bounce the tunnel during a handover storm`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis, handoverEveryMillis = 15_000L) { probe ->
+            (probe / 2) % 2 == 1
+        }
+        val ceiling = (runMillis / FailoverPolicy.HANDOVER_COOLDOWN_MILLIS).toInt() + 1
+        assertTrue(
+            "moved ${moves.size} times in 20 minutes, ceiling is $ceiling",
+            moves.size <= ceiling,
+        )
+    }
+
+    /**
+     * The price of the lowered threshold, stated plainly rather than assumed away.
+     *
+     * One probe failing in isolation — a lost packet, a moment of congestion — is the single most
+     * likely thing to happen to a perfectly good tunnel, and at a threshold of one it is enough to
+     * move. Under the old threshold of two it cost nothing at all; it now costs **two** tunnel
+     * reloads: the departure, and the considered return to the server the user actually chose.
+     *
+     * That is the trade, and it is only acceptable because of how the two are spaced. The return
+     * needs five answered probes *and* a cooled-down clock, so the second interruption lands a
+     * full cooldown after the first rather than seconds later. Two moves five minutes apart is a
+     * provisional switch working as designed; the same two twenty seconds apart would be the
+     * flapping of 0.3.2. So the spacing is asserted here, not just the count.
+     */
+    @Test
+    fun `a single isolated failure costs a move away and a move back, well spaced`() {
+        val moves = simulate(runMillis = 20 * 60_000L) { probe -> probe != 3 }
+        assertTrue("one lost probe caused ${moves.size} moves", moves.size <= 2)
+        moves.zipWithNext { away, back ->
+            assertTrue(
+                "left and returned ${back - away}ms apart, cooldown ${SWITCH_COOLDOWN_MILLIS}ms",
+                back - away >= SWITCH_COOLDOWN_MILLIS,
+            )
+        }
+    }
 }
