@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,16 +31,24 @@ import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Widgets
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -68,7 +77,9 @@ import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.ui.components.ScreenHeader
+import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.vpn.TunnelTileService
 
 /**
@@ -129,6 +140,11 @@ fun SettingsScreen(
     onOpenLogs: () -> Unit,
     onOpenSplitTunnel: () -> Unit,
     onOpenFailover: () -> Unit,
+    updates: UpdateState,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: (Context) -> Unit,
+    onDismissUpdate: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -307,6 +323,15 @@ fun SettingsScreen(
                     onCommit = { value -> onUpdate { s -> s.copy(directDns = value) } },
                 )
 
+                Spacer(Modifier.height(8.dp))
+
+                SwitchRow(
+                    title = stringResource(R.string.settings_dns_fallback),
+                    subtitle = stringResource(R.string.settings_dns_fallback_subtitle),
+                    checked = settings.dnsFallback,
+                    onCheckedChange = { onUpdate { s -> s.copy(dnsFallback = it) } },
+                )
+
                 if (dnsProfiles.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
                     Text(
@@ -478,7 +503,35 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Article,
                     onClick = onOpenLogs,
                 )
+                SwitchRow(
+                    title = stringResource(R.string.settings_alerts),
+                    subtitle = stringResource(R.string.settings_alerts_subtitle),
+                    checked = settings.faultAlerts,
+                    onCheckedChange = { onUpdate { s -> s.copy(faultAlerts = it) } },
+                )
                 QuickTileRow()
+            }
+        }
+
+        item("updates") {
+            SettingsSection(
+                title = stringResource(R.string.settings_updates),
+                icon = Icons.Rounded.SystemUpdate,
+            ) {
+                SwitchRow(
+                    title = stringResource(R.string.settings_update_auto),
+                    subtitle = stringResource(R.string.settings_update_auto_subtitle),
+                    checked = settings.updateAutoCheck,
+                    onCheckedChange = { onUpdate { s -> s.copy(updateAutoCheck = it) } },
+                )
+                Spacer(Modifier.height(8.dp))
+                UpdateRow(
+                    state = updates,
+                    onCheck = onCheckUpdate,
+                    onDownload = onDownloadUpdate,
+                    onInstall = onInstallUpdate,
+                    onDismiss = onDismissUpdate,
+                )
             }
         }
 
@@ -617,6 +670,184 @@ private fun NavigationRow(
  * system's own "add this tile?" dialog, which does not depend on what the shell's editor chooses
  * to show. Below that version the row explains where to look instead of pretending to act.
  */
+/**
+ * One button that always does the next thing: check, then download, then install.
+ *
+ * Deliberately the connect button from the tunnel screen — same pill, same primary colour, same
+ * `titleLarge` label that changes with the state while the geometry stays put. That control
+ * already teaches the one idea this needs: a single large thing whose wording tells you where you
+ * are. Two of them in one app should not look like two different ideas.
+ *
+ * Shorter than the original 116 dp, because this one lives inside a settings card rather than
+ * being the whole point of its screen.
+ *
+ * Nothing here installs anything. The last press opens Android’s own installer, which asks again.
+ */
+@Composable
+private fun UpdateRow(
+    state: UpdateState,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: (Context) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val busy = state is UpdateState.Checking || state is UpdateState.Downloading
+
+    Column(Modifier.fillMaxWidth()) {
+        // Whatever the button cannot say in three words goes above it: the version, the notes,
+        // the reason it failed.
+        when (state) {
+            is UpdateState.Available -> {
+                Text(
+                    text = stringResource(R.string.settings_update_available, state.release.version),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (state.release.notes.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = state.release.notes,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 6,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            is UpdateState.Downloading -> {
+                // Indeterminate when the size is unknown: a bar sitting at zero because there is
+                // nothing to divide by reads as a download that has stalled.
+                if (state.total > 0) {
+                    LinearProgressIndicator(
+                        progress = { (state.downloaded.toFloat() / state.total).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "${megabytes(state.downloaded)} / ${megabytes(state.total)} MB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            is UpdateState.Ready -> {
+                Text(
+                    text = stringResource(R.string.settings_update_ready, state.release.version),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            is UpdateState.Failed -> {
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            is UpdateState.UpToDate -> {
+                Text(
+                    text = stringResource(R.string.settings_update_none, state.version),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            UpdateState.Idle, UpdateState.Checking -> Unit
+        }
+
+        Button(
+            onClick = {
+                when (state) {
+                    is UpdateState.Available -> onDownload()
+                    is UpdateState.Ready -> onInstall(context)
+                    else -> onCheck()
+                }
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(UpdateButtonHeight),
+            // Half the height, so it is a pill rather than a rounded rectangle — the same
+            // relationship the tunnel control keeps when it is offering to connect.
+            shape = RoundedCornerShape(UpdateButtonHeight / 2),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                // A disabled pill that fades to grey reads as broken rather than busy, and busy is
+                // the only reason this is ever disabled.
+                disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                disabledContentColor = MaterialTheme.colorScheme.primary,
+            ),
+            contentPadding = PaddingValues(0.dp),
+        ) {
+            if (busy) {
+                ShapeSpinner(color = MaterialTheme.colorScheme.primary, size = 24.dp)
+            } else {
+                Icon(
+                    imageVector = when (state) {
+                        is UpdateState.Available -> Icons.Rounded.Download
+                        is UpdateState.Ready -> Icons.Rounded.SystemUpdate
+                        is UpdateState.Failed -> Icons.Rounded.ErrorOutline
+                        else -> Icons.Rounded.Refresh
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Text(
+                text = when (state) {
+                    is UpdateState.Available -> if (state.release.sizeBytes > 0) {
+                        stringResource(
+                            R.string.settings_update_download_sized,
+                            megabytes(state.release.sizeBytes),
+                        )
+                    } else {
+                        stringResource(R.string.settings_update_download)
+                    }
+
+                    is UpdateState.Checking -> stringResource(R.string.settings_update_checking)
+                    is UpdateState.Downloading ->
+                        stringResource(R.string.settings_update_downloading, state.release.version)
+
+                    is UpdateState.Ready -> stringResource(R.string.settings_update_install)
+                    is UpdateState.Failed -> stringResource(R.string.settings_update_retry)
+                    else -> stringResource(R.string.settings_update_check)
+                },
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+            )
+        }
+
+        // Only where there is something to put off. "Later" under a check button would be an
+        // instruction to do nothing.
+        if (state is UpdateState.Available) {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.settings_update_later))
+            }
+        }
+    }
+}
+
+/** Two-thirds of the tunnel screen’s control: the same shape, sized for a settings card. */
+private val UpdateButtonHeight = 76.dp
+
+private fun megabytes(bytes: Long): String =
+    ((bytes * 10 / (1024 * 1024)) / 10.0).toString()
+
 /**
  * One resolver in the list: tap to use it, cross to forget it.
  *

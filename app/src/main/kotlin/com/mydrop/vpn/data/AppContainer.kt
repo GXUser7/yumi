@@ -36,11 +36,16 @@ class AppContainer(context: Context) {
      * plumbing and no way for a release to switch it on by accident. See [DiagnosticLog] for why
      * this is not something to hand to everybody.
      */
+    private val debuggable = (appContext.applicationInfo.flags and
+        android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
     val diagnostics = DiagnosticLog(
         directory = java.io.File(context.filesDir, "diagnostics"),
-        enabled = (appContext.applicationInfo.flags and
-            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+        enabled = debuggable,
     )
+
+    /** Says out loud what the app would otherwise fix in silence. */
+    val alerts = AlertNotifier(appContext, strings, enabled = { settings.value.faultAlerts })
 
     val logs = LogRepository(strings, diagnostics)
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
@@ -109,6 +114,32 @@ class AppContainer(context: Context) {
         tunnelHealth = tunnelHealth,
         configs = tunnelConfigs,
         logs = logs,
+        alerts = alerts,
+        scope = applicationScope,
+    )
+
+    /**
+     * New versions of the app itself. The user agent is the same one subscriptions use — GitHub
+     * refuses requests without one outright.
+     */
+    val updates = UpdateRepository(
+        context = context.applicationContext,
+        service = UpdateService(
+            userAgent = "Yumi/$versionName (Android ${android.os.Build.VERSION.RELEASE}; " +
+                "${android.os.Build.MODEL})",
+            strings = strings,
+        ),
+        settings = settings,
+        logs = logs,
+        alerts = alerts,
+        strings = strings,
+        currentVersion = versionName,
+        scope = applicationScope,
+    )
+
+    private val updateScheduler = UpdateScheduler(
+        settings = settings,
+        updates = updates,
         scope = applicationScope,
     )
 
@@ -144,6 +175,7 @@ class AppContainer(context: Context) {
         failoverWatchdog.start()
         staleSelectionPruner.start()
         subscriptionScheduler.start()
+        updateScheduler.start()
     }
 
     /** Whether the current connection is metered; see MainViewModel.speedTestIsMetered. */

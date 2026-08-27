@@ -6,7 +6,9 @@ import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.FailoverPolicy
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -47,6 +49,7 @@ class FailoverWatchdog(
     private val tunnelHealth: TunnelHealthCheck,
     private val configs: TunnelConfigBuilder,
     private val logs: LogRepository,
+    private val alerts: AlertNotifier,
     private val scope: CoroutineScope,
 ) {
 
@@ -95,6 +98,11 @@ class FailoverWatchdog(
                     else -> {
                         stopWatch()
                         forgetHome()
+                        // The fallback resolver lasts exactly as long as the connection that
+                        // needed it. A resolver that was down twenty minutes ago is the likeliest
+                        // thing in the world to be up again, and one that stayed swapped until
+                        // somebody noticed would be a setting the user never chose.
+                        configs.useDnsFallback(false)
                     }
                 }
             }
@@ -126,6 +134,9 @@ class FailoverWatchdog(
 
             var failures = 0
             var recoveries = 0
+            // Names that failed to resolve in a row, and whether the user has already been told.
+            var dnsFailures = 0
+            var dnsReported = false
             // Only so the hold is announced once per outage rather than every probe.
             var offline = false
             // The grace above is the wait before the first probe. Waiting again at the top of the
@@ -237,6 +248,33 @@ class FailoverWatchdog(
                     )
                 }
 
+                // Asked only of a tunnel that has just proved it carries traffic. The two
+                // probes differ by one routing rule — see ProbeTargets — so a failure here with a
+                // pass above means the resolver, and nothing else, has stopped working. Asking it
+                // of a broken tunnel would blame DNS for somebody else's outage.
+                val resolving = if (alive) tunnelHealth.resolves(configs.probe.value) else null
+                when (resolving) {
+                    true -> {
+                        dnsFailures = 0
+                        dnsReported = false
+                    }
+                    // The first lookup a new tunnel makes is not evidence of anything, and this
+                    // was measured rather than guessed: on three different servers the first DoH
+                    // query after a restart came back EOF and every one after it succeeded. The
+                    // encrypted resolver has its own connection to open, through a tunnel that is
+                    // itself seconds old, and it opens it exactly once.
+                    //
+                    // Counting it spent one of the two strikes before the resolver had been asked
+                    // anything real, which turned "one bad lookup" into a resolver swap on a
+                    // resolver that was fine.
+                    false -> if (firstProbe) {
+                        logs.trace(TAG, "first dns lookup after connect failed, not counting it")
+                    } else {
+                        dnsFailures++
+                    }
+                    null -> Unit
+                }
+
                 val sinceSwitch = SystemClock.elapsedRealtime() - lastSwitchAtMillis
                 val decision = FailoverPolicy.decide(
                     consecutiveFailures = failures,
@@ -259,9 +297,44 @@ class FailoverWatchdog(
                         "${FailoverPolicy.PROBES_BEFORE_FAILBACK} " +
                         "failbacks=${failbacks[home?.id] ?: 0} " +
                         "sinceSwitch=${if (lastSwitchAtMillis == 0L) "never" else "${sinceSwitch / 1000}s"} " +
+                        "dns=${resolving ?: "n/a"}/$dnsFailures " +
+                        (if (configs.dnsFallback.value) "dns-fallback " else "") +
                         (if (movedTo != null) "handover=$movedTo " else "") +
                         "-> $decision",
                 )
+
+                if (dnsFailures >= FailoverPolicy.DNS_FAILURES_BEFORE_FALLBACK) {
+                    dnsFailures = 0
+                    val resolver = currentResolver()
+                    when {
+                        // Already on the fallback and it is failing too. There is nothing else to
+                        // reach for, and saying so is the only useful thing left: the fault is
+                        // almost certainly not the resolver at this point.
+                        configs.dnsFallback.value -> if (!dnsReported) {
+                            dnsReported = true
+                            logs.warn(R.string.log_dns_fallback_also_dead, resolver)
+                            alerts.dnsDead(resolver)
+                        }
+
+                        settings.value.dnsFallback -> {
+                            val replacement = SingBoxConfigFactory.fallbackResolver(resolver)
+                            logs.warn(R.string.log_dns_switching, resolver, replacement)
+                            alerts.dnsReplaced(resolver, replacement)
+                            configs.useDnsFallback(true)
+                            // The resolver is baked into the document the core reads at startup,
+                            // so changing it means handing the core a new one. Same server, same
+                            // everything else — the reconnection is the delivery mechanism.
+                            launcher.switchTo(current)
+                            continue
+                        }
+
+                        !dnsReported -> {
+                            dnsReported = true
+                            logs.warn(R.string.log_dns_dead, resolver)
+                            alerts.dnsDead(resolver)
+                        }
+                    }
+                }
 
                 when (decision) {
                     // Counters are left standing: whatever the policy is waiting for, it is still
@@ -320,6 +393,12 @@ class FailoverWatchdog(
         autoChosenId = null
     }
 
+    /** The resolver the tunnel is actually querying, named the way the user chose it. */
+    private fun currentResolver(): String = profiles.selectedDnsProfile()?.url
+        ?: settings.value.let {
+            if (it.routingMode == RoutingMode.Direct) it.directDns else it.remoteDns
+        }
+
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val candidates = FailoverGroup.candidates(
             nodes = profiles.nodes,
@@ -330,6 +409,7 @@ class FailoverWatchdog(
         )
         if (candidates.isEmpty()) {
             logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
+            alerts.serverStranded(dead.name)
             return
         }
 
@@ -345,10 +425,12 @@ class FailoverWatchdog(
         val chosen = FailoverChoice.pick(candidates, fresh)
         if (chosen == null) {
             logs.warn(R.string.log_failover_all_dead, dead.name)
+            alerts.serverStranded(dead.name)
             return
         }
 
         logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
+        alerts.serverLeft(dead.name, chosen.name)
         // Recorded before the switch, because moving the tunnel takes this coroutine down with it.
         // Only the first departure counts: hop twice and home is still the server the user chose,
         // not the replacement this watchdog installed on the way.

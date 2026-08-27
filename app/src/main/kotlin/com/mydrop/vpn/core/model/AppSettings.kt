@@ -100,6 +100,20 @@ data class AppSettings(
     val remoteDns: String = "https://1.1.1.1/dns-query",
     val directDns: String = "8.8.8.8",
     val hijackDns: Boolean = true,
+    /**
+     * Whether a resolver that stops answering is replaced with a known-good one.
+     *
+     * A dead resolver is the one outage the app cannot fix by changing servers, and the one the
+     * user is least likely to diagnose: every name stops resolving at once, so the symptom is
+     * "the internet is gone" while the tunnel itself is provably carrying traffic. On, the app
+     * notices and swaps in a numeric DoH endpoint until the connection is next restarted.
+     *
+     * On by default, but a switch rather than a certainty: a resolver is chosen for what it does
+     * beyond resolving — ad filtering, family rules, something a workplace requires — and quietly
+     * substituting a plain one takes all of that away. Somebody who chose theirs for a reason may
+     * prefer the outage.
+     */
+    val dnsFallback: Boolean = true,
 
     /**
      * Identifier some subscription panels require before they hand over the server list, sent as
@@ -154,4 +168,32 @@ data class AppSettings(
      */
     val subscriptionUpdateMinutes: Int = 360,
     val logLevel: LogLevel = LogLevel.Info,
+    /**
+     * Whether the app says out loud that it fixed something.
+     *
+     * The whole value of automatic failover is that nobody is watching when it fires, which is
+     * exactly why the user never learns that it did: the only lasting symptom is a connect screen
+     * naming a server they did not choose, discovered hours later. Same for a resolver that was
+     * swapped out from under them.
+     *
+     * On by default, and a switch rather than a build flag: how chatty a VPN should be about its
+     * own plumbing is a matter of taste, and the honest way to settle a matter of taste is to let
+     * the person whose phone it is settle it.
+     */
+    val faultAlerts: Boolean = true,
+
+    // Updates
+    /**
+     * Whether the app asks GitHub twice a day whether a newer release exists.
+     *
+     * On by default. The app is distributed outside any store, so nothing updates it unless it
+     * updates itself, and the people running the oldest builds are by definition the ones who
+     * never saw the announcement of the fix they need.
+     */
+    val updateAutoCheck: Boolean = true,
+    /**
+     * When the last check happened, wall clock. Persisted so that opening the app six times a day
+     * still amounts to one check rather than six — see [com.mydrop.vpn.data.UpdateScheduler].
+     */
+    val lastUpdateCheckEpochMillis: Long = 0L,
 )

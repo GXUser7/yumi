@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProbeTargets
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Base64
@@ -36,18 +37,36 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
      *   ask — no probe inbound means no tunnel to interrogate, and the caller should fall back to
      *   a direct measurement rather than read the absence as a failure.
      */
-    suspend fun passes(probe: ProbeEndpoint?): Boolean? {
+    suspend fun passes(probe: ProbeEndpoint?): Boolean? =
+        ask(probe, ProbeTargets.TUNNEL, "through tunnel")
+
+    /**
+     * Whether names resolve, asked the same way and separated from [passes] by one routing rule.
+     *
+     * The configuration marks this host `action: resolve`, so the core looks it up through its own
+     * DNS pipeline — the chosen resolver, the bootstrap behind it, the detour it goes out over —
+     * before dialling. Every other connection in the app hands its hostname to the far end
+     * instead, which is why a resolver can be completely dead while the tunnel probe stays green
+     * and nothing anywhere says so.
+     *
+     * Only meaningful when [passes] said yes. A tunnel that carries nothing fails this too, and
+     * reading that as a DNS fault would swap the resolver to fix somebody else's outage.
+     */
+    suspend fun resolves(probe: ProbeEndpoint?): Boolean? =
+        ask(probe, ProbeTargets.DNS, "dns")
+
+    private suspend fun ask(probe: ProbeEndpoint?, host: String, what: String): Boolean? {
         probe ?: run {
             trace(TAG, "no probe inbound — falling back to the direct measurement")
             return null
         }
         return withContext(Dispatchers.IO) {
             val started = System.nanoTime()
-            runCatching { fetch(probe) }
+            runCatching { fetch(probe, host) }
                 .onSuccess {
                     trace(
                         TAG,
-                        "through tunnel: ${if (it) "204 ok" else "wrong status"} " +
+                        "$what: ${if (it) "204 ok" else "wrong status"} " +
                             "in ${(System.nanoTime() - started) / 1_000_000} ms",
                     )
                 }
@@ -56,7 +75,7 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
                     // timeout means the chain past it is not carrying anything.
                     trace(
                         TAG,
-                        "through tunnel failed after ${(System.nanoTime() - started) / 1_000_000} ms: " +
+                        "$what failed after ${(System.nanoTime() - started) / 1_000_000} ms: " +
                             "${it::class.simpleName}: ${it.message}",
                     )
                 }
@@ -72,7 +91,7 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
      * makes this an ordinary HTTP proxy request, so no `CONNECT` is needed — unlike the speed
      * test, which has to tunnel TLS and therefore does.
      */
-    private fun fetch(probe: ProbeEndpoint): Boolean = Socket().use { socket ->
+    private fun fetch(probe: ProbeEndpoint, host: String): Boolean = Socket().use { socket ->
         socket.soTimeout = TIMEOUT_MILLIS
         socket.connect(InetSocketAddress("127.0.0.1", probe.port), TIMEOUT_MILLIS)
 
@@ -80,8 +99,8 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
             .encodeToString("${probe.username}:${probe.password}".toByteArray())
         socket.outputStream.write(
             (
-                "GET $TARGET_URL HTTP/1.1\r\n" +
-                    "Host: $TARGET_HOST\r\n" +
+                "GET ${ProbeTargets.url(host)} HTTP/1.1\r\n" +
+                    "Host: $host\r\n" +
                     "Proxy-Authorization: Basic $credentials\r\n" +
                     "User-Agent: Yumi\r\n" +
                     // Nothing is reused, and leaving the socket open would hold an outbound
@@ -104,14 +123,6 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
 
     private companion object {
         const val TAG = "YumiFailover"
-
-        /**
-         * Chosen for being boring: no body, no redirect, no TLS, and run by an operator whose
-         * whole business is answering it quickly from everywhere. Reachability is judged from the
-         * exit node, so nothing about this address needs to survive Russian filtering.
-         */
-        const val TARGET_HOST = "cp.cloudflare.com"
-        const val TARGET_URL = "http://cp.cloudflare.com/generate_204"
 
         /** Comfortably inside the watchdog's probe interval, so a hang cannot stack up. */
         const val TIMEOUT_MILLIS = 5_000

@@ -10,6 +10,15 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+      Handing a downloaded APK to Android's package installer. This permission only buys the right
+      to *ask*: the installer still shows its own confirmation, and on Android 8 and later the user
+      has to have allowed this app to install packages at all, in a settings screen no app can
+      raise on its own. The app is distributed outside any store, so without this an update means
+      finding the release page in a browser.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       Split tunnelling has to list the apps that can originate traffic, and on Android 11+ that
       needs visibility of them.
 
@@ -150,6 +159,20 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!--
+          The one file the package installer is allowed to read: the APK just downloaded. Scoped
+          to a single directory in @xml/update_paths, and not exported.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
     </application>
 

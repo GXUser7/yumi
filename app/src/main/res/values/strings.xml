@@ -267,6 +267,8 @@
     <string name="settings_direct_dns_hint">For domains that bypass the proxy</string>
     <string name="settings_dns_empty_error">The address cannot be empty</string>
     <string name="settings_dns_resolvers">Added resolvers</string>
+    <string name="settings_dns_fallback">Fallback resolver</string>
+    <string name="settings_dns_fallback_subtitle">If the chosen resolver stops answering, switch to 1.1.1.1 until the next reconnection</string>
     <string name="settings_dns_from_settings">From settings</string>
 
     <string name="settings_latency">Latency probe</string>
@@ -300,6 +302,8 @@
 
     <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_logs">Journal</string>
+    <string name="settings_alerts">Notify me about faults</string>
+    <string name="settings_alerts_subtitle">When a server or resolver is replaced, or a new version is out</string>
     <string name="settings_logs_subtitle">Core and subscription logs</string>
 
     <string name="settings_about">About</string>
@@ -384,6 +388,10 @@
     <string name="log_failover_pruned_all">The spare servers vanished from the subscription (%1$d) — the choice is automatic again</string>
     <string name="log_failover_pruned">Servers that no longer exist were removed from the spares list: %1$d</string>
 
+    <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>
+    <string name="log_dns_dead">Resolver “%1$s” stopped answering; the fallback is switched off</string>
+    <string name="log_dns_fallback_also_dead">The fallback resolver (%1$s) is not answering either — the fault is probably elsewhere</string>
+
     <string name="log_autoselect">Auto-select: %1$s</string>
     <string name="log_autoselect_measuring">Auto-select: measuring latencies (%1$d)</string>
 
@@ -455,4 +463,43 @@
     <string name="speed_metered_body">The test opens several streams and can move a few hundred megabytes each way. On a metered plan that is charged.</string>
     <string name="log_failover_home_abandoned">“%1$s” keeps dropping out — staying on the replacement</string>
     <string name="log_skipped_unsupported_transport">Skipped %1$d servers: the core cannot carry %2$s</string>
+
+    <!-- Notifications for things the app would otherwise handle in silence. -->
+    <string name="alert_channel_name">Faults</string>
+    <string name="alert_channel_description">A server or resolver stopped working, and the app did something about it</string>
+    <string name="alert_server_dead_title">Server stopped answering</string>
+    <string name="alert_server_dead_text">“%1$s” stopped carrying traffic. The tunnel moved to “%2$s”.</string>
+    <string name="alert_server_stranded_title">Server stopped answering</string>
+    <string name="alert_server_stranded_text">“%1$s” stopped carrying traffic and there was nothing to replace it with.</string>
+    <string name="alert_dns_dead_title">DNS stopped answering</string>
+    <string name="alert_dns_replaced_text">%1$s stopped resolving names. Switched to %2$s until the next reconnection.</string>
+    <string name="alert_dns_dead_text">%1$s stopped resolving names. The fallback is switched off, so names will not resolve.</string>
+
+    <!-- Updating the app itself, which nothing else does: it is distributed outside any store. -->
+    <string name="settings_updates">Updates</string>
+    <string name="settings_update_auto">Check automatically</string>
+    <string name="settings_update_auto_subtitle">Ask GitHub for a newer release every 12 hours</string>
+    <string name="settings_update_check">Check now</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_none">%1$s is the latest version</string>
+    <string name="settings_update_available">Version %1$s is available</string>
+    <string name="settings_update_download">Download</string>
+    <string name="settings_update_download_sized">Download (%1$s MB)</string>
+    <string name="settings_update_later">Later</string>
+    <string name="settings_update_downloading">Downloading %1$s…</string>
+    <string name="settings_update_ready">Version %1$s is ready to install</string>
+    <string name="settings_update_install">Install</string>
+    <string name="settings_update_retry">Try again</string>
+
+    <string name="alert_update_title">Version %1$s is out</string>
+    <string name="alert_update_text">Open Settings to download and install it</string>
+
+    <string name="log_update_available">A new version is available: %1$s</string>
+    <string name="log_update_none">No update: %1$s is the latest version</string>
+    <string name="log_update_downloaded">Version %1$s downloaded and ready to install</string>
+    <string name="log_update_failed">Update check: %1$s</string>
+
+    <string name="error_update_unreadable">Could not read the release information</string>
+    <string name="error_update_no_asset">The release has no build for this architecture (%1$s)</string>
+    <string name="error_update_download">Download failed (%1$s)</string>
 </resources>

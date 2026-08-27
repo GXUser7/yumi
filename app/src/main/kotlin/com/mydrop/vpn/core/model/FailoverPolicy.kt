@@ -99,6 +99,17 @@ object FailoverPolicy {
      */
     const val HANDOVER_SETTLE_MILLIS = 3_000L
 
+    /**
+     * Failed name lookups in a row before the resolver is replaced.
+     *
+     * Two rather than one, unlike the server threshold next to it, and the asymmetry is on
+     * purpose. Leaving a server costs one reconnection and there is somewhere else to go; a
+     * resolver has exactly one fallback, and spending it on a single lost packet leaves nothing
+     * held back for the outage it was meant for. A resolver also fails differently from a server:
+     * intermittently, one query at a time, rather than by going away.
+     */
+    const val DNS_FAILURES_BEFORE_FALLBACK = 2
+
 
     /**
      * How long to wait before the next probe.

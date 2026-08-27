@@ -3,6 +3,7 @@ package com.mydrop.vpn.core.singbox
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RoutingMode
@@ -38,10 +39,24 @@ object SingBoxConfigFactory {
     private const val DNS_REMOTE_TAG = "dns-remote"
     private const val DNS_DIRECT_TAG = "dns-direct"
     private const val DNS_BOOTSTRAP_TAG = "dns-bootstrap"
+    private const val DNS_BOOTSTRAP_PROXY_TAG = "dns-bootstrap-proxy"
 
     /** Fallbacks for a DNS field the user has emptied; they match [AppSettings]' own defaults. */
     const val DEFAULT_REMOTE_DNS = "https://1.1.1.1/dns-query"
     const val DEFAULT_DIRECT_DNS = "8.8.8.8"
+
+    /**
+     * Where DNS goes when the chosen resolver stops answering, and why it is a constant.
+     *
+     * It has to be numeric, or the fallback would need the very thing that just failed in order to
+     * be reached. It has to be somewhere with no relationship to whoever went down. And it has to
+     * be the same on every install, because the point of a fallback is that it is already known to
+     * work — a second resolver the user picked is a second thing that can be misconfigured.
+     *
+     * [FALLBACK_REMOTE_DNS_ALT] exists only so that falling back from 1.1.1.1 goes somewhere else.
+     */
+    const val FALLBACK_REMOTE_DNS = "https://1.1.1.1/dns-query"
+    const val FALLBACK_REMOTE_DNS_ALT = "https://8.8.8.8/dns-query"
 
     private const val RULE_SET_GEOSITE_RU = "geosite-ru"
     private const val RULE_SET_GEOIP_RU = "geoip-ru"
@@ -74,6 +89,8 @@ object SingBoxConfigFactory {
     /**
      * @param dnsOverride resolver chosen on the DNS screen, which wins over the address typed in
      *   settings. Null leaves the settings value in charge.
+     * @param dnsFallback builds the document with [FALLBACK_REMOTE_DNS] in place of the chosen
+     *   resolver, for when the watchdog has found the chosen one dead.
      */
     fun build(
         node: ProxyNode,
@@ -81,11 +98,12 @@ object SingBoxConfigFactory {
         ruleSetDir: String,
         probe: ProbeEndpoint? = null,
         dnsOverride: String? = null,
+        dnsFallback: Boolean = false,
     ): String = json.encodeToString(
         JsonObject.serializer(),
         buildConfig(
             node = node,
-            settings = settings.withDnsOverride(dnsOverride),
+            settings = settings.withDnsOverride(dnsOverride).withDnsFallback(dnsFallback),
             ruleSetDir = ruleSetDir,
             probe = probe,
         ),
@@ -104,6 +122,31 @@ object SingBoxConfigFactory {
         routingMode == RoutingMode.Direct -> copy(directDns = override)
         else -> copy(remoteDns = override)
     }
+
+    /**
+     * Swaps in the fallback resolver, on the same server the override went to.
+     *
+     * Applied after [withDnsOverride] on purpose: the resolver being replaced is whichever one the
+     * tunnel actually queries, and in direct mode that is not the remote one.
+     */
+    private fun AppSettings.withDnsFallback(active: Boolean): AppSettings = when {
+        !active -> this
+        routingMode == RoutingMode.Direct -> copy(directDns = fallbackFor(directDns, DEFAULT_DIRECT_DNS))
+        else -> copy(remoteDns = fallbackFor(remoteDns, DEFAULT_REMOTE_DNS))
+    }
+
+    /**
+     * The resolver [build] would put in place of [primary]. Exposed so the journal can name it
+     * before the switch happens, rather than leaving the user to infer it from a working tunnel.
+     */
+    fun fallbackResolver(primary: String): String = fallbackFor(primary, DEFAULT_REMOTE_DNS)
+
+    private fun fallbackFor(primary: String, default: String): String =
+        if (addressOf(primary, default) == addressOf(FALLBACK_REMOTE_DNS, default)) {
+            FALLBACK_REMOTE_DNS_ALT
+        } else {
+            FALLBACK_REMOTE_DNS
+        }
 
     private fun buildConfig(
         node: ProxyNode,
@@ -164,15 +207,52 @@ object SingBoxConfigFactory {
     private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
         val remoteNamed = !isNumericAddress(addressOf(settings.remoteDns, DEFAULT_REMOTE_DNS))
         val directNamed = !isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))
-        val bootstrap = if (remoteNamed || directNamed) DNS_BOOTSTRAP_TAG else null
 
         putJsonArray("servers") {
-            add(dnsServer(DNS_REMOTE_TAG, settings.remoteDns, PROXY_TAG, bootstrap.takeIf { remoteNamed }))
+            add(
+                dnsServer(
+                    DNS_REMOTE_TAG,
+                    settings.remoteDns,
+                    PROXY_TAG,
+                    DNS_BOOTSTRAP_PROXY_TAG.takeIf { remoteNamed },
+                ),
+            )
             // A typed DNS server without a detour already uses the direct dialer. Pointing it
             // at our intentionally empty `direct` outbound is redundant and newer sing-box
             // versions reject that combination while starting the DNS service.
-            add(dnsServer(DNS_DIRECT_TAG, settings.directDns, null, bootstrap.takeIf { directNamed }))
-            if (bootstrap != null) {
+            add(
+                dnsServer(
+                    DNS_DIRECT_TAG,
+                    settings.directDns,
+                    null,
+                    DNS_BOOTSTRAP_TAG.takeIf { directNamed },
+                ),
+            )
+            // Each bootstrap goes the way the resolver it bootstraps goes. Sending the lookup for
+            // a *direct* resolver through the proxy would resolve it from another country, and
+            // sending the lookup for a *proxied* one out directly is the leak below.
+            if (remoteNamed) {
+                addJsonObject {
+                    put("type", "https")
+                    put("tag", DNS_BOOTSTRAP_PROXY_TAG)
+                    put("server", addressOf(FALLBACK_REMOTE_DNS, DEFAULT_REMOTE_DNS))
+                    put("path", "/dns-query")
+                    // Through the tunnel, and this is the whole point of the tag existing.
+                    //
+                    // A resolver written as a name — `https://xbox-dns.ru/dns-query` — has to be
+                    // resolved before it can resolve anything, and that one lookup used to leave
+                    // as plain UDP on port 53, straight off the phone. In Russia that is the exact
+                    // traffic DPI rewrites and drops. The result was a single point of failure
+                    // nobody would think to suspect: the resolver could be perfectly healthy and
+                    // still unreachable, because the question "what is its address" never got an
+                    // honest answer, and every name on the phone stopped resolving at once.
+                    //
+                    // No circle: the address here is numeric, and the proxy's own hostname is
+                    // resolved by `default_domain_resolver`, which stays direct.
+                    put("detour", PROXY_TAG)
+                }
+            }
+            if (directNamed) {
                 addJsonObject {
                     put("type", "udp")
                     put("tag", DNS_BOOTSTRAP_TAG)
@@ -348,6 +428,19 @@ object SingBoxConfigFactory {
             // measured over the phone's own connection and reported as the server's throughput,
             // which is worse than no number at all.
             if (probe != null) {
+                // Before the rule below, which routes and therefore stops matching.
+                //
+                // This is the one connection in the whole configuration whose destination is
+                // resolved here rather than by the server at the far end, and that is the entire
+                // point: everything else hands the hostname to the outbound, so a dead resolver
+                // is invisible from outside. Asking for one name through our own DNS pipeline
+                // turns "the resolver stopped working" into a probe that fails, next to a tunnel
+                // probe that still passes — which is what tells the two faults apart.
+                addJsonObject {
+                    putJsonArray("inbound") { add(PROBE_TAG) }
+                    putJsonArray("domain") { add(ProbeTargets.DNS) }
+                    put("action", "resolve")
+                }
                 addJsonObject {
                     putJsonArray("inbound") { add(PROBE_TAG) }
                     put("outbound", PROXY_TAG)

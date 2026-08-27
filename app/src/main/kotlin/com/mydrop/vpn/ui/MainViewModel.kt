@@ -97,6 +97,21 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     val logs: StateFlow<List<LogEntry>> = container.logs.entries
 
+    val updates: StateFlow<com.mydrop.vpn.core.model.UpdateState> = container.updates.state
+
+    fun checkForUpdate() = container.updates.check(manual = true)
+
+    fun downloadUpdate() = container.updates.download()
+
+    /**
+     * Needs the activity rather than the application context: the installer is started with
+     * [android.content.Intent.FLAG_ACTIVITY_NEW_TASK] either way, but the permission screen it
+     * may have to open first belongs on top of the app the user is looking at.
+     */
+    fun installUpdate(activity: android.content.Context) = container.updates.install(activity)
+
+    fun dismissUpdate() = container.updates.clear()
+
     val uiState: StateFlow<MainUiState> = combine(
         container.profiles.state,
         container.settings.settings,

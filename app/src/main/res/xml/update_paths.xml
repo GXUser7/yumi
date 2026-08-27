@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The one directory a downloaded APK is written to, and nothing else.
+
+  Scoped this narrowly on purpose: a FileProvider is a hole through the app sandbox, and the
+  package installer only ever needs to read the file it was just handed. Widening this to
+  `files-path name="files" path="."` would expose the profile store, the settings and the
+  diagnostic journal to anything the user could be talked into pointing at them.
+-->
+<paths>
+    <files-path
+        name="updates"
+        path="updates/" />
+</paths>

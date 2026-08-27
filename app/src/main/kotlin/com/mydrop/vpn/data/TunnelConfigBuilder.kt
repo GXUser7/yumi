@@ -31,6 +31,25 @@ class TunnelConfigBuilder(
 
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
 
+    private val _dnsFallback = MutableStateFlow(false)
+
+    /**
+     * Whether the next document should carry the fallback resolver instead of the chosen one.
+     *
+     * Kept here rather than in settings because it is a fact about right now, not a preference:
+     * it must not survive a restart. A resolver that was down an hour ago is the most likely thing
+     * in the world to be up again, and a flag persisted to disk would leave every future tunnel
+     * quietly using somebody else's DNS until a human noticed.
+     *
+     * Read at [build] time, so the switch happens on the next connection — which is what the
+     * watchdog asks for immediately after setting it.
+     */
+    val dnsFallback: StateFlow<Boolean> = _dnsFallback.asStateFlow()
+
+    fun useDnsFallback(active: Boolean) {
+        _dnsFallback.value = active
+    }
+
     /**
      * How to reach the core of the tunnel this builder last configured, for the speed test. Null
      * when no loopback port could be claimed — the tunnel is worth more than the measurement, so
@@ -64,6 +83,7 @@ class TunnelConfigBuilder(
                 ruleSetDir = ruleSetDir.absolutePath,
                 probe = probe,
                 dnsOverride = selectedDns(),
+                dnsFallback = _dnsFallback.value,
             )
         }.onSuccess {
             // Only once the document exists: publishing an endpoint for a configuration that was

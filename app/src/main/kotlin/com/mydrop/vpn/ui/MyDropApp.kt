@@ -93,6 +93,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val logs by viewModel.logs.collectAsStateWithLifecycle()
     val speedTest by viewModel.speedTest.collectAsStateWithLifecycle()
+    val updates by viewModel.updates.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -228,6 +229,11 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
                     onOpenFailover = { navController.navigate(Routes.FAILOVER) },
+                    updates = updates,
+                    onCheckUpdate = viewModel::checkForUpdate,
+                    onDownloadUpdate = viewModel::downloadUpdate,
+                    onInstallUpdate = viewModel::installUpdate,
+                    onDismissUpdate = viewModel::dismissUpdate,
                     contentPadding = contentPadding,
                 )
             }

@@ -262,6 +262,8 @@
     <string name="settings_direct_dns">Прямой DNS</string>
     <string name="settings_direct_dns_hint">Для доменов, идущих мимо прокси</string>
     <string name="settings_dns_empty_error">Адрес не может быть пустым</string>
+    <string name="settings_dns_fallback">Запасной DNS</string>
+    <string name="settings_dns_fallback_subtitle">Если выбранный DNS перестанет отвечать — перейти на 1.1.1.1 до следующего переподключения</string>
     <string name="settings_dns_resolvers">Добавленные резолверы</string>
     <string name="settings_dns_from_settings">Из настроек</string>
 
@@ -296,6 +298,8 @@
 
     <string name="settings_diagnostics">Диагностика</string>
     <string name="settings_logs">Журнал</string>
+    <string name="settings_alerts">Сообщать о неполадках</string>
+    <string name="settings_alerts_subtitle">Когда меняется сервер или DNS, а также о новой версии</string>
     <string name="settings_logs_subtitle">Логи ядра и подписок</string>
 
     <string name="settings_about">О приложении</string>
@@ -380,6 +384,10 @@
     <string name="log_failover_pruned_all">Запасные серверы исчезли из подписки (%1$d) — выбор снова автоматический</string>
     <string name="log_failover_pruned">Из списка запасных убрано серверов, которых больше нет: %1$d</string>
 
+    <string name="log_dns_switching">DNS «%1$s» перестал отвечать — перехожу на %2$s</string>
+    <string name="log_dns_dead">DNS «%1$s» перестал отвечать, а запасной выключен</string>
+    <string name="log_dns_fallback_also_dead">Запасной DNS (%1$s) тоже не отвечает — дело, скорее всего, не в нём</string>
+
     <string name="log_autoselect">Автовыбор: %1$s</string>
     <string name="log_autoselect_measuring">Автовыбор: измеряю задержки (%1$d)</string>
 
@@ -451,4 +459,43 @@
     <string name="speed_metered_body">Замер открывает несколько потоков и может прогнать по несколько сотен мегабайт в каждую сторону. На тарифе с лимитом это платный трафик.</string>
     <string name="log_failover_home_abandoned">«%1$s» продолжает отваливаться — остаюсь на запасном</string>
     <string name="log_skipped_unsupported_transport">Пропущено серверов: %1$d — ядро не умеет %2$s</string>
+
+    <!-- Уведомления о том, что приложение иначе сделало бы молча. -->
+    <string name="alert_channel_name">Неполадки</string>
+    <string name="alert_channel_description">Сервер или DNS перестал работать, и приложение что-то с этим сделало</string>
+    <string name="alert_server_dead_title">Сервер перестал отвечать</string>
+    <string name="alert_server_dead_text">«%1$s» больше не пропускает трафик. Туннель переехал на «%2$s».</string>
+    <string name="alert_server_stranded_title">Сервер перестал отвечать</string>
+    <string name="alert_server_stranded_text">«%1$s» больше не пропускает трафик, а заменить его нечем.</string>
+    <string name="alert_dns_dead_title">DNS перестал отвечать</string>
+    <string name="alert_dns_replaced_text">%1$s перестал резолвить имена. Перешёл на %2$s до следующего переподключения.</string>
+    <string name="alert_dns_dead_text">%1$s перестал резолвить имена. Запасной выключен, так что имена резолвиться не будут.</string>
+
+    <!-- Обновление самого приложения: магазина нет, больше этого никто не сделает. -->
+    <string name="settings_updates">Обновления</string>
+    <string name="settings_update_auto">Проверять автоматически</string>
+    <string name="settings_update_auto_subtitle">Спрашивать GitHub о новой версии каждые 12 часов</string>
+    <string name="settings_update_check">Проверить</string>
+    <string name="settings_update_checking">Проверяю…</string>
+    <string name="settings_update_none">%1$s — самая свежая версия</string>
+    <string name="settings_update_available">Доступна версия %1$s</string>
+    <string name="settings_update_download">Скачать</string>
+    <string name="settings_update_download_sized">Скачать (%1$s МБ)</string>
+    <string name="settings_update_later">Позже</string>
+    <string name="settings_update_downloading">Скачиваю %1$s…</string>
+    <string name="settings_update_ready">Версия %1$s готова к установке</string>
+    <string name="settings_update_install">Установить</string>
+    <string name="settings_update_retry">Повторить</string>
+
+    <string name="alert_update_title">Вышла версия %1$s</string>
+    <string name="alert_update_text">Откройте настройки, чтобы скачать и установить</string>
+
+    <string name="log_update_available">Вышла новая версия: %1$s</string>
+    <string name="log_update_none">Обновлений нет: %1$s — самая свежая версия</string>
+    <string name="log_update_downloaded">Версия %1$s скачана и готова к установке</string>
+    <string name="log_update_failed">Проверка обновлений: %1$s</string>
+
+    <string name="error_update_unreadable">Не удалось прочитать сведения о релизе</string>
+    <string name="error_update_no_asset">В релизе нет сборки для этой архитектуры (%1$s)</string>
+    <string name="error_update_download">Не удалось скачать (%1$s)</string>
 </resources>

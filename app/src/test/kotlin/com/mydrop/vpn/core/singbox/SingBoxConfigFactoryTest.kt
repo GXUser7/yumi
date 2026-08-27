@@ -2,6 +2,7 @@ package com.mydrop.vpn.core.singbox
 
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.parse.ProxyUriParser
@@ -323,9 +324,123 @@ class SingBoxConfigFactoryTest {
 
         // And it always reaches the server: measured over a bypass rule, the phone's own
         // connection would be reported as the server's throughput.
-        val probeRule = config.routeRules.first { it["inbound"] != null }
+        val probeRules = config.routeRules.filter { it["inbound"] != null }
+        val probeRule = probeRules.first { it["outbound"] != null }
         assertEquals("probe-in", probeRule["inbound"]!!.jsonArray.single().jsonPrimitive.content)
         assertEquals("proxy", probeRule["outbound"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * The one destination in the whole document that is resolved here rather than at the far end.
+     *
+     * Everything else hands its hostname to the outbound, which is why a dead resolver leaves no
+     * mark on any probe. This rule is what makes one connection depend on the DNS pipeline, so
+     * that the watchdog has a question whose answer is about DNS alone — and it has to be matched
+     * before the rule that routes, because routing is a final action and stops the matching.
+     */
+    @Test
+    fun `the dns probe is resolved locally, and before the probe is routed`() {
+        val config = Json.parseToJsonElement(
+            SingBoxConfigFactory.build(
+                requireNotNull(ProxyUriParser.parse("vless://u@a.example.com:443?security=tls#N")),
+                AppSettings(),
+                "/rule-sets",
+                ProbeEndpoint(port = 41234, username = "user", password = "secret"),
+            ),
+        ).jsonObject
+
+        val rules = config.routeRules
+        val resolveAt = rules.indexOfFirst { it["action"]?.jsonPrimitive?.content == "resolve" }
+        val routeAt = rules.indexOfFirst {
+            it["inbound"] != null && it["outbound"]?.jsonPrimitive?.content == "proxy"
+        }
+        assertTrue(resolveAt >= 0)
+        assertTrue("the resolve rule must be reached first", resolveAt < routeAt)
+
+        val resolve = rules[resolveAt]
+        assertEquals("probe-in", resolve["inbound"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals(
+            ProbeTargets.DNS,
+            resolve["domain"]!!.jsonArray.single().jsonPrimitive.content,
+        )
+        // And the tunnel probe is deliberately NOT in it: it has to keep passing while DNS is
+        // dead, or a broken resolver would send the watchdog hunting through every server.
+        assertTrue(rules.none { rule ->
+            rule["domain"]?.jsonArray?.any { it.jsonPrimitive.content == ProbeTargets.TUNNEL } == true
+        })
+    }
+
+    /**
+     * The lookup that finds a named resolver goes through the tunnel, not out of the phone.
+     *
+     * It used to be plain UDP on port 53, direct — the exact traffic Russian DPI rewrites. That
+     * made a healthy resolver unreachable whenever the question "what is its address" was
+     * interfered with, and every name on the phone stopped resolving at once, for a reason nobody
+     * would think to look for.
+     */
+    @Test
+    fun `a named remote resolver is bootstrapped through the proxy`() {
+        val servers = Json.parseToJsonElement(
+            SingBoxConfigFactory.build(
+                node = requireNotNull(ProxyUriParser.parse("vless://u@a.example.com:443?security=tls#N")),
+                settings = AppSettings(),
+                ruleSetDir = "/rule-sets",
+                dnsOverride = "https://xbox-dns.ru/dns-query",
+            ),
+        ).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+
+        val remote = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-remote" }
+        assertEquals("dns-bootstrap-proxy", remote["domain_resolver"]!!.jsonPrimitive.content)
+
+        val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap-proxy" }
+        assertEquals("proxy", bootstrap["detour"]!!.jsonPrimitive.content)
+        // Numeric, or it would need the very thing it exists to find.
+        assertTrue(bootstrap["server"]!!.jsonPrimitive.content.first().isDigit())
+
+        // And no plain UDP resolver was added alongside it: the direct one here is numeric, so
+        // nothing else needs bootstrapping and nothing else leaves on port 53.
+        assertTrue(servers.none { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" })
+    }
+
+    /** The fallback replaces the resolver the tunnel actually queries, and only that one. */
+    @Test
+    fun `the dns fallback swaps the resolver the routing mode queries`() {
+        fun remoteOf(mode: RoutingMode) = Json.parseToJsonElement(
+            SingBoxConfigFactory.build(
+                node = requireNotNull(ProxyUriParser.parse("vless://u@a.example.com:443?security=tls#N")),
+                settings = AppSettings(routingMode = mode),
+                ruleSetDir = "/rule-sets",
+                dnsOverride = "https://xbox-dns.ru/dns-query",
+                dnsFallback = true,
+            ),
+        ).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+
+        val proxied = remoteOf(RoutingMode.Rules)
+            .first { it["tag"]!!.jsonPrimitive.content == "dns-remote" }
+        assertEquals("1.1.1.1", proxied["server"]!!.jsonPrimitive.content)
+        // Numeric now, so the bootstrap it needed is gone with it.
+        assertNull(proxied["domain_resolver"])
+
+        // Direct mode queries dns-direct, so that is the one that has to change.
+        val direct = remoteOf(RoutingMode.Direct)
+            .first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+        assertEquals("1.1.1.1", direct["server"]!!.jsonPrimitive.content)
+    }
+
+    /** Falling back from 1.1.1.1 has to land somewhere other than 1.1.1.1. */
+    @Test
+    fun `the fallback steps aside when it is already the chosen resolver`() {
+        val remote = Json.parseToJsonElement(
+            SingBoxConfigFactory.build(
+                node = requireNotNull(ProxyUriParser.parse("vless://u@a.example.com:443?security=tls#N")),
+                settings = AppSettings(remoteDns = "https://1.1.1.1/dns-query"),
+                ruleSetDir = "/rule-sets",
+                dnsFallback = true,
+            ),
+        ).jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "dns-remote" }
+
+        assertEquals("8.8.8.8", remote["server"]!!.jsonPrimitive.content)
     }
 
 
