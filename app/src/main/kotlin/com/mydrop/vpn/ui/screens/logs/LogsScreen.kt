@@ -15,7 +15,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -50,6 +57,9 @@ fun LogsScreen(
 ) {
     var minimumLevel by remember { mutableStateOf(LogEntry.Level.Debug) }
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+    val copiedTemplate = stringResource(R.string.logs_copied)
+    val nothingToCopy = stringResource(R.string.logs_nothing_to_copy)
 
     val visible = remember(entries, minimumLevel) {
         entries.filter { it.level.ordinal >= minimumLevel.ordinal }
@@ -76,6 +86,17 @@ fun LogsScreen(
             modifier = Modifier.padding(bottom = 10.dp),
             actions = {
                 TonalIconButton(Icons.Rounded.ArrowBack, stringResource(R.string.action_back), onBack)
+                Spacer(Modifier.width(8.dp))
+                TonalIconButton(
+                    Icons.Rounded.ContentCopy,
+                    stringResource(R.string.action_copy_logs),
+                    // What is on screen, not everything held in memory: the filter above is the
+                    // reader's way of saying which lines they are interested in, and a copy that
+                    // ignored it would paste a thousand trace lines around the one they wanted.
+                    onClick = {
+                        copyToClipboard(context, visible, copiedTemplate, nothingToCopy)
+                    },
+                )
                 Spacer(Modifier.width(8.dp))
                 TonalIconButton(
                     Icons.Rounded.DeleteSweep,
@@ -151,3 +172,38 @@ private fun LogRow(entry: LogEntry) {
 }
 
 private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+/**
+ * Puts the visible log on the clipboard, in the same shape it has on screen.
+ *
+ * Plain text rather than anything structured, because the only thing anyone does with this is
+ * paste it into a message to ask what went wrong.
+ */
+private fun copyToClipboard(
+    context: Context,
+    entries: List<LogEntry>,
+    copiedTemplate: String,
+    nothingToCopy: String,
+) {
+    if (entries.isEmpty()) {
+        Toast.makeText(context, nothingToCopy, Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    val text = entries.joinToString("\n") { entry ->
+        "${timeFormatter.format(Date(entry.timestampMillis))} ${entry.level.name.uppercase()} " +
+            entry.message
+    }
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    if (clipboard == null) {
+        Toast.makeText(context, nothingToCopy, Toast.LENGTH_SHORT).show()
+        return
+    }
+    clipboard.setPrimaryClip(ClipData.newPlainText("Yumi", text))
+
+    // Android 13 and up shows its own confirmation for every copy, and a toast on top of it is
+    // the same news twice.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, copiedTemplate.format(entries.size), Toast.LENGTH_SHORT).show()
+    }
+}
