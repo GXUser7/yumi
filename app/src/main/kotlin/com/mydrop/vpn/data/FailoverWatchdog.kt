@@ -106,7 +106,7 @@ class FailoverWatchdog(
         watching = scope.launch {
             logs.trace(
                 TAG,
-                "watch started, grace ${GRACE_MILLIS / 1000}s then every " +
+                "watch started, grace ${GRACE_MILLIS / 1000}s then probe, then every " +
                     "${FailoverPolicy.PROBE_INTERVAL_MILLIS / 1000}s " +
                     "(${FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS / 1000}s after a failure, " +
                     "autoFailover=${settings.value.autoFailover})",
@@ -128,6 +128,14 @@ class FailoverWatchdog(
             var recoveries = 0
             // Only so the hold is announced once per outage rather than every probe.
             var offline = false
+            // The grace above is the wait before the first probe. Waiting again at the top of the
+            // first pass made it the grace *plus* a full interval — thirty-five seconds before the
+            // tunnel was asked anything, where the comment on the grace promises fifteen. It cost
+            // twenty seconds on every genuine outage, measured on a phone: a server that carried
+            // nothing from the moment it came up was left forty seconds later, and twenty of those
+            // were this.
+            var firstPass = true
+            var movedTo: String? = null
             while (isActive) {
                 // Slow while the server answers, fast once one probe has failed: the wait shrinks
                 // exactly when the user is sitting through an outage. See the policy for why.
@@ -136,16 +144,20 @@ class FailoverWatchdog(
                 // connection pinned to the old interface, so whether this server still works is a
                 // question with a fresh answer — waiting out the clock to ask it is up to twenty
                 // seconds of an outage the user is already feeling.
-                val movedTo = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
-                    handovers.receive()
-                }
-                if (movedTo != null) {
-                    logs.trace(TAG, "handover to $movedTo, probing early")
-                    // Measured after the core has had a moment to re-dial. Probing into the gap a
-                    // handover opens measures the handover, not the server — and with one failure
-                    // now enough to move, that reading would cost a switch every time the user
-                    // walked out of Wi-Fi range.
-                    delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                if (firstPass) {
+                    firstPass = false
+                } else {
+                    movedTo = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
+                        handovers.receive()
+                    }
+                    if (movedTo != null) {
+                        logs.trace(TAG, "handover to $movedTo, probing early")
+                        // Measured after the core has had a moment to re-dial. Probing into the
+                        // gap a handover opens measures the handover, not the server — and with
+                        // one failure now enough to move, that reading would cost a switch every
+                        // time the user walked out of Wi-Fi range.
+                        delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                    }
                 }
                 if (!settings.value.autoFailover) {
                     failures = 0
