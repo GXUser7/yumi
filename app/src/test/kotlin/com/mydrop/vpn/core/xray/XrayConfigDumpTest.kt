@@ -78,6 +78,24 @@ class XrayConfigDumpTest {
             "hysteria2://password@se.example.com:443?sni=se.example.com#hy2",
             AppSettings(),
         )
+        // Salamander, which Xray keeps outside the protocol entirely: a share link calls it obfs,
+        // the core knows it only as a packet mask in `finalmask`. Emitted as `obfs` it would be
+        // ignored without complaint, and the client would speak plain QUIC at a server expecting
+        // masked packets.
+        dump(
+            "hysteria2-salamander",
+            "hysteria2://password@se.example.com:443?sni=se.example.com" +
+                "&obfs=salamander&obfs-password=obfspass#hy2obfs",
+            AppSettings(),
+        )
+        // A link that names no TLS at all. Hysteria2 has no unencrypted form, and its dialer fails
+        // with "tls config is nil" unless `security` says tls — so the generator has to supply it
+        // rather than reproduce the omission.
+        dump(
+            "hysteria2-no-tls",
+            "hysteria2://password@no-sni.example.com:8443#hy2bare",
+            AppSettings(),
+        )
         dump(
             "shadowsocks",
             "ss://YWVzLTI1Ni1nY206c2VjcmV0@us.example.com:8388#ss",

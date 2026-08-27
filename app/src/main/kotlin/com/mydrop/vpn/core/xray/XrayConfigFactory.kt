@@ -167,6 +167,14 @@ object XrayConfigFactory {
 
     // ------------------------------------------------------------------ Outbounds
 
+    /**
+     * Every host here is `node.server`, never `node.address`.
+     *
+     * `ProxyNode.address` is a display string — `"$server:$port"` — and Xray's `Address` accepts
+     * any string as a domain name. So `"example.com:443"` in an `address` field is a configuration
+     * the core loads without complaint and then cannot resolve: the outbound exists, the tunnel
+     * comes up, and nothing crosses it. The check for this is in `XrayConfigFactoryTest`.
+     */
     private fun buildOutbound(node: ProxyNode): JsonObject = buildJsonObject {
         put("tag", PROXY_TAG)
         put("protocol", node.settings.xrayProtocol())
@@ -192,7 +200,7 @@ object XrayConfigFactory {
         is ProxySettings.Vless -> buildJsonObject {
             putJsonArray("vnext") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     putJsonArray("users") {
                         addJsonObject {
@@ -209,7 +217,7 @@ object XrayConfigFactory {
         is ProxySettings.Vmess -> buildJsonObject {
             putJsonArray("vnext") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     putJsonArray("users") {
                         addJsonObject {
@@ -225,7 +233,7 @@ object XrayConfigFactory {
         is ProxySettings.Trojan -> buildJsonObject {
             putJsonArray("servers") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     put("password", password)
                 }
@@ -235,7 +243,7 @@ object XrayConfigFactory {
         is ProxySettings.Shadowsocks -> buildJsonObject {
             putJsonArray("servers") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     put("method", method)
                     put("password", password)
@@ -243,22 +251,25 @@ object XrayConfigFactory {
             }
         }
 
-        // Hysteria2 is split across two objects in Xray where sing-box has one: the credential is
-        // repeated in the transport below, and `version` has to say 2 in both places or the core
-        // refuses the whole document (`infra/conf/transport_method.go:776-778`).
+        // Hysteria2 is split across two objects in Xray where sing-box has one, and the split is
+        // not where it looks: the credential does NOT live here. The client-side settings are
+        // exactly version, address and port (`infra/conf/hysteria.go:14-16`) — `users` belongs to
+        // the server config, and putting the password there produces an outbound that dials,
+        // completes nothing, and reports no configuration error at all. The password goes into
+        // `streamSettings.hysteriaSettings.auth`; see [buildStream].
+        //
+        // `version` has to say 2 here and there both, or the core refuses the whole document
+        // (`infra/conf/transport_method.go:776-778`).
         is ProxySettings.Hysteria2 -> buildJsonObject {
             put("version", 2)
-            put("address", node.address)
+            put("address", node.server)
             put("port", node.port)
-            putJsonArray("users") {
-                addJsonObject { put("auth", password) }
-            }
         }
 
         is ProxySettings.Http -> buildJsonObject {
             putJsonArray("servers") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     if (username.isNotBlank()) {
                         putJsonArray("users") {
@@ -275,7 +286,7 @@ object XrayConfigFactory {
         is ProxySettings.Socks -> buildJsonObject {
             putJsonArray("servers") {
                 addJsonObject {
-                    put("address", node.address)
+                    put("address", node.server)
                     put("port", node.port)
                     if (username.isNotBlank()) {
                         putJsonArray("users") {
@@ -299,12 +310,22 @@ object XrayConfigFactory {
     private fun buildStream(node: ProxyNode): JsonObject? {
         val network = node.xrayNetwork()
         val tls = node.tls
+        val hysteria = node.settings as? ProxySettings.Hysteria2
         val secured = tls != null && tls.enabled
-        if (network == null && !secured) return null
+        if (network == null && !secured && hysteria == null) return null
 
         return buildJsonObject {
             network?.let { put("network", it) }
             when {
+                // Hysteria2 runs on QUIC and there is no unencrypted form of it. The dialer reads
+                // the TLS config out of the stream settings and fails the connection outright with
+                // "tls config is nil" when `security` says anything else
+                // (`transport/internet/hysteria/dialer.go:322-325`), so a link that named no TLS
+                // gets it anyway rather than producing a node that cannot dial.
+                hysteria != null -> {
+                    put("security", "tls")
+                    put("tlsSettings", buildTls(tls, node))
+                }
                 tls == null || !tls.enabled -> put("security", "none")
                 tls.isReality -> {
                     put("security", "reality")
@@ -318,11 +339,54 @@ object XrayConfigFactory {
             node.transport?.let { transport ->
                 transportSettings(transport)?.let { put(transport.xraySettingsKey(), it) }
             }
-            val settings = node.settings
-            if (settings is ProxySettings.Hysteria2) {
+            if (hysteria != null) {
                 putJsonObject("hysteriaSettings") {
                     put("version", 2)
-                    put("auth", settings.password)
+                    // The credential, and the only place the core looks for it.
+                    put("auth", hysteria.password)
+                }
+                buildFinalMask(hysteria)?.let { put("finalmask", it) }
+            }
+        }
+    }
+
+    /**
+     * The obfuscator and the congestion controller, which Xray keeps outside the protocol.
+     *
+     * In a share link and in sing-box, Salamander is a field on the Hysteria2 outbound. Xray has no
+     * `obfs` field anywhere: obfuscation is a general packet-masking layer wrapping the raw
+     * `net.PacketConn` before QUIC sees it, and Salamander is one of the maskers registered in it
+     * (`infra/conf/transport_finalmask.go:77-81`). Emitting it as `obfs` would be silently ignored,
+     * and the client would speak plain QUIC at a server expecting masked packets — a node that
+     * connects and carries nothing.
+     *
+     * Bandwidth lives here too. The obvious `up`/`down` inside `hysteriaSettings` are read, warned
+     * about and discarded (`infra/conf/transport_method.go:779-781`); the values the core actually
+     * uses are `brutalUp` and `brutalDown`, and they are strings with a unit rather than numbers.
+     */
+    private fun buildFinalMask(hysteria: ProxySettings.Hysteria2): JsonObject? {
+        val obfuscated = hysteria.obfsType.equals("salamander", ignoreCase = true) &&
+            hysteria.obfsPassword.isNotBlank()
+        val shaped = hysteria.upMbps > 0 || hysteria.downMbps > 0
+        if (!obfuscated && !shaped) return null
+
+        return buildJsonObject {
+            if (obfuscated) {
+                putJsonArray("udp") {
+                    addJsonObject {
+                        put("type", "salamander")
+                        putJsonObject("settings") { put("password", hysteria.obfsPassword) }
+                    }
+                }
+            }
+            if (shaped) {
+                putJsonObject("quicParams") {
+                    // Brutal is the point of declaring a bandwidth at all: it paces to the stated
+                    // rate instead of discovering one. Naming a rate and leaving the controller on
+                    // its default would make the numbers decorative.
+                    put("congestion", "brutal")
+                    if (hysteria.upMbps > 0) put("brutalUp", "${hysteria.upMbps}mbps")
+                    if (hysteria.downMbps > 0) put("brutalDown", "${hysteria.downMbps}mbps")
                 }
             }
         }
@@ -401,18 +465,19 @@ object XrayConfigFactory {
         else -> null
     }
 
-    private fun buildTls(tls: TlsOptions, node: ProxyNode): JsonObject = buildJsonObject {
-        put("serverName", tls.serverName ?: node.address)
-        if (tls.insecure) put("allowInsecure", true)
-        if (tls.alpn.isNotEmpty()) {
+    /** @param tls null when the link named no TLS at all, which Hysteria2 still requires. */
+    private fun buildTls(tls: TlsOptions?, node: ProxyNode): JsonObject = buildJsonObject {
+        put("serverName", tls?.serverName ?: node.server)
+        if (tls?.insecure == true) put("allowInsecure", true)
+        if (tls != null && tls.alpn.isNotEmpty()) {
             putJsonArray("alpn") { tls.alpn.forEach { add(it) } }
         }
-        tls.fingerprint?.takeIf { it.isNotBlank() }?.let { put("fingerprint", it) }
+        tls?.fingerprint?.takeIf { it.isNotBlank() }?.let { put("fingerprint", it) }
     }
 
     private fun buildReality(tls: TlsOptions, node: ProxyNode): JsonObject = buildJsonObject {
         val reality = requireNotNull(tls.reality)
-        put("serverName", tls.serverName ?: node.address)
+        put("serverName", tls.serverName ?: node.server)
         put("publicKey", reality.publicKey)
         if (reality.shortId.isNotBlank()) put("shortId", reality.shortId)
         if (reality.spiderX.isNotBlank()) put("spiderX", reality.spiderX)
