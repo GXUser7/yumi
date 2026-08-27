@@ -170,6 +170,54 @@ class XrayConfigFactoryTest {
         assertEquals("www.microsoft.com", reality.str("serverName"))
     }
 
+    // ------------------------------------------------------------------ Geo databases
+
+    /**
+     * Xray resolves `geoip:` and `geosite:` while parsing, and a reference it cannot resolve
+     * rejects the whole document rather than the one rule. So on a phone that has not finished
+     * downloading twenty-five megabytes of databases, the choice is between a configuration
+     * without those rules and no tunnel at all.
+     */
+    @Test
+    fun `no geo reference survives when the databases are missing`() {
+        val text = XrayConfigFactory.build(
+            requireNotNull(ProxyUriParser.parse("vless://$uuid@de.example.com:443?security=tls#N")),
+            AppSettings(routingMode = com.mydrop.vpn.core.model.RoutingMode.Rules, blockAds = true),
+            geoAvailable = false,
+        )
+        assertTrue("geoip: leaked into the document", !text.contains("geoip:"))
+        assertTrue("geosite: leaked into the document", !text.contains("geosite:"))
+    }
+
+    /** And with them present the rules are actually there, or the flag would be meaningless. */
+    @Test
+    fun `the geo rules appear once the databases are there`() {
+        val text = XrayConfigFactory.build(
+            requireNotNull(ProxyUriParser.parse("vless://$uuid@de.example.com:443?security=tls#N")),
+            AppSettings(routingMode = com.mydrop.vpn.core.model.RoutingMode.Rules, blockAds = true),
+            geoAvailable = true,
+        )
+        assertTrue(text.contains("geosite:category-ru"))
+        assertTrue(text.contains("geoip:ru"))
+        assertTrue(text.contains("geosite:category-ads-all"))
+    }
+
+    /**
+     * Reaching the router or a printer on the same Wi-Fi must not wait on a download. The private
+     * ranges are fixed by the RFCs that reserved them, so they are written out rather than looked
+     * up in a database.
+     */
+    @Test
+    fun `the lan bypass needs no database`() {
+        val text = XrayConfigFactory.build(
+            requireNotNull(ProxyUriParser.parse("vless://$uuid@de.example.com:443?security=tls#N")),
+            AppSettings(bypassLan = true),
+            geoAvailable = false,
+        )
+        assertTrue(text.contains("192.168.0.0/16"))
+        assertTrue(text.contains("fc00::/7"))
+    }
+
     // ------------------------------------------------------------------ The tunnel
 
     /**

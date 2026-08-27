@@ -31,9 +31,11 @@ class XrayConfigDumpTest {
         uri: String,
         settings: AppSettings,
         probe: ProbeEndpoint? = null,
+        geoAvailable: Boolean = true,
     ) {
         val node = requireNotNull(ProxyUriParser.parse(uri)) { "unparsable: $uri" }
-        File(outputDir, "$name.json").writeText(XrayConfigFactory.build(node, settings, probe))
+        File(outputDir, "$name.json")
+            .writeText(XrayConfigFactory.build(node, settings, probe, geoAvailable = geoAvailable))
     }
 
     @Test
@@ -143,6 +145,15 @@ class XrayConfigDumpTest {
                 remoteDns = "https://[2606:4700:4700::1111]/dns-query",
                 directDns = "2620:fe::fe",
             ),
+        )
+
+        // The shape a phone has before it has finished downloading the databases. Validated against
+        // a core that has no .dat files at all, which is the only way to prove the omission works.
+        dump(
+            "no-geo",
+            "vless://11111111-2222-3333-4444-555555555555@de.example.com:443?security=tls#nogeo",
+            AppSettings(routingMode = RoutingMode.Rules, blockAds = true, bypassLan = true),
+            geoAvailable = false,
         )
 
         assertTrue(

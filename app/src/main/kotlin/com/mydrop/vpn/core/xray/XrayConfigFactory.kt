@@ -55,14 +55,22 @@ object XrayConfigFactory {
 
     private val json = Json { prettyPrint = true }
 
+    /**
+     * @param geoAvailable whether `geoip.dat` and `geosite.dat` are on disk. False keeps every
+     *   `geoip:`/`geosite:` reference out of the document, because Xray resolves them while parsing
+     *   and one it cannot resolve rejects the whole configuration rather than the single rule
+     *   (`common/geodata/geodat_loader.go:16-25`). A tunnel that routes everything through the
+     *   proxy beats one that will not start.
+     */
     fun build(
         node: ProxyNode,
         settings: AppSettings,
         probe: ProbeEndpoint? = null,
         dnsOverride: String? = null,
+        geoAvailable: Boolean = true,
     ): String = json.encodeToString(
         JsonObject.serializer(),
-        buildConfig(node, settings.withDnsOverride(dnsOverride), probe),
+        buildConfig(node, settings.withDnsOverride(dnsOverride), probe, geoAvailable),
     )
 
     /** See the sing-box factory for why the override lands on whichever server actually answers. */
@@ -76,6 +84,7 @@ object XrayConfigFactory {
         node: ProxyNode,
         settings: AppSettings,
         probe: ProbeEndpoint?,
+        geoAvailable: Boolean,
     ): JsonObject = buildJsonObject {
         putJsonObject("log") { put("loglevel", settings.logLevel.toXrayLevel()) }
 
@@ -116,7 +125,7 @@ object XrayConfigFactory {
             }
         }
 
-        put("routing", buildRouting(settings))
+        put("routing", buildRouting(settings, geoAvailable))
     }
 
     // ------------------------------------------------------------------ Inbounds
@@ -515,7 +524,7 @@ object XrayConfigFactory {
         put("tag", DNS_IN_TAG)
     }
 
-    private fun buildRouting(settings: AppSettings): JsonObject = buildJsonObject {
+    private fun buildRouting(settings: AppSettings, geoAvailable: Boolean): JsonObject = buildJsonObject {
         put("domainStrategy", "IPIfNonMatch")
         putJsonArray("rules") {
             // Queries the core makes on its own behalf go out directly. Sending them through a
@@ -553,12 +562,26 @@ object XrayConfigFactory {
             if (settings.bypassLan) {
                 addJsonObject {
                     put("type", "field")
-                    putJsonArray("ip") { add("geoip:private") }
+                    // Spelled out rather than written as `geoip:private`, so that reaching the
+                    // router, the printer or a phone on the same Wi-Fi does not depend on a
+                    // twenty-three megabyte database having finished downloading. These ranges are
+                    // fixed by the RFCs that reserved them and will not change.
+                    putJsonArray("ip") {
+                        add("10.0.0.0/8")
+                        add("172.16.0.0/12")
+                        add("192.168.0.0/16")
+                        add("127.0.0.0/8")
+                        add("169.254.0.0/16")
+                        add("100.64.0.0/10")
+                        add("::1/128")
+                        add("fc00::/7")
+                        add("fe80::/10")
+                    }
                     put("outboundTag", DIRECT_TAG)
                 }
             }
 
-            if (settings.blockAds) {
+            if (settings.blockAds && geoAvailable) {
                 addJsonObject {
                     put("type", "field")
                     putJsonArray("domain") { add("geosite:category-ads-all") }
@@ -573,7 +596,10 @@ object XrayConfigFactory {
                     put("network", "tcp,udp")
                     put("outboundTag", DIRECT_TAG)
                 }
-                RoutingMode.Rules -> {
+                // Without the databases this is the same as Global: everything goes through the
+                // proxy. Saying so by omission rather than by an unresolvable rule is the whole
+                // point — the alternative is a configuration the core refuses to load.
+                RoutingMode.Rules -> if (geoAvailable) {
                     addJsonObject {
                         put("type", "field")
                         putJsonArray("domain") { add("geosite:category-ru") }
