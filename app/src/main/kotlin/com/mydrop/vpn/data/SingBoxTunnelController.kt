@@ -32,6 +32,7 @@ class SingBoxTunnelController(
     override val traffic: StateFlow<TrafficStats> = MyDropVpnService.traffic
     override val isReal: Boolean = true
     override val handovers: Flow<String> = MyDropVpnService.handovers
+    override val hasNetwork: StateFlow<Boolean> = MyDropVpnService.hasNetwork
 
     /**
      * Building a configuration extracts the bundled rule-sets and reads the settings store, and

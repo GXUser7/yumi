@@ -126,6 +126,8 @@ class FailoverWatchdog(
 
             var failures = 0
             var recoveries = 0
+            // Only so the hold is announced once per outage rather than every probe.
+            var offline = false
             while (isActive) {
                 // Slow while the server answers, fast once one probe has failed: the wait shrinks
                 // exactly when the user is sitting through an outage. See the policy for why.
@@ -148,6 +150,24 @@ class FailoverWatchdog(
                 if (!settings.value.autoFailover) {
                     failures = 0
                     continue
+                }
+
+                // A phone with no default interface has no internet, and a probe run into that
+                // says nothing about the server carrying the tunnel. Counting it as a failure is
+                // how walking out of Wi-Fi range came to read as "this server is dead" — and at
+                // one failure being enough to move, that verdict arrived within seconds of the
+                // signal going. There is nothing to measure and nowhere to move to.
+                if (!tunnel.hasNetwork.value) {
+                    failures = 0
+                    if (!offline) {
+                        offline = true
+                        logs.trace(TAG, "no default interface, holding")
+                    }
+                    continue
+                }
+                if (offline) {
+                    offline = false
+                    logs.trace(TAG, "default interface back, resuming")
                 }
                 val current = profiles.selectedNode() ?: continue
 

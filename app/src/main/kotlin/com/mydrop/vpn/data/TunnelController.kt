@@ -5,6 +5,7 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -30,6 +31,19 @@ interface TunnelController {
      * the correct reading for the simulated one.
      */
     val handovers: Flow<String> get() = emptyFlow()
+
+    /**
+     * Whether the device has a default network at all.
+     *
+     * True by default: a controller that cannot know must not claim the phone is offline, because
+     * [FailoverWatchdog] stops acting on probes while this is false and a wrong `false` would
+     * disable failover entirely.
+     */
+    val hasNetwork: StateFlow<Boolean> get() = AlwaysOnline
+
+    companion object {
+        private val AlwaysOnline = MutableStateFlow(true)
+    }
 
     /**
      * Consent intent to launch before connecting, or null when no consent is needed. Must be
