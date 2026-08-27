@@ -3,7 +3,6 @@ package com.mydrop.vpn.core.parse
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.TransportOptions
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -161,16 +160,14 @@ class UnsupportedTransportTest {
     // ------------------------------------------------------------------ What each core refuses
 
     /**
-     * sing-box has no XHTTP and is not getting one, so the refusal has to happen before a document
-     * is handed to it — loudly, because the alternative is the failure this whole file is named
-     * after.
+     * XHTTP is the transport this port exists for, and on Xray it is carried rather than refused.
+     * The refusal that used to stand here belonged to sing-box, which has no implementation of it
+     * and never will; that core is gone from this branch and the assertion went with it.
      */
     @Test
-    fun `the sing-box factory refuses xhttp rather than emitting a node without it`() {
+    fun `the xray factory carries xhttp rather than refusing it`() {
         val node = requireNotNull(vless("type=xhttp&path=%2Fx"))
-        assertThrows(IllegalArgumentException::class.java) {
-            SingBoxConfigFactory.build(node, AppSettings(), ruleSetDir = "")
-        }
+        assertTrue(XrayConfigFactory.build(node, AppSettings()).contains("xhttpSettings"))
     }
 
     /**

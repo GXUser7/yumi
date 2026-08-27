@@ -18,6 +18,12 @@ import java.io.File
  * a document Xray refuses is at least a loud failure, while a document it accepts and misreads is
  * a server that connects and carries nothing.
  *
+ * What this cannot catch is anything that only fails on Android. The validating binary runs on a
+ * desktop, where the core's platform-specific paths are different ones — an empty TUN interface name
+ * sends it looking for a free one through netlink, which desktops allow and Android has refused
+ * since 11. That document validated here and was rejected on the phone. So a pass here means the
+ * schema is right, not that the tunnel will come up.
+ *
  * These files are a side effect, not a declared task output, and Gradle therefore has no idea they
  * exist: an up-to-date or cached test run skips this class and leaves the directory holding
  * whatever it held before. Anything that validates them has to force this class to run first.

@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import com.mydrop.vpn.R
 
 /**
@@ -129,6 +130,12 @@ class AppContainer(context: Context) {
     )
 
     /** Keeps the failover list free of servers a subscription refresh has taken away. */
+    /**
+     * The geo databases Xray routes by, and the one thing in this app that has to be downloaded
+     * before it can work properly.
+     */
+    val geoAssets = GeoAssetStore(context)
+
     val staleSelectionPruner = StaleSelectionPruner(
         profiles = profiles,
         settings = settings,
@@ -144,6 +151,32 @@ class AppContainer(context: Context) {
         failoverWatchdog.start()
         staleSelectionPruner.start()
         subscriptionScheduler.start()
+        fetchGeoAssets()
+    }
+
+    /**
+     * Fetches the routing databases once, in the background, on whichever run first finds them
+     * missing.
+     *
+     * Deliberately not blocking anything. Twenty-five megabytes is a real download and the tunnel
+     * works without it — routing by rules simply behaves as global until it lands, which is a
+     * degradation the user can see rather than a failure they cannot. Blocking the first connection
+     * on it would trade something that works for something that is merely more correct.
+     *
+     * No retry loop either: a failure is logged and the next launch tries again. A phone that has
+     * no internet is not a phone that wants this retried every thirty seconds.
+     */
+    private fun fetchGeoAssets() {
+        if (geoAssets.available()) return
+        applicationScope.launch {
+            logs.info(R.string.log_geo_downloading)
+            val failure = geoAssets.download()
+            if (failure == null) {
+                logs.info(R.string.log_geo_ready)
+            } else {
+                logs.warn(R.string.log_geo_failed, failure)
+            }
+        }
     }
 
     /** Whether the current connection is metered; see MainViewModel.speedTestIsMetered. */

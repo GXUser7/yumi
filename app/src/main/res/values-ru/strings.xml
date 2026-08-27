@@ -451,4 +451,7 @@
     <string name="speed_metered_body">Замер открывает несколько потоков и может прогнать по несколько сотен мегабайт в каждую сторону. На тарифе с лимитом это платный трафик.</string>
     <string name="log_failover_home_abandoned">«%1$s» продолжает отваливаться — остаюсь на запасном</string>
     <string name="log_skipped_unsupported_transport">Пропущено серверов: %1$d — ядро не умеет %2$s</string>
+    <string name="log_geo_downloading">Скачиваю базы маршрутизации…</string>
+    <string name="log_geo_ready">Базы маршрутизации готовы</string>
+    <string name="log_geo_failed">Не удалось скачать базы маршрутизации: %1$s</string>
 </resources>

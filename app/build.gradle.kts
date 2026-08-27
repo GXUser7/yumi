@@ -125,9 +125,13 @@ kotlin {
 }
 
 dependencies {
-    // sing-box core, built from source with the SagerNet gomobile fork.
-    // See README for the exact build command; the AAR is not fetchable from any Maven repo.
-    implementation(files("libs/libbox.aar"))
+    // Xray core, built by tools/build-core.sh from core-xray/. Not fetchable from any Maven
+    // repository, and not in the repository either: it is sixty-odd megabytes per architecture.
+    //
+    // Exactly one core can be present. Both AARs are produced by gomobile and both therefore carry
+    // the same `go.Seq` runtime classes, so adding the second fails the build on duplicate classes
+    // long before it could fail on anything interesting.
+    implementation(files("libs/libyumi.aar"))
 
     implementation(platform(libs.compose.bom))
 

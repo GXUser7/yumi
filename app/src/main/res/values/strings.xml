@@ -455,4 +455,7 @@
     <string name="speed_metered_body">The test opens several streams and can move a few hundred megabytes each way. On a metered plan that is charged.</string>
     <string name="log_failover_home_abandoned">“%1$s” keeps dropping out — staying on the replacement</string>
     <string name="log_skipped_unsupported_transport">Skipped %1$d servers: the core cannot carry %2$s</string>
+    <string name="log_geo_downloading">Downloading the routing databases…</string>
+    <string name="log_geo_ready">Routing databases ready</string>
+    <string name="log_geo_failed">Could not download the routing databases: %1$s</string>
 </resources>

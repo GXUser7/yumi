@@ -142,6 +142,16 @@ object XrayConfigFactory {
         put("tag", TUN_TAG)
         put("protocol", "tun")
         putJsonObject("settings") {
+            // Present only to stop the core going looking for a free one. An empty name sends
+            // `TunConfig.Build` into `GetAvailableTunName`, which enumerates interfaces through
+            // netlink (`infra/conf/tun.go:64-68`) — and Android has refused apps that since 11,
+            // so the whole configuration is rejected with "netlinkrib: permission denied" before
+            // anything else is even looked at.
+            //
+            // The value itself does nothing here. The interface already exists: it was created by
+            // `VpnService.Builder` and handed over as a descriptor, and `AndroidTun` never consults
+            // this field. It matters only on the platforms where the core creates the device.
+            put("name", "tun0")
             put("mtu", settings.mtu)
             // Deliberately absent: autoOutboundsInterface. See the class comment — leaving it empty
             // is what keeps the core off SO_BINDTODEVICE and on VpnService.protect.

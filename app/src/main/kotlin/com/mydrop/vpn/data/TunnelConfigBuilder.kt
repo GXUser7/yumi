@@ -4,8 +4,7 @@ import android.content.Context
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
-import com.mydrop.vpn.core.model.RoutingMode
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.UUID
@@ -40,30 +39,25 @@ class TunnelConfigBuilder(
 
     /** Null when the configuration could not be built; the reason is already in the log. */
     fun build(node: ProxyNode): String? {
-        // Extraction happens here, before the core is handed paths it will read during startup.
-        // A rule-set the core cannot open fails the whole tunnel, not just one routing rule.
-        val ruleSets = RuleSetStore(context)
-        val ruleSetDir = ruleSets.ensureExtracted()
-        val missing = ruleSets.missing()
-
-        val effectiveSettings = if (missing.isEmpty()) {
-            settings.value
-        } else {
-            // Route by rules without the geo sets rather than refusing to connect: plain routing
-            // still works, and a tunnel that comes up beats one that will not.
+        // Asked here, before the core is handed a document that may name them. A `geoip:` or
+        // `geosite:` reference Xray cannot resolve rejects the whole configuration rather than the
+        // one rule, so the databases decide what may be written, not what may be ignored.
+        val missing = GeoAssetStore(context).missing()
+        if (missing.isNotEmpty()) {
+            // Routing by rules becomes routing everything through the proxy until the download
+            // finishes. A tunnel that comes up beats one that will not.
             logs.warn(R.string.log_georules_missing, missing.joinToString())
-            settings.value.copy(routingMode = RoutingMode.Global, blockAds = false)
         }
 
         val probe = newProbeEndpoint()
 
         return runCatching {
-            SingBoxConfigFactory.build(
+            XrayConfigFactory.build(
                 node = node,
-                settings = effectiveSettings,
-                ruleSetDir = ruleSetDir.absolutePath,
+                settings = settings.value,
                 probe = probe,
                 dnsOverride = selectedDns(),
+                geoAvailable = missing.isEmpty(),
             )
         }.onSuccess {
             // Only once the document exists: publishing an endpoint for a configuration that was

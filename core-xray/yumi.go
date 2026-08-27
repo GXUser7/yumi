@@ -14,6 +14,7 @@ package yumi
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -139,6 +140,38 @@ func Downlink() int64 { return counter("outbound>>>" + ProxyTag + ">>>traffic>>>
 // configuration gives its proxy outbound. It is spelled out in one place on each side rather than
 // derived, because a mismatch produces counters that stay at zero and explain nothing.
 const ProxyTag = "proxy"
+
+// StatsReport says why the counters are what they are.
+//
+// Exists because zero is indistinguishable from broken: a counter that was never registered, a
+// statistics app the configuration never asked for, and a tunnel that has genuinely moved nothing
+// all read the same from Kotlin. Only ever called from a log line.
+func StatsReport() string {
+	mu.Lock()
+	running := instance
+	mu.Unlock()
+	if running == nil {
+		return "core is not running"
+	}
+	feature := running.GetFeature(stats.ManagerType())
+	if feature == nil {
+		return "no stats manager: the configuration has no \"stats\" section"
+	}
+	manager, ok := feature.(stats.Manager)
+	if !ok {
+		return fmt.Sprintf("stats feature is a %T, not a Manager", feature)
+	}
+	up := manager.GetCounter("outbound>>>" + ProxyTag + ">>>traffic>>>uplink")
+	down := manager.GetCounter("outbound>>>" + ProxyTag + ">>>traffic>>>downlink")
+	if up == nil || down == nil {
+		return fmt.Sprintf(
+			"counters missing for tag %q (up=%v down=%v): the policy did not ask for them, "+
+				"or the outbound carries another tag",
+			ProxyTag, up != nil, down != nil,
+		)
+	}
+	return fmt.Sprintf("ok: up=%d down=%d", up.Value(), down.Value())
+}
 
 func counter(name string) int64 {
 	mu.Lock()
