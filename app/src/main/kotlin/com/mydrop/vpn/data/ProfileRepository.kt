@@ -211,12 +211,42 @@ class ProfileRepository(
                         )
                     }
                 },
-                selectedNodeId = current.selectedNodeId?.takeIf { id -> nodes.any { it.id == id } }
-                    ?: nodes.firstOrNull()?.id,
+                selectedNodeId = survivingSelection(current, nodes),
                 latencies = current.latencies.filterKeys { id -> nodes.any { it.id == id } },
             )
         }
         return added to removed
+    }
+
+    /**
+     * What the selection should be after a refresh.
+     *
+     * An id is a hash of the endpoint and the credentials, deliberately not the name — providers
+     * rename constantly, and a name-sensitive id would orphan the selection every refresh. The
+     * cost of that choice shows up here: a provider that rotates an address, a port or a key hands
+     * back the *same* server under a *different* id, and the old one looks deleted.
+     *
+     * The naive answer to that — fall back to the first node in the list — was caught in a field
+     * journal doing real harm. A working tunnel on Belgium survived a routine auto-refresh by
+     * being moved to France, which was dead; twenty seconds of no internet followed, and neither
+     * the switch nor its reason was anything the user had asked for or could see.
+     *
+     * So the name is used as a continuity key when the id fails, within the same subscription.
+     * It is a weaker key than the id and can miss — a provider that renames *and* re-addresses in
+     * the same refresh gets the old behaviour — but it cannot pick the wrong server, only fail to
+     * find the right one.
+     */
+    private fun survivingSelection(current: ProfileState, nodes: List<ProxyNode>): String? {
+        val selectedId = current.selectedNodeId ?: return nodes.firstOrNull()?.id
+        if (nodes.any { it.id == selectedId }) return selectedId
+
+        val was = current.nodes.firstOrNull { it.id == selectedId }
+        val sameName = was?.let { previous ->
+            nodes.firstOrNull {
+                it.subscriptionId == previous.subscriptionId && it.name == previous.name
+            }
+        }
+        return sameName?.id ?: nodes.firstOrNull()?.id
     }
 
     fun recordSubscriptionError(subscriptionId: String, message: String) = store.update { current ->
