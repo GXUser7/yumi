@@ -11,6 +11,7 @@ import com.mydrop.vpn.vpn.MyDropVpnService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -30,6 +31,7 @@ class SingBoxTunnelController(
     override val state: StateFlow<VpnState> = MyDropVpnService.state
     override val traffic: StateFlow<TrafficStats> = MyDropVpnService.traffic
     override val isReal: Boolean = true
+    override val handovers: Flow<String> = MyDropVpnService.handovers
 
     /**
      * Building a configuration extracts the bundled rule-sets and reads the settings store, and

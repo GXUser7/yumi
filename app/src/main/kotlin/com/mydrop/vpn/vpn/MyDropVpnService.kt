@@ -60,8 +60,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -106,6 +110,25 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         private val _traffic = MutableStateFlow(TrafficStats.Zero)
         val traffic: StateFlow<TrafficStats> = _traffic.asStateFlow()
+
+        /**
+         * Emitted with the new interface name whenever the tunnel moves between physical
+         * networks — Wi-Fi to cellular and back.
+         *
+         * This exists so the failover watchdog does not have to wait out its own clock to find
+         * out that the ground moved. A handover kills every connection pinned to the old
+         * interface, and whether the current server survives that is a question worth asking at
+         * once rather than up to twenty seconds later.
+         *
+         * Replay is zero and the buffer drops the oldest on overflow: a handover is only
+         * interesting while it is current, and a subscriber that was not listening at the time has
+         * nothing to catch up on.
+         */
+        private val _handovers = MutableSharedFlow<String>(
+            extraBufferCapacity = 4,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+        val handovers: SharedFlow<String> = _handovers.asSharedFlow()
 
         fun start(context: Context, config: String, nodeId: String, nodeName: String) {
             val intent = Intent(context, MyDropVpnService::class.java).apply {
@@ -854,6 +877,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             if (previousName != null && previousName != name) {
                 logs.trace(NATIVE_TAG, "handover $previousName -> $name, resetting network")
                 resetCoreNetwork()
+                // And tell the watchdog, which would otherwise learn about it from a probe that
+                // is up to a full interval away.
+                _handovers.tryEmit(name)
             }
         }
 

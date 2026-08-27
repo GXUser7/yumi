@@ -15,17 +15,81 @@ class FailoverPolicyTest {
         hasHome: Boolean = false,
         failbacks: Int = 0,
         sinceSwitch: Long = Long.MAX_VALUE / 2,
-    ) = FailoverPolicy.decide(failures, recoveries, hasHome, failbacks, sinceSwitch)
+        afterHandover: Boolean = false,
+    ) = FailoverPolicy.decide(
+        failures, recoveries, hasHome, failbacks, sinceSwitch, afterHandover,
+    )
 
     @Test
-    fun `a healthy server is left alone`() {
+    fun `a server that is answering is left alone`() {
         assertEquals(Decision.Hold, decide())
-        assertEquals(Decision.Hold, decide(failures = 1))
+    }
+
+    /**
+     * One failure is now enough, which reverses what 0.3.2 taught — and the reason it is safe is
+     * not that the threshold got braver but that the probe got better. It asks for a page through
+     * the tunnel rather than shaking hands with a port, so a failure means traffic did not get
+     * through. Waiting for a second one only adds an outage.
+     */
+    @Test
+    fun `one failed probe is enough to leave`() {
+        assertEquals(Decision.LeaveCurrent, decide(failures = 1))
+    }
+
+    /** The rate limit, not the count, is what keeps a single failure from causing a flap. */
+    @Test
+    fun `a single failure still cannot outrun the cooldown`() {
+        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 60_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, sinceSwitch = FailoverPolicy.SWITCH_COOLDOWN_MILLIS),
+        )
+    }
+
+    // ------------------------------------------------------------------ Handover
+
+    /**
+     * A handover is evidence rather than noise: the route the tunnel was riding is gone, so the
+     * question of whether the server survived it deserves an answer now, not in five minutes.
+     */
+    @Test
+    fun `a handover shortens the wait between moves without lowering the evidence`() {
+        // Too soon under the ordinary limit, allowed under the handover one.
+        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 45_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, sinceSwitch = 45_000L, afterHandover = true),
+        )
     }
 
     @Test
-    fun `a dead server is left once the failures add up`() {
-        assertEquals(Decision.LeaveCurrent, decide(failures = 2))
+    fun `a handover cannot move a tunnel whose server is answering`() {
+        assertEquals(Decision.Hold, decide(failures = 0, afterHandover = true))
+    }
+
+    @Test
+    fun `even a handover is rate limited`() {
+        assertEquals(
+            Decision.Hold,
+            decide(failures = 1, sinceSwitch = 5_000L, afterHandover = true),
+        )
+        assertTrue(
+            "a handover has to be faster than the ordinary limit, not unlimited",
+            FailoverPolicy.HANDOVER_COOLDOWN_MILLIS in 1 until FailoverPolicy.SWITCH_COOLDOWN_MILLIS,
+        )
+    }
+
+    /** Settling has to be short enough to read as "immediately" and long enough to re-dial. */
+    @Test
+    fun `the settle after a handover is measured in seconds, not tens of them`() {
+        assertTrue(
+            "settle was ${FailoverPolicy.HANDOVER_SETTLE_MILLIS}ms",
+            FailoverPolicy.HANDOVER_SETTLE_MILLIS in 1_000L..5_000L,
+        )
+        assertTrue(
+            "settling must not outlast the interval it replaces",
+            FailoverPolicy.HANDOVER_SETTLE_MILLIS < FailoverPolicy.PROBE_INTERVAL_MILLIS,
+        )
     }
 
     @Test
@@ -98,12 +162,14 @@ class FailoverPolicyTest {
     }
 
     /**
-     * The point of the adaptive interval, stated as time rather than as constants: confirming a
-     * dead server has to take meaningfully less than the fifty seconds a flat twenty-second
-     * cadence cost, while still taking two failures to be sure.
+     * The cost of noticing, stated as time rather than as constants.
+     *
+     * 0.3.2 needed two failures on a flat twenty-second cadence: fifty seconds with a five-second
+     * probe timeout, and that is what a user actually sat through. It now takes one interval and
+     * one timeout, and a handover skips even the interval.
      */
     @Test
-    fun `confirming a dead server takes well under the flat cadence it replaced`() {
+    fun `noticing a dead server costs one interval, not two`() {
         val probeTimeout = 5_000L
         var elapsed = 0L
         var failures = 0
@@ -112,10 +178,13 @@ class FailoverPolicyTest {
             failures++
         }
 
-        val flatCadence = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) *
-            FailoverPolicy.FAILURES_BEFORE_SWAP
-        assertTrue("took ${elapsed}ms, flat cadence was ${flatCadence}ms", elapsed < flatCadence)
-        assertTrue("took ${elapsed}ms, expected under 40s", elapsed <= 40_000L)
+        val oldWorstCase = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) * 2
+        assertTrue("took ${elapsed}ms, 0.3.2 took ${oldWorstCase}ms", elapsed < oldWorstCase)
+        assertTrue("took ${elapsed}ms, expected under 30s", elapsed <= 30_000L)
+
+        // And the path that matters when the network changes underneath the tunnel.
+        val afterHandover = FailoverPolicy.HANDOVER_SETTLE_MILLIS + probeTimeout
+        assertTrue("handover path took ${afterHandover}ms", afterHandover <= 10_000L)
     }
 
     /**

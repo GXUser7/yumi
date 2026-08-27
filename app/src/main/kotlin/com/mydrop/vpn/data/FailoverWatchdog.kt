@@ -8,10 +8,12 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Watches the server the tunnel is riding on, and moves off it when it stops answering.
@@ -104,12 +106,37 @@ class FailoverWatchdog(
             // A tunnel that just came up has not had time to break, and the core is still
             // settling. Probing into that only produces a false alarm.
             delay(GRACE_MILLIS)
+
+            // Collected into a conflated channel rather than raced against directly, because a
+            // handover that arrives *during* a probe would otherwise fall on the floor: the flow
+            // has no replay, and between cycles there is no subscriber to buffer it. Conflated
+            // because two handovers in a row still only pose one question, and it is the same one.
+            val handovers = Channel<String>(Channel.CONFLATED)
+            // A child of this watch, so it dies with it: cancelling `watching` cancels the
+            // collector too, and there is nothing to unwind by hand.
+            launch { tunnel.handovers.collect { handovers.trySend(it) } }
+
             var failures = 0
             var recoveries = 0
             while (isActive) {
                 // Slow while the server answers, fast once one probe has failed: the wait shrinks
                 // exactly when the user is sitting through an outage. See the policy for why.
-                delay(FailoverPolicy.nextProbeDelayMillis(failures))
+                //
+                // The wait ends early when the ground moves. A handover has just killed every
+                // connection pinned to the old interface, so whether this server still works is a
+                // question with a fresh answer — waiting out the clock to ask it is up to twenty
+                // seconds of an outage the user is already feeling.
+                val movedTo = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
+                    handovers.receive()
+                }
+                if (movedTo != null) {
+                    logs.trace(TAG, "handover to $movedTo, probing early")
+                    // Measured after the core has had a moment to re-dial. Probing into the gap a
+                    // handover opens measures the handover, not the server — and with one failure
+                    // now enough to move, that reading would cost a switch every time the user
+                    // walked out of Wi-Fi range.
+                    delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                }
                 if (!settings.value.autoFailover) {
                     failures = 0
                     continue
@@ -169,6 +196,7 @@ class FailoverWatchdog(
                     hasHome = home != null,
                     failbacksSoFar = failbacks[home?.id] ?: 0,
                     millisSinceLastSwitch = sinceSwitch,
+                    afterHandover = movedTo != null,
                 )
 
                 // One line per probe cycle, to logcat rather than the journal. Every input the
@@ -183,6 +211,7 @@ class FailoverWatchdog(
                         "${FailoverPolicy.PROBES_BEFORE_FAILBACK} " +
                         "failbacks=${failbacks[home?.id] ?: 0} " +
                         "sinceSwitch=${if (lastSwitchAtMillis == 0L) "never" else "${sinceSwitch / 1000}s"} " +
+                        (if (movedTo != null) "handover=$movedTo " else "") +
                         "-> $decision",
                 )
 
