@@ -3,7 +3,6 @@ package com.mydrop.vpn.ui.screens.settings
 import android.app.StatusBarManager
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
@@ -31,13 +30,10 @@ import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Contrast
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.NetworkPing
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Router
-import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Widgets
@@ -63,8 +59,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
@@ -402,19 +398,27 @@ fun SettingsScreen(
                     onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
                 )
                 AnimatedVisibility(visible = settings.autoFailover) {
-                    NavigationRow(
-                        title = stringResource(R.string.settings_failover_servers),
-                        subtitle = if (settings.failoverNodeIds.isEmpty()) {
-                            stringResource(R.string.settings_failover_auto)
-                        } else {
-                            stringResource(
-                                R.string.settings_failover_manual,
-                                settings.failoverNodeIds.size,
-                            )
-                        },
-                        icon = Icons.Rounded.SwapHoriz,
-                        onClick = onOpenFailover,
-                    )
+                    Column {
+                        SwitchRow(
+                            title = stringResource(R.string.settings_return_home),
+                            subtitle = stringResource(R.string.settings_return_home_subtitle),
+                            checked = settings.returnHome,
+                            onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
+                        )
+                        NavigationRow(
+                            title = stringResource(R.string.settings_failover_servers),
+                            subtitle = if (settings.failoverNodeIds.isEmpty()) {
+                                stringResource(R.string.settings_failover_auto)
+                            } else {
+                                stringResource(
+                                    R.string.settings_failover_manual,
+                                    settings.failoverNodeIds.size,
+                                )
+                            },
+                            icon = Icons.Rounded.SwapHoriz,
+                            onClick = onOpenFailover,
+                        )
+                    }
                 }
                 SwitchRow(
                     title = stringResource(R.string.settings_auto_update),
@@ -478,59 +482,28 @@ fun SettingsScreen(
             }
         }
 
-        item("about") {
+        item("version") {
             val context = LocalContext.current
-            // Read from the package rather than written here: the line above it claimed the core
-            // was "coming in the next stage" for as long as the core had been carrying traffic,
-            // which is what a hand-maintained string does.
+            // Read from the package rather than written here: a hand-maintained string on this
+            // line claimed the core was "coming in the next stage" for as long as the core had
+            // been carrying traffic.
             val version = remember(context) {
                 runCatching {
                     context.packageManager.getPackageInfo(context.packageName, 0).versionName
                 }.getOrNull()
-                    // The build type appends its own suffix, and "0.2.0-debug" on screen is a
+                    // The build type appends its own suffix, and "0.3.5-debug" on screen is a
                     // detail of how the APK was made, not something the reader has any use for.
                     ?.substringBefore('-')
                     .orEmpty()
             }
 
-            SettingsSection(
-                title = stringResource(R.string.settings_about),
-                icon = Icons.Rounded.Contrast,
-            ) {
-                Text(
-                    text = if (version.isEmpty()) "Yumi" else "Yumi $version",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = stringResource(R.string.settings_about_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.settings_speed_beta),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(4.dp))
-
-                NavigationRow(
-                    title = stringResource(R.string.settings_telegram),
-                    subtitle = stringResource(R.string.settings_telegram_subtitle),
-                    icon = Icons.Rounded.Send,
-                    // An arrow out rather than a chevron: this row leaves the app, and the two
-                    // should not look like the same kind of tap.
-                    trailingIcon = Icons.Rounded.OpenInNew,
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, TELEGRAM_URL.toUri())
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                    },
-                )
-            }
+            Text(
+                text = if (version.isEmpty()) "Yumi" else "Yumi $version",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
         }
 
         item("tail") { Spacer(Modifier.height(88.dp)) }
@@ -736,4 +709,3 @@ private fun requestQuickTile(context: Context) {
 }
 
 /** The project's channel: builds and announcements. */
-private const val TELEGRAM_URL = "https://t.me/MaterialYouCloud"

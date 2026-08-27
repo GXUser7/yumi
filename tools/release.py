@@ -165,7 +165,10 @@ def build() -> list[Path]:
         print("note: JAVA_HOME is unset; Gradle will use whatever java is on PATH (needs 21)")
     env.setdefault("YUMI_SIGNING_DIR", str(SIGNING_DIR))
     print("→ building signed release…")
-    subprocess.run([str(ROOT / "gradlew"), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
+    # `gradlew` is a shell script and Windows cannot execute one: CreateProcess refuses it with
+    # "not a Win32 application". The wrapper ships both, so pick by platform rather than by hope.
+    wrapper = "gradlew.bat" if os.name == "nt" else "gradlew"
+    subprocess.run([str(ROOT / wrapper), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
 
     apks = sorted(APK_DIR.glob("*-release.apk"))
     if not apks:
@@ -266,6 +269,63 @@ def list_chats(token: str) -> None:
         print(f"{chat_id}\t{title}")
 
 
+def announce_only(args, env) -> None:
+    """Send the channel post for a release that is already published.
+
+    Exists because the post and the release are two different things that can fail apart: a typo,
+    a forgotten argument, a deleted message. Re-uploading eighty megabytes of APK to fix a sentence
+    is not a reasonable price.
+    """
+    token = env["GITHUB_TOKEN"]
+    repo = resolve_repo(token, env.get("GITHUB_REPO"))
+    version, _ = read_version()
+    tag = f"v{version}"
+
+    try:
+        release = api(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", token)
+    except urllib.error.HTTPError as error:
+        die(f"релиза {tag} нет на GitHub ({error.code}) — сначала опубликуй его")
+
+    links = {
+        asset["name"]: asset["browser_download_url"]
+        for asset in release.get("assets", [])
+        if asset["name"].endswith(".apk")
+    }
+    if not links:
+        die(f"у релиза {tag} нет ни одного APK — постить нечего")
+
+    post(args, env, version, links)
+
+
+def post(args, env, version: str, links: dict) -> None:
+    announcement = args.announce or ANNOUNCEMENT.format(version=version)
+    lines = [announcement.strip(), ""]
+    for name, url in sorted(links.items()):
+        abi = "arm64" if "arm64" in name else "arm 32-бит"
+        lines.append(f'<a href="{url}">Скачать · {abi}</a>')
+    lines += ["", "<i>Почти всем нужен arm64 — 32-битная сборка только для очень старых телефонов.</i>"]
+
+    sent = telegram(
+        "sendMessage",
+        env["TELEGRAM_BOT_TOKEN"],
+        {
+            "chat_id": env["TELEGRAM_CHAT_ID"],
+            "text": "\n".join(lines),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        },
+    )
+    # Kept so a post can be edited later instead of deleted and re-sent, which in a channel leaves
+    # a hole where the old message was and re-notifies everyone.
+    message_id = sent.get("result", {}).get("message_id")
+    if message_id:
+        (ROOT / "build" / "last-announcement.txt").parent.mkdir(parents=True, exist_ok=True)
+        (ROOT / "build" / "last-announcement.txt").write_text(
+            f"{env['TELEGRAM_CHAT_ID']} {message_id}\n", encoding="utf-8",
+        )
+        print(f"→ пост отправлен (message_id {message_id})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--notes", default="", help="что нового в этой версии (текст релиза)")
@@ -281,6 +341,16 @@ def main() -> None:
         help="взять APK, которые уже лежат в app/build/outputs/apk/release",
     )
     parser.add_argument("--chats", action="store_true", help="показать чаты, доступные боту")
+    parser.add_argument(
+        "--announce-only",
+        action="store_true",
+        help="ничего не собирать и не загружать: взять уже опубликованный релиз и отправить пост",
+    )
+    parser.add_argument(
+        "--allow-default-announce",
+        action="store_true",
+        help="разрешить пост-заглушку без --announce",
+    )
     args = parser.parse_args()
 
     # `@path` reads the text from a UTF-8 file. Release notes and channel posts are paragraphs of
@@ -293,6 +363,20 @@ def main() -> None:
 
     if args.chats:
         list_chats(load_env()["TELEGRAM_BOT_TOKEN"])
+        return
+
+    # The trap this closes, having sprung once: `--notes` goes to the GitHub release and
+    # `--announce` goes to the channel, and passing only the first publishes a release with a full
+    # changelog next to a post that says "новая сборка" and nothing else. Nobody sees that until
+    # they read the channel, by which point a few hundred people have seen it too.
+    if not args.announce and not args.allow_default_announce and not args.dry_run:
+        die(
+            "нет --announce: в канал ушёл бы текст-заглушка, который ничего не говорит о версии.\n"
+            "Передай --announce @файл.txt, или --allow-default-announce, если это правда нужно.",
+        )
+
+    if args.announce_only:
+        announce_only(args, load_env())
         return
 
     # --dry-run stays usable before any credentials exist: it is the way to check that the build
@@ -327,23 +411,7 @@ def main() -> None:
     release = ensure_release(repo, token, tag, notes)
     links = {apk.name: upload_asset(release, token, apk) for apk in renamed}
 
-    announcement = args.announce or ANNOUNCEMENT.format(version=version)
-    lines = [announcement.strip(), ""]
-    for name, url in links.items():
-        abi = "arm64" if "arm64" in name else "arm 32-бит"
-        lines.append(f'<a href="{url}">Скачать · {abi}</a>')
-    lines += ["", "<i>Почти всем нужен arm64 — 32-битная сборка только для очень старых телефонов.</i>"]
-
-    telegram(
-        "sendMessage",
-        env["TELEGRAM_BOT_TOKEN"],
-        {
-            "chat_id": env["TELEGRAM_CHAT_ID"],
-            "text": "\n".join(lines),
-            "parse_mode": "HTML",
-            "disable_web_page_preview": "true",
-        },
-    )
+    post(args, env, version, links)
     print("\n→ опубликовано и отправлено в канал")
 
 

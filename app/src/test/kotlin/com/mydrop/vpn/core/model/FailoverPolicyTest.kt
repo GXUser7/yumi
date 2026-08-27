@@ -15,17 +15,67 @@ class FailoverPolicyTest {
         hasHome: Boolean = false,
         failbacks: Int = 0,
         sinceSwitch: Long = Long.MAX_VALUE / 2,
-    ) = FailoverPolicy.decide(failures, recoveries, hasHome, failbacks, sinceSwitch)
+        afterHandover: Boolean = false,
+    ) = FailoverPolicy.decide(
+        failures, recoveries, hasHome, failbacks, sinceSwitch, afterHandover,
+    )
 
     @Test
-    fun `a healthy server is left alone`() {
+    fun `a server that is answering is left alone`() {
         assertEquals(Decision.Hold, decide())
-        assertEquals(Decision.Hold, decide(failures = 1))
+    }
+
+    /**
+     * One failure is now enough, which reverses what 0.3.2 taught — and the reason it is safe is
+     * not that the threshold got braver but that the probe got better. It asks for a page through
+     * the tunnel rather than shaking hands with a port, so a failure means traffic did not get
+     * through. Waiting for a second one only adds an outage.
+     */
+    @Test
+    fun `one failed probe is enough to leave`() {
+        assertEquals(Decision.LeaveCurrent, decide(failures = 1))
+    }
+
+    /** The rate limit, not the count, is what keeps a single failure from causing a flap. */
+    @Test
+    fun `a single failure still cannot outrun the escape limit`() {
+        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 10_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, sinceSwitch = FailoverPolicy.ESCAPE_COOLDOWN_MILLIS),
+        )
+    }
+
+    // ------------------------------------------------------------------ Handover
+
+    /**
+     * A handover buys an early probe, not a lowered bar. The value of it is in the watchdog, which
+     * stops waiting and asks at once; the answer it gets is judged exactly as any other.
+     */
+    @Test
+    fun `a handover cannot move a tunnel whose server is answering`() {
+        assertEquals(Decision.Hold, decide(failures = 0, afterHandover = true))
     }
 
     @Test
-    fun `a dead server is left once the failures add up`() {
-        assertEquals(Decision.LeaveCurrent, decide(failures = 2))
+    fun `a handover does not exempt a move from the escape limit`() {
+        assertEquals(
+            Decision.Hold,
+            decide(failures = 1, sinceSwitch = 5_000L, afterHandover = true),
+        )
+    }
+
+    /** Settling has to be short enough to read as "immediately" and long enough to re-dial. */
+    @Test
+    fun `the settle after a handover is measured in seconds, not tens of them`() {
+        assertTrue(
+            "settle was ${FailoverPolicy.HANDOVER_SETTLE_MILLIS}ms",
+            FailoverPolicy.HANDOVER_SETTLE_MILLIS in 1_000L..5_000L,
+        )
+        assertTrue(
+            "settling must not outlast the interval it replaces",
+            FailoverPolicy.HANDOVER_SETTLE_MILLIS < FailoverPolicy.PROBE_INTERVAL_MILLIS,
+        )
     }
 
     @Test
@@ -98,12 +148,14 @@ class FailoverPolicyTest {
     }
 
     /**
-     * The point of the adaptive interval, stated as time rather than as constants: confirming a
-     * dead server has to take meaningfully less than the fifty seconds a flat twenty-second
-     * cadence cost, while still taking two failures to be sure.
+     * The cost of noticing, stated as time rather than as constants.
+     *
+     * 0.3.2 needed two failures on a flat twenty-second cadence: fifty seconds with a five-second
+     * probe timeout, and that is what a user actually sat through. It now takes one interval and
+     * one timeout, and a handover skips even the interval.
      */
     @Test
-    fun `confirming a dead server takes well under the flat cadence it replaced`() {
+    fun `noticing a dead server costs one interval, not two`() {
         val probeTimeout = 5_000L
         var elapsed = 0L
         var failures = 0
@@ -112,10 +164,13 @@ class FailoverPolicyTest {
             failures++
         }
 
-        val flatCadence = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) *
-            FailoverPolicy.FAILURES_BEFORE_SWAP
-        assertTrue("took ${elapsed}ms, flat cadence was ${flatCadence}ms", elapsed < flatCadence)
-        assertTrue("took ${elapsed}ms, expected under 40s", elapsed <= 40_000L)
+        val oldWorstCase = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) * 2
+        assertTrue("took ${elapsed}ms, 0.3.2 took ${oldWorstCase}ms", elapsed < oldWorstCase)
+        assertTrue("took ${elapsed}ms, expected under 30s", elapsed <= 30_000L)
+
+        // And the path that matters when the network changes underneath the tunnel.
+        val afterHandover = FailoverPolicy.HANDOVER_SETTLE_MILLIS + probeTimeout
+        assertTrue("handover path took ${afterHandover}ms", afterHandover <= 10_000L)
     }
 
     /**
@@ -131,51 +186,9 @@ class FailoverPolicyTest {
      * cooldown is what bounds it, so that is what this asserts.
      */
     @Test
-    fun `a server that comes and goes cannot bounce the tunnel more than the cooldown allows`() {
-        val runMillis = 20 * 60_000L
-
-        var now = 0L
-        var lastSwitch = -SWITCH_COOLDOWN_MILLIS
-        var failures = 0
-        var recoveries = 0
-        var failbacks = 0
-        var hasHome = false
-        var moves = 0
-        var probe = 0
-
-        while (now < runMillis) {
-            // The adaptive interval, so the guarantee is measured against what actually runs:
-            // probing faster while suspicious must not buy any extra switches.
-            now += FailoverPolicy.nextProbeDelayMillis(failures)
-            // Two down, two up, repeating.
-            val answering = (probe / 2) % 2 == 1
-            probe++
-
-            recoveries = if (hasHome && answering) recoveries + 1 else 0
-            failures = if (answering) 0 else failures + 1
-
-            when (
-                FailoverPolicy.decide(
-                    consecutiveFailures = failures,
-                    consecutiveHomeRecoveries = recoveries,
-                    hasHome = hasHome,
-                    failbacksSoFar = failbacks,
-                    millisSinceLastSwitch = now - lastSwitch,
-                )
-            ) {
-                Decision.Hold -> Unit
-                Decision.AbandonHome -> { hasHome = false; recoveries = 0 }
-                Decision.ReturnHome -> {
-                    moves++; lastSwitch = now; hasHome = false; recoveries = 0; failbacks++
-                }
-                Decision.LeaveCurrent -> {
-                    moves++; lastSwitch = now; hasHome = true; failures = 0
-                }
-            }
-        }
-
-        val ceiling = (runMillis / SWITCH_COOLDOWN_MILLIS).toInt() + 1
-        assertTrue("moved $moves times in 20 minutes, ceiling is $ceiling", moves <= ceiling)
+    fun `a server that comes and goes cannot bounce the tunnel`() {
+        val moves = simulate(runMillis = 20 * 60_000L) { probe -> (probe / 2) % 2 == 1 }
+        assertPaced(moves, "a server that comes and goes")
     }
 
     /**
@@ -204,5 +217,316 @@ class FailoverPolicyTest {
         }
 
         assertTrue("the old thresholds moved it only $moves times", moves >= 25)
+    }
+
+    // ------------------------------------------------------------------ The 07:44 outage
+
+    /**
+     * Replayed from a field journal, line for line.
+     *
+     * The user reported the internet dropping. The server they were on answered a ping the whole
+     * time — its port was open — but nothing crossed the tunnel, which is the ordinary shape of
+     * interference and exactly what the through-tunnel probe exists to catch. It caught it:
+     *
+     * ```
+     * 07:44:30  tunnel=false alive=false  fail=18/2  recover=18/5  sinceSwitch=171s  -> Hold
+     * 07:44:35  tunnel=false alive=false  fail=19/2  recover=19/5  sinceSwitch=176s  -> Hold
+     *      ...  thirty-four consecutive failures, every one of them Hold ...
+     * 07:46:47  tunnel=false alive=false  fail=34/2  recover=34/5  sinceSwitch=309s  -> ReturnHome
+     * ```
+     *
+     * Detection was never the problem. The decision was: the home-return branch came first and
+     * returned unconditionally, so once the server to go back to had answered five probes the
+     * policy stopped asking whether the one carrying traffic was alive at all. Five minutes of no
+     * internet, spent waiting out a rate limit whose purpose is to stop the tunnel flapping
+     * between servers that work.
+     *
+     * Note what would NOT have fixed this: lowering the failure threshold. At `fail=18` it was
+     * already eighteen times over the old threshold of two. Execution never reached that check.
+     */
+    @Test
+    fun `a dead server is left even while the home server is begging to be returned to`() {
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(
+                failures = 18,
+                recoveries = 18,
+                hasHome = true,
+                sinceSwitch = 171_000L,
+            ),
+        )
+    }
+
+    /** The same moment one probe in, now that one failure is enough. */
+    @Test
+    fun `the very first failure outranks a pending return home`() {
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, recoveries = 9, hasHome = true, sinceSwitch = 171_000L),
+        )
+    }
+
+    /**
+     * The asymmetry, stated as the two limits. Escaping a dead server may not be charged the rate
+     * limit that exists to protect a working one.
+     */
+    @Test
+    fun `leaving is rate limited far more loosely than returning`() {
+        assertTrue(
+            "escape ${FailoverPolicy.ESCAPE_COOLDOWN_MILLIS}ms vs " +
+                "return ${SWITCH_COOLDOWN_MILLIS}ms",
+            FailoverPolicy.ESCAPE_COOLDOWN_MILLIS < SWITCH_COOLDOWN_MILLIS / 4,
+        )
+
+        // Too soon to leave, and too soon to go home.
+        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 10_000L))
+        // Long enough to leave, still nowhere near long enough to go home.
+        assertEquals(Decision.LeaveCurrent, decide(failures = 1, sinceSwitch = 60_000L))
+        assertEquals(
+            Decision.Hold,
+            decide(recoveries = 5, hasHome = true, sinceSwitch = 60_000L),
+        )
+    }
+
+    /** Returning home keeps its long limit; nothing is broken when that question is asked. */
+    @Test
+    fun `returning home still waits out the full cooldown`() {
+        assertEquals(
+            Decision.Hold,
+            decide(recoveries = 5, hasHome = true, sinceSwitch = SWITCH_COOLDOWN_MILLIS - 1),
+        )
+        assertEquals(
+            Decision.ReturnHome,
+            decide(recoveries = 5, hasHome = true, sinceSwitch = SWITCH_COOLDOWN_MILLIS),
+        )
+    }
+
+    /**
+     * The escape must not eat the give-up. A server returned to and lost too many times stops
+     * being somewhere to go back to, and that verdict is reached whether or not the current server
+     * is also failing.
+     */
+    @Test
+    fun `giving up on a hopeless home still happens once the tunnel is healthy`() {
+        assertEquals(
+            Decision.AbandonHome,
+            decide(
+                failures = 0,
+                recoveries = 5,
+                hasHome = true,
+                failbacks = FailoverPolicy.MAX_FAILBACKS,
+            ),
+        )
+    }
+
+    // ------------------------------------------------------------------ The clock
+
+    /**
+     * The failure mode that switches failover off without saying so.
+     *
+     * The caller measures elapsed time with a monotonic clock, so a negative value should be
+     * impossible. It is guarded anyway because the two ways of being wrong cost wildly different
+     * amounts: read as "not cooled down", a clock that jumped backwards by fifteen minutes leaves
+     * the user on a dead server for fifteen minutes with nothing in the journal to explain it, and
+     * a jump of hours leaves them there for hours. Read as cooled down, the worst case is one
+     * switch happening sooner than the rate limit intended.
+     *
+     * This is not hypothetical: NTP corrects the clock, roaming onto a foreign carrier resets it,
+     * and the user can simply change it. Every one of those happens while travelling, which is
+     * exactly when the tunnel matters.
+     */
+    @Test
+    fun `a clock that jumped backwards does not switch failover off`() {
+        assertEquals(Decision.LeaveCurrent, decide(failures = 1, sinceSwitch = -900_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, sinceSwitch = -900_000L, afterHandover = true),
+        )
+    }
+
+    @Test
+    fun `a clock that jumped backwards still cannot move a healthy tunnel`() {
+        assertEquals(Decision.Hold, decide(failures = 0, sinceSwitch = -900_000L))
+    }
+
+    // ------------------------------------------------------------------ Worst cases
+
+    /**
+     * Runs the policy against a scripted server for a stretch of time and reports *when* the
+     * tunnel moved.
+     *
+     * Times rather than a count, because the count alone cannot tell a flap from a design: two
+     * moves five minutes apart are a departure and a considered return, while two moves twenty
+     * seconds apart are the fault this policy exists to prevent.
+     *
+     * @param answering what the probe returns, by probe number.
+     * @param handoverEveryMillis how often the network changes underneath, or null for never.
+     *   A handover cuts the wait short and then costs the settle, exactly as the watchdog does it.
+     */
+    private fun simulate(
+        runMillis: Long,
+        handoverEveryMillis: Long? = null,
+        answering: (Int) -> Boolean,
+    ): List<Long> {
+        var now = 0L
+        var lastSwitch = -SWITCH_COOLDOWN_MILLIS
+        var nextHandover = handoverEveryMillis ?: Long.MAX_VALUE
+        var failures = 0
+        var recoveries = 0
+        var failbacks = 0
+        var hasHome = false
+        val moves = mutableListOf<Long>()
+        var probe = 0
+
+        while (now < runMillis) {
+            val wait = FailoverPolicy.nextProbeDelayMillis(failures)
+            val handover = now + wait >= nextHandover
+            if (handover) {
+                now = nextHandover + FailoverPolicy.HANDOVER_SETTLE_MILLIS
+                nextHandover += handoverEveryMillis ?: 0L
+            } else {
+                now += wait
+            }
+
+            val alive = answering(probe)
+            probe++
+
+            recoveries = if (hasHome && alive) recoveries + 1 else 0
+            failures = if (alive) 0 else failures + 1
+
+            when (
+                FailoverPolicy.decide(
+                    consecutiveFailures = failures,
+                    consecutiveHomeRecoveries = recoveries,
+                    hasHome = hasHome,
+                    failbacksSoFar = failbacks,
+                    millisSinceLastSwitch = now - lastSwitch,
+                    afterHandover = handover,
+                )
+            ) {
+                Decision.Hold -> Unit
+                Decision.AbandonHome -> { hasHome = false; recoveries = 0 }
+                Decision.ReturnHome -> {
+                    moves += now; lastSwitch = now; hasHome = false; recoveries = 0; failbacks++
+                }
+                Decision.LeaveCurrent -> {
+                    moves += now; lastSwitch = now; hasHome = true; failures = 0
+                }
+            }
+        }
+        return moves
+    }
+
+    /**
+     * What every hostile pattern below has to satisfy.
+     *
+     * The escape limit is flat by choice: a run of departures is usually a search for a server that
+     * actually carries traffic, and slowing it down lengthens the outage it is trying to end. So
+     * the guarantee is not that moves become rare, it is that none of them are closer together
+     * than the limit — no burst, no cascade, and a hard floor on how often the core is reloaded.
+     *
+     * Twenty minutes at one move per thirty seconds is forty. That is the honest worst case for a
+     * connection where nothing works at all, and it is bounded rather than open-ended.
+     */
+    private fun assertPaced(moves: List<Long>, what: String) {
+        assertTrue("$what moved ${moves.size} times in 20 minutes", moves.size <= 42)
+        moves.zipWithNext { a, b ->
+            assertTrue(
+                "$what: two moves ${b - a}ms apart, limit ${FailoverPolicy.ESCAPE_COOLDOWN_MILLIS}ms",
+                b - a >= FailoverPolicy.ESCAPE_COOLDOWN_MILLIS,
+            )
+        }
+    }
+
+    /**
+     * The pattern the new threshold makes dangerous, and the reason this section exists.
+     *
+     * A server that fails every other probe never accumulated two failures in a row, so under the
+     * old threshold of two it tripped nothing at all — it was invisible. At one failure it trips on
+     * every single bad probe, which is precisely the flapping 0.3.2 was cured of. Nothing but the
+     * cooldown stands between that pattern and a tunnel that reloads every twenty-five seconds.
+     */
+    @Test
+    fun `a server failing every other probe cannot bounce the tunnel`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis) { probe -> probe % 2 == 0 }
+        assertPaced(moves, "a server failing every other probe")
+    }
+
+    /** The same, at the worst rate there is: nothing ever answers. */
+    @Test
+    fun `a permanently dead server cannot bounce the tunnel either`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis) { false }
+        assertPaced(moves, "a permanently dead server")
+    }
+
+    /**
+     * The false positive that would matter most, because it is the everyday case: walking through
+     * a building, in and out of Wi-Fi, with a server that is perfectly fine the whole time.
+     *
+     * A handover shortens the wait and lowers the rate limit, so if it also lowered the evidence
+     * this would move the tunnel on every step. It must move it exactly never.
+     */
+    @Test
+    fun `a handover storm cannot move a tunnel whose server is answering`() {
+        val moves = simulate(runMillis = 20 * 60_000L, handoverEveryMillis = 10_000L) { true }
+        assertEquals("a healthy server was moved ${moves.size} times by handovers", 0, moves.size)
+    }
+
+    /**
+     * And the genuinely worst case: the network flapping every ten seconds *and* the server dead.
+     *
+     * Here the handover cooldown is doing the bounding rather than the ordinary one, which is the
+     * whole point of it being separate — so the ceiling is higher, and it has to be checked rather
+     * than assumed. The backstop this cannot see is in the watchdog: when every candidate is dead
+     * too, `swapAwayFrom` logs it and moves nothing, so a total outage does not churn at all.
+     */
+    @Test
+    fun `a handover storm over a dead server still backs off`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis, handoverEveryMillis = 10_000L) { false }
+        assertTrue("a dead server in a storm should still be left once", moves.isNotEmpty())
+        // A handover ends the wait between probes, not the limit between moves.
+        assertPaced(moves, "a dead server during a handover storm")
+    }
+
+    /**
+     * The shape that used to be the regression, re-checked at the new threshold: down for a while,
+     * up for a while, which clears both directions and can therefore cycle.
+     */
+    @Test
+    fun `a server that comes and goes cannot bounce the tunnel during a handover storm`() {
+        val runMillis = 20 * 60_000L
+        val moves = simulate(runMillis, handoverEveryMillis = 15_000L) { probe ->
+            (probe / 2) % 2 == 1
+        }
+        assertPaced(moves, "a server that comes and goes during a storm")
+    }
+
+    /**
+     * The price of the lowered threshold, stated plainly rather than assumed away.
+     *
+     * One probe failing in isolation — a lost packet, a moment of congestion — is the single most
+     * likely thing to happen to a perfectly good tunnel, and at a threshold of one it is enough to
+     * move. Under the old threshold of two it cost nothing at all; it now costs **two** tunnel
+     * reloads: the departure, and the considered return to the server the user actually chose.
+     *
+     * That is the trade, and it is only acceptable because of how the two are spaced. The return
+     * needs five answered probes *and* a cooled-down clock, so the second interruption lands a
+     * full cooldown after the first rather than seconds later. Two moves five minutes apart is a
+     * provisional switch working as designed; the same two twenty seconds apart would be the
+     * flapping of 0.3.2. So the spacing is asserted here, not just the count.
+     */
+    @Test
+    fun `a single isolated failure costs a move away and a move back, well spaced`() {
+        val moves = simulate(runMillis = 20 * 60_000L) { probe -> probe != 3 }
+        assertTrue("one lost probe caused ${moves.size} moves", moves.size <= 2)
+        moves.zipWithNext { away, back ->
+            assertTrue(
+                "left and returned ${back - away}ms apart, cooldown ${SWITCH_COOLDOWN_MILLIS}ms",
+                back - away >= SWITCH_COOLDOWN_MILLIS,
+            )
+        }
     }
 }

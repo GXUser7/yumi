@@ -1,5 +1,6 @@
 package com.mydrop.vpn.data
 
+import android.os.SystemClock
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
@@ -8,10 +9,12 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Watches the server the tunnel is riding on, and moves off it when it stops answering.
@@ -62,6 +65,13 @@ class FailoverWatchdog(
      * When this watchdog last moved the tunnel, in either direction. Every automatic switch waits
      * out [SWITCH_COOLDOWN_MILLIS] from here — see [restartWatch] for why the rate matters more
      * than the decision.
+     *
+     * Read from `SystemClock.elapsedRealtime`, not the wall clock, and that is not a detail. The
+     * wall clock steps: NTP corrects it, roaming onto a foreign network resets it, the user changes
+     * it. A step backwards makes the elapsed time negative, the cooldown never expires, and
+     * failover switches itself off silently until real time catches up — minutes or hours of a
+     * dead tunnel with nothing in the journal to explain it. `elapsedRealtime` counts from boot,
+     * never goes backwards, and keeps counting while the device sleeps.
      */
     private var lastSwitchAtMillis = 0L
 
@@ -96,7 +106,7 @@ class FailoverWatchdog(
         watching = scope.launch {
             logs.trace(
                 TAG,
-                "watch started, grace ${GRACE_MILLIS / 1000}s then every " +
+                "watch started, grace ${GRACE_MILLIS / 1000}s then probe, then every " +
                     "${FailoverPolicy.PROBE_INTERVAL_MILLIS / 1000}s " +
                     "(${FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS / 1000}s after a failure, " +
                     "autoFailover=${settings.value.autoFailover})",
@@ -104,15 +114,75 @@ class FailoverWatchdog(
             // A tunnel that just came up has not had time to break, and the core is still
             // settling. Probing into that only produces a false alarm.
             delay(GRACE_MILLIS)
+
+            // Collected into a conflated channel rather than raced against directly, because a
+            // handover that arrives *during* a probe would otherwise fall on the floor: the flow
+            // has no replay, and between cycles there is no subscriber to buffer it. Conflated
+            // because two handovers in a row still only pose one question, and it is the same one.
+            val handovers = Channel<String>(Channel.CONFLATED)
+            // A child of this watch, so it dies with it: cancelling `watching` cancels the
+            // collector too, and there is nothing to unwind by hand.
+            launch { tunnel.handovers.collect { handovers.trySend(it) } }
+
             var failures = 0
             var recoveries = 0
+            // Only so the hold is announced once per outage rather than every probe.
+            var offline = false
+            // The grace above is the wait before the first probe. Waiting again at the top of the
+            // first pass made it the grace *plus* a full interval — thirty-five seconds before the
+            // tunnel was asked anything, where the comment on the grace promises fifteen. It cost
+            // twenty seconds on every genuine outage, measured on a phone: a server that carried
+            // nothing from the moment it came up was left forty seconds later, and twenty of those
+            // were this.
+            var firstPass = true
+            var movedTo: String? = null
             while (isActive) {
+                // Whether this is the first thing asked of the tunnel since it came up. Used to
+                // tell a return that was a mistake from a server that worked and then died.
+                val firstProbe = firstPass
                 // Slow while the server answers, fast once one probe has failed: the wait shrinks
                 // exactly when the user is sitting through an outage. See the policy for why.
-                delay(FailoverPolicy.nextProbeDelayMillis(failures))
+                //
+                // The wait ends early when the ground moves. A handover has just killed every
+                // connection pinned to the old interface, so whether this server still works is a
+                // question with a fresh answer — waiting out the clock to ask it is up to twenty
+                // seconds of an outage the user is already feeling.
+                if (firstPass) {
+                    firstPass = false
+                } else {
+                    movedTo = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
+                        handovers.receive()
+                    }
+                    if (movedTo != null) {
+                        logs.trace(TAG, "handover to $movedTo, probing early")
+                        // Measured after the core has had a moment to re-dial. Probing into the
+                        // gap a handover opens measures the handover, not the server — and with
+                        // one failure now enough to move, that reading would cost a switch every
+                        // time the user walked out of Wi-Fi range.
+                        delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                    }
+                }
                 if (!settings.value.autoFailover) {
                     failures = 0
                     continue
+                }
+
+                // A phone with no default interface has no internet, and a probe run into that
+                // says nothing about the server carrying the tunnel. Counting it as a failure is
+                // how walking out of Wi-Fi range came to read as "this server is dead" — and at
+                // one failure being enough to move, that verdict arrived within seconds of the
+                // signal going. There is nothing to measure and nowhere to move to.
+                if (!tunnel.hasNetwork.value) {
+                    failures = 0
+                    if (!offline) {
+                        offline = true
+                        logs.trace(TAG, "no default interface, holding")
+                    }
+                    continue
+                }
+                if (offline) {
+                    offline = false
+                    logs.trace(TAG, "default interface back, resuming")
                 }
                 val current = profiles.selectedNode() ?: continue
 
@@ -162,13 +232,14 @@ class FailoverWatchdog(
                     )
                 }
 
-                val sinceSwitch = System.currentTimeMillis() - lastSwitchAtMillis
+                val sinceSwitch = SystemClock.elapsedRealtime() - lastSwitchAtMillis
                 val decision = FailoverPolicy.decide(
                     consecutiveFailures = failures,
                     consecutiveHomeRecoveries = recoveries,
                     hasHome = home != null,
                     failbacksSoFar = failbacks[home?.id] ?: 0,
                     millisSinceLastSwitch = sinceSwitch,
+                    afterHandover = movedTo != null,
                 )
 
                 // One line per probe cycle, to logcat rather than the journal. Every input the
@@ -183,6 +254,7 @@ class FailoverWatchdog(
                         "${FailoverPolicy.PROBES_BEFORE_FAILBACK} " +
                         "failbacks=${failbacks[home?.id] ?: 0} " +
                         "sinceSwitch=${if (lastSwitchAtMillis == 0L) "never" else "${sinceSwitch / 1000}s"} " +
+                        (if (movedTo != null) "handover=$movedTo " else "") +
                         "-> $decision",
                 )
 
@@ -205,12 +277,26 @@ class FailoverWatchdog(
                         failbacks[home.id] = (failbacks[home.id] ?: 0) + 1
                         forgetHome()
                         logs.info(R.string.log_failover_home_back, home.name)
-                        lastSwitchAtMillis = System.currentTimeMillis()
+                        lastSwitchAtMillis = SystemClock.elapsedRealtime()
                         launcher.switchTo(home)
                     }
 
                     FailoverPolicy.Decision.LeaveCurrent -> {
                         failures = 0
+                        // A server that failed the very first thing asked of it, having just been
+                        // returned to, was not worth returning to. The evidence that sent the
+                        // tunnel back is a direct probe, and all a direct probe proves is that a
+                        // port is open — which is exactly true of a server being interfered with,
+                        // and was reproduced on a phone: the tunnel went home to a host that
+                        // answered on 443 and carried nothing, sixteen seconds after leaving it.
+                        //
+                        // Without this the round trip is simply repeated until MAX_FAILBACKS runs
+                        // out, and the user pays a second outage to learn what the first one had
+                        // already shown.
+                        if (firstProbe && (failbacks[current.id] ?: 0) > 0) {
+                            failbacks[current.id] = FailoverPolicy.MAX_FAILBACKS + 1
+                            logs.trace(TAG, "${current.name} failed on return, not going back")
+                        }
                         logs.trace(TAG, "leaving ${current.name}: dead for good")
                         swapAwayFrom(current)
                     }
@@ -263,9 +349,18 @@ class FailoverWatchdog(
         // not the replacement this watchdog installed on the way.
         // A server already given up on does not become home again; otherwise the give-up counter
         // would reset itself every time the tunnel wandered back past it.
-        if (homeNode == null && (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS) homeNode = dead
+        //
+        // And nothing is remembered at all when the user has said a switch is final. Then this
+        // watchdog only ever moves away from servers that stopped working, and where it lands is
+        // where the tunnel stays until somebody chooses otherwise.
+        if (settings.value.returnHome &&
+            homeNode == null &&
+            (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS
+        ) {
+            homeNode = dead
+        }
         autoChosenId = chosen.id
-        lastSwitchAtMillis = System.currentTimeMillis()
+        lastSwitchAtMillis = SystemClock.elapsedRealtime()
         launcher.switchTo(chosen)
     }
 

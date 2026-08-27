@@ -60,8 +60,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -106,6 +110,37 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         private val _traffic = MutableStateFlow(TrafficStats.Zero)
         val traffic: StateFlow<TrafficStats> = _traffic.asStateFlow()
+
+        /**
+         * Emitted with the new interface name whenever the tunnel moves between physical
+         * networks — Wi-Fi to cellular and back.
+         *
+         * This exists so the failover watchdog does not have to wait out its own clock to find
+         * out that the ground moved. A handover kills every connection pinned to the old
+         * interface, and whether the current server survives that is a question worth asking at
+         * once rather than up to twenty seconds later.
+         *
+         * Replay is zero and the buffer drops the oldest on overflow: a handover is only
+         * interesting while it is current, and a subscriber that was not listening at the time has
+         * nothing to catch up on.
+         */
+        /**
+         * Whether the phone has a default network at all — false from the moment the core is told
+         * it has no interface until it is told about one again.
+         *
+         * The failover watchdog needs this to tell two things apart that look identical from a
+         * probe: a server that stopped working, and a phone that stopped having internet. Without
+         * it, walking out of Wi-Fi range reads as the current server being dead, and at a threshold
+         * of one failed probe that verdict arrives within seconds of the signal going.
+         */
+        private val _hasNetwork = MutableStateFlow(true)
+        val hasNetwork: StateFlow<Boolean> = _hasNetwork.asStateFlow()
+
+        private val _handovers = MutableSharedFlow<String>(
+            extraBufferCapacity = 4,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+        val handovers: SharedFlow<String> = _handovers.asSharedFlow()
 
         fun start(context: Context, config: String, nodeId: String, nodeName: String) {
             val intent = Intent(context, MyDropVpnService::class.java).apply {
@@ -835,11 +870,28 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
             val expensive =
                 !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+
+            // `onCapabilitiesChanged` fires for every capability the system revises, which on a
+            // busy Wi-Fi network is several times a minute and almost never about anything this
+            // cares about. Re-reporting an unchanged interface costs a call into the core and a
+            // line in the journal each time — the field logs showed the same `wlan0` reported
+            // seven times in half a minute — and tells the core nothing it did not already know.
+            if (!interfaceWasLost &&
+                network == reportedInterface &&
+                name == lastReportedInterfaceName &&
+                expensive == lastReportedExpensive
+            ) {
+                return
+            }
             // Kept before the report, because the reset below needs to know whether this is a
             // handover or the first interface this tunnel ever had.
             val previousName = lastReportedInterfaceName
+            val recovered = interfaceWasLost
+            interfaceWasLost = false
+            _hasNetwork.value = true
             reportedInterface = network
             lastReportedInterfaceName = name
+            lastReportedExpensive = expensive
             logs.trace(NATIVE_TAG, "defaultInterface -> $name#$index expensive=$expensive")
             setUnderlying(network)
             runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
@@ -848,12 +900,20 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             // pinned to the old one — those are already dead, and nothing else reaps them. The
             // watchdog would only notice forty-odd seconds later and then draw the wrong
             // conclusion, switching servers over a server that was never at fault.
+            // Two shapes of the same event. A different interface is the obvious one; the same
+            // interface returning after the core was told there was none is the one that hid for a
+            // long time, and it is what Wi-Fi dropping and reconnecting looks like from here.
             //
-            // Only on an actual handover: the first interface a tunnel gets is not a change, and
-            // resetting there would throw away the connections the core has just opened.
-            if (previousName != null && previousName != name) {
-                logs.trace(NATIVE_TAG, "handover $previousName -> $name, resetting network")
+            // Only on an actual change: the first interface a tunnel gets is not one, and resetting
+            // there would throw away the connections the core has just opened.
+            val changed = previousName != null && previousName != name
+            if (changed || recovered) {
+                val what = if (changed) "handover $previousName -> $name" else "recovered on $name"
+                logs.trace(NATIVE_TAG, "$what, resetting network")
                 resetCoreNetwork()
+                // And tell the watchdog, which would otherwise learn about it from a probe that
+                // is up to a full interval away.
+                _handovers.tryEmit(name)
             }
         }
 
@@ -896,6 +956,8 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     }
 
                     reportedInterface = null
+                    interfaceWasLost = true
+                    _hasNetwork.value = false
                     logs.trace(NATIVE_TAG, "defaultInterface -> (none)")
                     setUnderlying(null)
                     runCatching { listener.updateDefaultInterface("", -1, false, false) }
@@ -961,6 +1023,21 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         reportedInterface = null
         lastReportedInterfaceName = null
     }
+
+    /**
+     * True from the moment the core is told it has no default interface until it is told about one
+     * again.
+     *
+     * Without it, a network that goes away and comes back under the same name is invisible: the
+     * handover check compares names, `wlan0` equals `wlan0`, and nothing is reset. But every
+     * connection pinned to that interface died while it was gone, and the core has just been told
+     * "no interface" and then "wlan0" — which is at least as much of a change as swapping Wi-Fi
+     * for cellular. Wi-Fi dropping and returning is also the commonest form of this there is.
+     */
+    private var interfaceWasLost = false
+
+    /** Part of what makes an interface report worth repeating; see the check in `notify`. */
+    private var lastReportedExpensive: Boolean? = null
 
     private fun cancelPendingInterfaceLoss() {
         pendingInterfaceLoss?.let(interfaceHandler::removeCallbacks)
