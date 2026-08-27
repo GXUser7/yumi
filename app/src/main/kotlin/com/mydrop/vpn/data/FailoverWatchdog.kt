@@ -167,22 +167,26 @@ class FailoverWatchdog(
                     continue
                 }
 
-                // A phone with no default interface has no internet, and a probe run into that
-                // says nothing about the server carrying the tunnel. Counting it as a failure is
-                // how walking out of Wi-Fi range came to read as "this server is dead" — and at
-                // one failure being enough to move, that verdict arrived within seconds of the
-                // signal going. There is nothing to measure and nowhere to move to.
+                // A phone with no working internet of its own says nothing about the server
+                // carrying the tunnel, and counting that as the server's failure is how a lift
+                // came to read as "this server is dead". A journal caught it exactly: three
+                // different servers timing out within two minutes, the tunnel moved off one that
+                // was working, every open connection dropped, and the replacement failing a
+                // moment later for the same reason.
+                //
+                // Android's own verdict rather than a request of ours — see the service for why
+                // asking a host directly would be worse than useless from this country.
                 if (!tunnel.hasNetwork.value) {
                     failures = 0
                     if (!offline) {
                         offline = true
-                        logs.trace(TAG, "no default interface, holding")
+                        logs.trace(TAG, "the phone has no internet of its own, holding")
                     }
                     continue
                 }
                 if (offline) {
                     offline = false
-                    logs.trace(TAG, "default interface back, resuming")
+                    logs.trace(TAG, "internet is back, resuming")
                 }
                 val current = profiles.selectedNode() ?: continue
 
@@ -215,6 +219,7 @@ class FailoverWatchdog(
                 val throughTunnel = tunnelHealth.passes(configs.probe.value)
                 val alive = throughTunnel
                     ?: !latencyTester.measure(current, settings.value.pingMode).failed
+
                 failures = if (alive) 0 else failures + 1
                 if (!alive && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
                     logs.debug(

@@ -125,13 +125,23 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
          * nothing to catch up on.
          */
         /**
-         * Whether the phone has a default network at all — false from the moment the core is told
-         * it has no interface until it is told about one again.
+         * Whether the phone has working internet of its own, underneath the tunnel.
          *
-         * The failover watchdog needs this to tell two things apart that look identical from a
-         * probe: a server that stopped working, and a phone that stopped having internet. Without
-         * it, walking out of Wi-Fi range reads as the current server being dead, and at a threshold
-         * of one failed probe that verdict arrives within seconds of the signal going.
+         * Not "is there an interface" but "does that interface carry anything", which is Android's
+         * own verdict: `NET_CAPABILITY_VALIDATED` is set when the platform has reached the internet
+         * over that network and cleared when it cannot. It is what the system uses to decide
+         * whether to show the no-internet warning, and it costs nothing to read.
+         *
+         * The failover watchdog needs it to tell apart two things that are identical from a probe
+         * and call for opposite actions: a dead server, which should be left, and a phone in a
+         * lift, which should be waited out. A journal caught the difference — three different
+         * servers timing out within two minutes while their owner was in a lift. The tunnel was
+         * moved off a server that was working perfectly well, every open connection went with it,
+         * and the replacement failed a moment later for exactly the same reason.
+         *
+         * Deliberately not an HTTP request of our own: whatever host it asked would have to be
+         * reachable *directly*, from a country where the reason this app exists is that things are
+         * not. A check that answered "no internet" every time would switch failover off entirely.
          */
         private val _hasNetwork = MutableStateFlow(true)
         val hasNetwork: StateFlow<Boolean> = _hasNetwork.asStateFlow()
@@ -870,6 +880,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
             val expensive =
                 !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 
             // `onCapabilitiesChanged` fires for every capability the system revises, which on a
             // busy Wi-Fi network is several times a minute and almost never about anything this
@@ -879,7 +890,8 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             if (!interfaceWasLost &&
                 network == reportedInterface &&
                 name == lastReportedInterfaceName &&
-                expensive == lastReportedExpensive
+                expensive == lastReportedExpensive &&
+                validated == _hasNetwork.value
             ) {
                 return
             }
@@ -888,7 +900,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             val previousName = lastReportedInterfaceName
             val recovered = interfaceWasLost
             interfaceWasLost = false
-            _hasNetwork.value = true
+            // Validation is what the watchdog reads. A network that is attached but carrying
+            // nothing — a lift, a captive portal before sign-in, a hotspot with no upstream —
+            // reports here as no internet, which is exactly what it is.
+            if (_hasNetwork.value != validated) {
+                logs.trace(NATIVE_TAG, "internet on $name: ${if (validated) "yes" else "no"}")
+            }
+            _hasNetwork.value = validated
             reportedInterface = network
             lastReportedInterfaceName = name
             lastReportedExpensive = expensive
