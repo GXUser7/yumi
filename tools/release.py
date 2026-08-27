@@ -165,7 +165,10 @@ def build() -> list[Path]:
         print("note: JAVA_HOME is unset; Gradle will use whatever java is on PATH (needs 21)")
     env.setdefault("YUMI_SIGNING_DIR", str(SIGNING_DIR))
     print("→ building signed release…")
-    subprocess.run([str(ROOT / "gradlew"), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
+    # `gradlew` is a shell script and Windows cannot execute one: CreateProcess refuses it with
+    # "not a Win32 application". The wrapper ships both, so pick by platform rather than by hope.
+    wrapper = "gradlew.bat" if os.name == "nt" else "gradlew"
+    subprocess.run([str(ROOT / wrapper), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
 
     apks = sorted(APK_DIR.glob("*-release.apk"))
     if not apks:
