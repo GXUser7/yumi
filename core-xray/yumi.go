@@ -20,8 +20,10 @@ import (
 	"sync"
 	"syscall"
 
+	xlog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/transport/internet"
 
@@ -81,6 +83,81 @@ func installProtector() {
 	})
 }
 
+// Logger is implemented on the Kotlin side.
+//
+// Xray writes its log through a single process-wide handler rather than to a stream something can
+// subscribe to, so this is the only way the app sees anything the core has to say.
+type Logger interface {
+	// Log delivers one line. Levels follow the core's own numbering, which is not the app's and
+	// not syslog's: 0 unknown, 1 error, 2 warning, 3 info, 4 debug
+	// (`common/log/log.pb.go:26-32`). Mapping them is the caller's job.
+	Log(level int, message string)
+}
+
+var (
+	loggerMu sync.RWMutex
+	logger   Logger
+)
+
+// SetLogger names where the core's output goes. Null detaches it.
+//
+// Safe to call at any time: the handler installed in [Start] reads this through the lock rather
+// than capturing whatever was set when the core came up.
+func SetLogger(l Logger) {
+	loggerMu.Lock()
+	logger = l
+	loggerMu.Unlock()
+}
+
+type bridgeHandler struct{}
+
+func (bridgeHandler) Handle(msg xlog.Message) {
+	loggerMu.RLock()
+	l := logger
+	loggerMu.RUnlock()
+	if l == nil {
+		return
+	}
+	// Only GeneralMessage carries a severity; access and DNS records do not, and calling them
+	// info is closer than calling them errors.
+	level := int(xlog.Severity_Info)
+	if general, ok := msg.(*xlog.GeneralMessage); ok {
+		level = int(general.Severity)
+	}
+	l.Log(level, msg.String())
+}
+
+// Uplink and Downlink report bytes counted on the proxy outbound since the core came up.
+//
+// Zero when the core is down, when the configuration did not ask for statistics, or before the
+// first byte — none of which are distinguishable here, and none of which the caller can act on
+// differently.
+func Uplink() int64  { return counter("outbound>>>" + ProxyTag + ">>>traffic>>>uplink") }
+func Downlink() int64 { return counter("outbound>>>" + ProxyTag + ">>>traffic>>>downlink") }
+
+// ProxyTag is the outbound the counters above are read from, and has to match the tag the
+// configuration gives its proxy outbound. It is spelled out in one place on each side rather than
+// derived, because a mismatch produces counters that stay at zero and explain nothing.
+const ProxyTag = "proxy"
+
+func counter(name string) int64 {
+	mu.Lock()
+	running := instance
+	mu.Unlock()
+	if running == nil {
+		return 0
+	}
+	manager, ok := running.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok || manager == nil {
+		return 0
+	}
+	c := manager.GetCounter(name)
+	if c == nil {
+		return 0
+	}
+	return c.Value()
+}
+
 // Start brings the core up on the given configuration.
 //
 // tunFd is the descriptor from VpnService.Builder.establish(). Ownership stays with the app: the
@@ -125,6 +202,12 @@ func Start(configJSON string, tunFd int, p Protector) error {
 		_ = started.Close()
 		return err
 	}
+
+	// After Start, not before: the core's own `app/log` registers a handler while the instance is
+	// coming up (`log.RegisterHandler` keeps exactly one), so installing this any earlier means
+	// installing it and then losing it. The cost is that whatever the core says while starting
+	// goes to its own logger; the app is not listening yet anyway.
+	xlog.RegisterHandler(bridgeHandler{})
 
 	instance = started
 	return nil

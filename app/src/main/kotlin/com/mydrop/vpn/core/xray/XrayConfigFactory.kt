@@ -78,6 +78,18 @@ object XrayConfigFactory {
         probe: ProbeEndpoint?,
     ): JsonObject = buildJsonObject {
         putJsonObject("log") { put("loglevel", settings.logLevel.toXrayLevel()) }
+
+        // Byte counters, which the core keeps only when asked. Without both of these the outbound
+        // handler registers nothing (`app/proxyman/outbound/handler.go:35-56`) and the speed shown
+        // on the connect screen stays at zero with nothing to explain why.
+        putJsonObject("stats") { }
+        putJsonObject("policy") {
+            putJsonObject("system") {
+                put("statsOutboundUplink", true)
+                put("statsOutboundDownlink", true)
+            }
+        }
+
         put("dns", buildDns(settings))
 
         putJsonArray("inbounds") {
