@@ -132,7 +132,12 @@ object FailoverPolicy {
         afterHandover: Boolean = false,
     ): Decision {
         val cooldown = if (afterHandover) HANDOVER_COOLDOWN_MILLIS else SWITCH_COOLDOWN_MILLIS
-        val cooledDown = millisSinceLastSwitch >= cooldown
+        // A negative elapsed time means the clock the caller measured with moved under it. The
+        // caller uses a monotonic one precisely so this cannot happen, but the consequence of
+        // being wrong is not symmetric: reading it as "not cooled down yet" switches failover off
+        // entirely and silently, for as long as the skew lasts. Treated as cooled down, the worst
+        // case is one switch sooner than intended.
+        val cooledDown = millisSinceLastSwitch < 0L || millisSinceLastSwitch >= cooldown
 
         if (hasHome && consecutiveHomeRecoveries >= PROBES_BEFORE_FAILBACK) {
             // Ahead of the cooldown on purpose: giving up moves nothing, so making it wait would

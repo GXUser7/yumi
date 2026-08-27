@@ -1,5 +1,6 @@
 package com.mydrop.vpn.data
 
+import android.os.SystemClock
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
@@ -64,6 +65,13 @@ class FailoverWatchdog(
      * When this watchdog last moved the tunnel, in either direction. Every automatic switch waits
      * out [SWITCH_COOLDOWN_MILLIS] from here — see [restartWatch] for why the rate matters more
      * than the decision.
+     *
+     * Read from `SystemClock.elapsedRealtime`, not the wall clock, and that is not a detail. The
+     * wall clock steps: NTP corrects it, roaming onto a foreign network resets it, the user changes
+     * it. A step backwards makes the elapsed time negative, the cooldown never expires, and
+     * failover switches itself off silently until real time catches up — minutes or hours of a
+     * dead tunnel with nothing in the journal to explain it. `elapsedRealtime` counts from boot,
+     * never goes backwards, and keeps counting while the device sleeps.
      */
     private var lastSwitchAtMillis = 0L
 
@@ -189,7 +197,7 @@ class FailoverWatchdog(
                     )
                 }
 
-                val sinceSwitch = System.currentTimeMillis() - lastSwitchAtMillis
+                val sinceSwitch = SystemClock.elapsedRealtime() - lastSwitchAtMillis
                 val decision = FailoverPolicy.decide(
                     consecutiveFailures = failures,
                     consecutiveHomeRecoveries = recoveries,
@@ -234,7 +242,7 @@ class FailoverWatchdog(
                         failbacks[home.id] = (failbacks[home.id] ?: 0) + 1
                         forgetHome()
                         logs.info(R.string.log_failover_home_back, home.name)
-                        lastSwitchAtMillis = System.currentTimeMillis()
+                        lastSwitchAtMillis = SystemClock.elapsedRealtime()
                         launcher.switchTo(home)
                     }
 
@@ -294,7 +302,7 @@ class FailoverWatchdog(
         // would reset itself every time the tunnel wandered back past it.
         if (homeNode == null && (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS) homeNode = dead
         autoChosenId = chosen.id
-        lastSwitchAtMillis = System.currentTimeMillis()
+        lastSwitchAtMillis = SystemClock.elapsedRealtime()
         launcher.switchTo(chosen)
     }
 

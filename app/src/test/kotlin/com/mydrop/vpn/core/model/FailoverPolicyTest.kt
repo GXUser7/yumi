@@ -275,6 +275,36 @@ class FailoverPolicyTest {
         assertTrue("the old thresholds moved it only $moves times", moves >= 25)
     }
 
+    // ------------------------------------------------------------------ The clock
+
+    /**
+     * The failure mode that switches failover off without saying so.
+     *
+     * The caller measures elapsed time with a monotonic clock, so a negative value should be
+     * impossible. It is guarded anyway because the two ways of being wrong cost wildly different
+     * amounts: read as "not cooled down", a clock that jumped backwards by fifteen minutes leaves
+     * the user on a dead server for fifteen minutes with nothing in the journal to explain it, and
+     * a jump of hours leaves them there for hours. Read as cooled down, the worst case is one
+     * switch happening sooner than the rate limit intended.
+     *
+     * This is not hypothetical: NTP corrects the clock, roaming onto a foreign carrier resets it,
+     * and the user can simply change it. Every one of those happens while travelling, which is
+     * exactly when the tunnel matters.
+     */
+    @Test
+    fun `a clock that jumped backwards does not switch failover off`() {
+        assertEquals(Decision.LeaveCurrent, decide(failures = 1, sinceSwitch = -900_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = 1, sinceSwitch = -900_000L, afterHandover = true),
+        )
+    }
+
+    @Test
+    fun `a clock that jumped backwards still cannot move a healthy tunnel`() {
+        assertEquals(Decision.Hold, decide(failures = 0, sinceSwitch = -900_000L))
+    }
+
     // ------------------------------------------------------------------ Worst cases
 
     /**
