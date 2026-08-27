@@ -279,6 +279,8 @@
     <string name="settings_fastest_subtitle">Take the lowest-latency server before connecting</string>
     <string name="settings_failover">Leave a dead server</string>
     <string name="settings_failover_subtitle">Probe the current server and move to a live one if it dies</string>
+    <string name="settings_return_home">Return to my server</string>
+    <string name="settings_return_home_subtitle">Go back once the server you chose answers again, instead of staying where the tunnel moved</string>
     <string name="settings_failover_servers">Servers to fail over to</string>
     <string name="settings_failover_auto">Chosen automatically from the current subscription</string>
     <string name="settings_failover_manual">Chosen by hand: %1$d</string>

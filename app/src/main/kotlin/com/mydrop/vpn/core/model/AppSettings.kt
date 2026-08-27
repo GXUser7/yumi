@@ -127,6 +127,19 @@ data class AppSettings(
     // user picked.
     val autoFailover: Boolean = false,
     /**
+     * Whether an automatic switch is provisional or final.
+     *
+     * On, the server the user chose is remembered while the watchdog is riding a replacement, and
+     * the tunnel goes back to it once it answers again — otherwise one bad minute silently becomes
+     * permanent, and the only clue is that the connect screen now names a server nobody picked,
+     * possibly in another country.
+     *
+     * Off, a switch is simply where the tunnel now lives until someone chooses otherwise. Which is
+     * a defensible preference rather than a wrong one: going back interrupts a tunnel that is
+     * working, on the evidence of a probe that only proves a port is open.
+     */
+    val returnHome: Boolean = true,
+    /**
      * Servers the tunnel may switch to. Empty means "decide for me", and the group is filled with
      * neighbours from the chosen server's own subscription.
      */

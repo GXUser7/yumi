@@ -137,6 +137,9 @@ class FailoverWatchdog(
             var firstPass = true
             var movedTo: String? = null
             while (isActive) {
+                // Whether this is the first thing asked of the tunnel since it came up. Used to
+                // tell a return that was a mistake from a server that worked and then died.
+                val firstProbe = firstPass
                 // Slow while the server answers, fast once one probe has failed: the wait shrinks
                 // exactly when the user is sitting through an outage. See the policy for why.
                 //
@@ -280,6 +283,20 @@ class FailoverWatchdog(
 
                     FailoverPolicy.Decision.LeaveCurrent -> {
                         failures = 0
+                        // A server that failed the very first thing asked of it, having just been
+                        // returned to, was not worth returning to. The evidence that sent the
+                        // tunnel back is a direct probe, and all a direct probe proves is that a
+                        // port is open — which is exactly true of a server being interfered with,
+                        // and was reproduced on a phone: the tunnel went home to a host that
+                        // answered on 443 and carried nothing, sixteen seconds after leaving it.
+                        //
+                        // Without this the round trip is simply repeated until MAX_FAILBACKS runs
+                        // out, and the user pays a second outage to learn what the first one had
+                        // already shown.
+                        if (firstProbe && (failbacks[current.id] ?: 0) > 0) {
+                            failbacks[current.id] = FailoverPolicy.MAX_FAILBACKS + 1
+                            logs.trace(TAG, "${current.name} failed on return, not going back")
+                        }
                         logs.trace(TAG, "leaving ${current.name}: dead for good")
                         swapAwayFrom(current)
                     }
@@ -332,7 +349,16 @@ class FailoverWatchdog(
         // not the replacement this watchdog installed on the way.
         // A server already given up on does not become home again; otherwise the give-up counter
         // would reset itself every time the tunnel wandered back past it.
-        if (homeNode == null && (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS) homeNode = dead
+        //
+        // And nothing is remembered at all when the user has said a switch is final. Then this
+        // watchdog only ever moves away from servers that stopped working, and where it lands is
+        // where the tunnel stays until somebody chooses otherwise.
+        if (settings.value.returnHome &&
+            homeNode == null &&
+            (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS
+        ) {
+            homeNode = dead
+        }
         autoChosenId = chosen.id
         lastSwitchAtMillis = SystemClock.elapsedRealtime()
         launcher.switchTo(chosen)

@@ -402,19 +402,27 @@ fun SettingsScreen(
                     onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
                 )
                 AnimatedVisibility(visible = settings.autoFailover) {
-                    NavigationRow(
-                        title = stringResource(R.string.settings_failover_servers),
-                        subtitle = if (settings.failoverNodeIds.isEmpty()) {
-                            stringResource(R.string.settings_failover_auto)
-                        } else {
-                            stringResource(
-                                R.string.settings_failover_manual,
-                                settings.failoverNodeIds.size,
-                            )
-                        },
-                        icon = Icons.Rounded.SwapHoriz,
-                        onClick = onOpenFailover,
-                    )
+                    Column {
+                        SwitchRow(
+                            title = stringResource(R.string.settings_return_home),
+                            subtitle = stringResource(R.string.settings_return_home_subtitle),
+                            checked = settings.returnHome,
+                            onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
+                        )
+                        NavigationRow(
+                            title = stringResource(R.string.settings_failover_servers),
+                            subtitle = if (settings.failoverNodeIds.isEmpty()) {
+                                stringResource(R.string.settings_failover_auto)
+                            } else {
+                                stringResource(
+                                    R.string.settings_failover_manual,
+                                    settings.failoverNodeIds.size,
+                                )
+                            },
+                            icon = Icons.Rounded.SwapHoriz,
+                            onClick = onOpenFailover,
+                        )
+                    }
                 }
                 SwitchRow(
                     title = stringResource(R.string.settings_auto_update),
