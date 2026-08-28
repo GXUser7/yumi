@@ -27,6 +27,14 @@ class TunnelConfigBuilder(
     private val logs: LogRepository,
     /** Resolver chosen on the DNS screen, if any. Null falls back to the settings field. */
     private val selectedDns: () -> String? = { null },
+    /**
+     * Every server the tunnel may move onto without being restarted, the chosen one included.
+     *
+     * A lambda rather than the profile store itself: this class is handed to the service, which
+     * has no business reaching into profiles, and the membership question belongs where the
+     * failover pool is already decided.
+     */
+    private val switchableGroup: (ProxyNode) -> List<ProxyNode> = { listOf(it) },
 ) {
 
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
@@ -84,6 +92,7 @@ class TunnelConfigBuilder(
                 probe = probe,
                 dnsOverride = selectedDns(),
                 dnsFallback = _dnsFallback.value,
+                group = switchableGroup(node),
             )
         }.onSuccess {
             // Only once the document exists: publishing an endpoint for a configuration that was

@@ -53,6 +53,19 @@ interface TunnelController {
     val wakeups: Flow<Unit> get() = emptyFlow()
 
     /**
+     * Moves the tunnel onto another server without restarting anything.
+     *
+     * The core carries a selector group wearing the tag every route and DNS rule already points
+     * at, so changing which server that tag means is a pointer swap: the TUN stays, the DNS cache
+     * stays, and connections the user has open are left alone. Compare [connect], which tears the
+     * core down and takes every one of them with it.
+     *
+     * @return false when it could not be done — no tunnel, or a server that is not in the group.
+     *   The caller is expected to fall back to [connect], which always works and costs more.
+     */
+    fun selectOutbound(nodeId: String): Boolean = false
+
+    /**
      * Whether the device has a default network at all.
      *
      * True by default: a controller that cannot know must not claim the phone is offline, because

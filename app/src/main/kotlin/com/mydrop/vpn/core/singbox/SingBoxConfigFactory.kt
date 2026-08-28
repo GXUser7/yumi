@@ -33,8 +33,17 @@ import com.mydrop.vpn.core.net.isNumericAddress
  */
 object SingBoxConfigFactory {
 
-    private const val PROXY_TAG = "proxy"
+    const val PROXY_TAG = "proxy"
     private const val DIRECT_TAG = "direct"
+
+    /**
+     * The tag one server carries inside the selector group.
+     *
+     * Prefixed rather than the bare id, because a tag is a name in a namespace shared with
+     * `proxy`, `direct` and the DNS servers, and a hash that happened to collide with one of those
+     * would be a very quiet disaster.
+     */
+    fun nodeTag(nodeId: String) = "node-$nodeId"
     private const val PROBE_TAG = "probe-in"
     private const val DNS_REMOTE_TAG = "dns-remote"
     private const val DNS_DIRECT_TAG = "dns-direct"
@@ -91,6 +100,8 @@ object SingBoxConfigFactory {
      *   settings. Null leaves the settings value in charge.
      * @param dnsFallback builds the document with [FALLBACK_REMOTE_DNS] in place of the chosen
      *   resolver, for when the watchdog has found the chosen one dead.
+     * @param group every server the tunnel may move onto without being restarted, [node] included.
+     *   Fewer than two means no group at all and the old single-outbound shape.
      */
     fun build(
         node: ProxyNode,
@@ -99,6 +110,7 @@ object SingBoxConfigFactory {
         probe: ProbeEndpoint? = null,
         dnsOverride: String? = null,
         dnsFallback: Boolean = false,
+        group: List<ProxyNode> = emptyList(),
     ): String = json.encodeToString(
         JsonObject.serializer(),
         buildConfig(
@@ -106,6 +118,7 @@ object SingBoxConfigFactory {
             settings = settings.withDnsOverride(dnsOverride).withDnsFallback(dnsFallback),
             ruleSetDir = ruleSetDir,
             probe = probe,
+            group = group,
         ),
     )
 
@@ -153,6 +166,7 @@ object SingBoxConfigFactory {
         settings: AppSettings,
         ruleSetDir: String,
         probe: ProbeEndpoint?,
+        group: List<ProxyNode> = emptyList(),
     ): JsonObject = buildJsonObject {
         putJsonObject("log") {
             put("level", settings.logLevel.toSingBoxLevel())
@@ -165,7 +179,45 @@ object SingBoxConfigFactory {
             probe?.let { add(buildProbeInbound(it)) }
         }
         putJsonArray("outbounds") {
-            add(buildOutbound(node))
+            // One outbound per server the tunnel may end up on, with a selector on top wearing the
+            // tag everything else already points at. Nothing downstream changes: `route.final`,
+            // the probe rule and the DNS detours all still say "proxy", and the selector decides
+            // what that means today.
+            //
+            // The point of the arrangement is that moving between these servers stops being a
+            // restart. `selectOutbound` swaps a pointer inside the core — the TUN survives, the
+            // DNS cache survives, open connections survive, and the watchdog's fifteen-second
+            // grace never happens. Before this, every switch — a failover, a tap in the list, a
+            // resolver swap — tore down the core and took every connection in the tunnel with it.
+            //
+            // Falls back to the single outbound when there is nobody to switch to: a group of one
+            // is a pointer that can only point at itself.
+            val members = group.filter { it.settings != ProxySettings.Direct }
+            if (members.size > 1) {
+                members.forEach { member ->
+                    // A member that cannot be expressed is dropped rather than fatal: it would
+                    // only ever have been one destination among several, and refusing to start the
+                    // tunnel over it would be a worse trade than not offering it.
+                    runCatching { add(buildOutbound(member, nodeTag(member.id))) }
+                }
+                addJsonObject {
+                    put("type", "selector")
+                    put("tag", PROXY_TAG)
+                    putJsonArray("outbounds") {
+                        members.forEach { add(nodeTag(it.id)) }
+                    }
+                    // Where the group points when the core starts. Without `experimental.cache_file`
+                    // sing-box has no memory of a previous choice, so this is the whole of it —
+                    // and it has to name the server the app believes is current, or a restart
+                    // would silently move the tunnel somewhere the user never chose.
+                    put("default", nodeTag(node.id))
+                    // The default, spelled out because it is the reason for all of this: a switch
+                    // must not reach into connections the user already has open.
+                    put("interrupt_exist_connections", false)
+                }
+            } else {
+                add(buildOutbound(node, PROXY_TAG))
+            }
             addJsonObject {
                 put("type", "direct")
                 put("tag", DIRECT_TAG)
@@ -575,9 +627,9 @@ object SingBoxConfigFactory {
 
     // ------------------------------------------------------------- Outbound
 
-    private fun buildOutbound(node: ProxyNode): JsonObject {
+    private fun buildOutbound(node: ProxyNode, tag: String): JsonObject {
         val raw = node.settings as? ProxySettings.Raw
-        return if (raw != null) rawOutbound(raw) else typedOutbound(node)
+        return if (raw != null) rawOutbound(raw, tag) else typedOutbound(node, tag)
     }
 
     /**
@@ -596,7 +648,7 @@ object SingBoxConfigFactory {
      * this, writes the reason to the journal and returns null, so the tunnel simply does not come
      * up — which is the honest answer.
      */
-    private fun rawOutbound(raw: ProxySettings.Raw): JsonObject {
+    private fun rawOutbound(raw: ProxySettings.Raw, tag: String): JsonObject {
         val parsed = runCatching {
             Json.parseToJsonElement(raw.outbound).jsonObject
         }.getOrElse { error ->
@@ -610,12 +662,12 @@ object SingBoxConfigFactory {
             parsed.forEach { (key, value) ->
                 if (key != "tag" && key != "detour") put(key, value)
             }
-            put("tag", PROXY_TAG)
+            put("tag", tag)
         }
     }
 
-    private fun typedOutbound(node: ProxyNode): JsonObject = buildJsonObject {
-        put("tag", PROXY_TAG)
+    private fun typedOutbound(node: ProxyNode, tag: String): JsonObject = buildJsonObject {
+        put("tag", tag)
         put("server", node.server)
         put("server_port", node.port)
 

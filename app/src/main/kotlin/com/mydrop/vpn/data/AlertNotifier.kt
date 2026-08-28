@@ -65,6 +65,22 @@ class AlertNotifier(
         text = strings.get(R.string.alert_dns_dead_text, dead),
     )
 
+    /**
+     * A subscription refresh took away every server on one of the hand-picked lists.
+     *
+     * Worth waking somebody for, because it is silent and it disarms something they set up. The
+     * failover list falling empty means the tunnel goes back to choosing replacements from the
+     * whole subscription; the mobile list falling empty means the separation between networks has
+     * switched itself off. Neither shows anywhere until the day it matters.
+     */
+    fun listEmptied(mobile: Boolean) = post(
+        id = ID_LIST,
+        title = strings.get(R.string.alert_list_emptied_title),
+        text = strings.get(
+            if (mobile) R.string.alert_list_emptied_mobile else R.string.alert_list_emptied_failover,
+        ),
+    )
+
     /** A newer release exists. Not a fault, but it arrives the same way and at the same moments. */
     fun updateAvailable(version: String) = post(
         id = ID_UPDATE,
@@ -120,5 +136,6 @@ class AlertNotifier(
         const val ID_SERVER = 4001
         const val ID_DNS = 4002
         const val ID_UPDATE = 4003
+        const val ID_LIST = 4004
     }
 }

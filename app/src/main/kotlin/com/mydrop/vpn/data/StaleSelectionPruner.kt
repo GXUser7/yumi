@@ -29,6 +29,7 @@ class StaleSelectionPruner(
     private val profiles: ProfileRepository,
     private val settings: SettingsRepository,
     private val logs: LogRepository,
+    private val alerts: AlertNotifier,
     private val scope: CoroutineScope,
 ) {
 
@@ -60,6 +61,9 @@ class StaleSelectionPruner(
                             },
                             pruned.lostFailover,
                         )
+                        // Only when it is gone entirely. Losing two of twenty is housekeeping;
+                        // losing the last one changes what the app will do next time.
+                        if (pruned.failoverEmptied) alerts.listEmptied(mobile = false)
                     }
                     if (pruned.lostMobile > 0) {
                         // Louder than the failover list emptying: that one falling back to the
@@ -73,6 +77,7 @@ class StaleSelectionPruner(
                             },
                             pruned.lostMobile,
                         )
+                        if (pruned.mobileEmptied) alerts.listEmptied(mobile = true)
                     }
                 }
         }

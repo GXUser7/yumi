@@ -75,7 +75,34 @@ class AppContainer(context: Context) {
         settings = settings,
         logs = logs,
         selectedDns = { profiles.selectedDnsProfile()?.url },
+        switchableGroup = ::switchableGroup,
     )
+
+    /**
+     * Every server the tunnel may be moved onto without a restart.
+     *
+     * Deliberately not the whole subscription: each member is an outbound in the document the core
+     * parses at startup, and three hundred of them would be paid for on every connect by everyone,
+     * to make instant a switch that will never happen. The membership is exactly the places the
+     * app itself can decide to go — the chosen server, the mobile list, and the failover pool —
+     * and anything outside it still works, just the old expensive way.
+     */
+    private fun switchableGroup(selected: com.mydrop.vpn.core.model.ProxyNode):
+        List<com.mydrop.vpn.core.model.ProxyNode> {
+        val state = profiles.state.value
+        val current = settings.value
+        val byId = state.nodes.associateBy { it.id }
+        val mobile = current.mobileNodeIds.mapNotNull(byId::get)
+        val failover = com.mydrop.vpn.core.model.FailoverGroup.candidates(
+            nodes = state.nodes,
+            selected = selected,
+            latencies = state.latencies,
+            limit = com.mydrop.vpn.core.model.FailoverGroup.MAX_GROUP,
+            chosen = current.failoverNodeIds,
+        )
+        // The chosen server first, so a truncated group still contains the one that matters.
+        return (listOf(selected) + mobile + failover).distinctBy { it.id }.take(SWITCHABLE_LIMIT)
+    }
 
     /**
      * The real sing-box tunnel. [SimulatedTunnelController] is kept around deliberately: it is
@@ -164,8 +191,14 @@ class AppContainer(context: Context) {
         profiles = profiles,
         settings = settings,
         logs = logs,
+        alerts = alerts,
         scope = applicationScope,
     )
+
+    private companion object {
+        /** Members past this buy nothing: the app only ever chooses from the lists above. */
+        const val SWITCHABLE_LIMIT = 24
+    }
 
     init {
         // A store that cannot write is losing the user's servers silently; now it says so.

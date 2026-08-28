@@ -500,6 +500,9 @@
     <string name="settings_update_install">Установить</string>
     <string name="settings_update_retry">Повторить</string>
 
+    <string name="alert_list_emptied_title">Список серверов опустел</string>
+    <string name="alert_list_emptied_failover">Обновление подписки унесло все серверы для подмены. Замену туннель снова выбирает сам, по всей подписке.</string>
+    <string name="alert_list_emptied_mobile">Обновление подписки унесло все серверы для мобильного. Разделение сетей выключилось: везде снова общий список.</string>
     <string name="alert_update_title">Вышла версия %1$s</string>
     <string name="alert_update_text">Откройте настройки, чтобы скачать и установить</string>
 

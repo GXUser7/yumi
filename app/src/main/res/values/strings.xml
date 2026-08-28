@@ -504,6 +504,9 @@
     <string name="settings_update_install">Install</string>
     <string name="settings_update_retry">Try again</string>
 
+    <string name="alert_list_emptied_title">A server list is empty</string>
+    <string name="alert_list_emptied_failover">A subscription refresh took away every failover server. Replacements are chosen automatically again, from the whole subscription.</string>
+    <string name="alert_list_emptied_mobile">A subscription refresh took away every mobile server. The networks are no longer separated: one list everywhere again.</string>
     <string name="alert_update_title">Version %1$s is out</string>
     <string name="alert_update_text">Open Settings to download and install it</string>
 

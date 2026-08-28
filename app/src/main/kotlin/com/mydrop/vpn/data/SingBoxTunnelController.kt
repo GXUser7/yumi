@@ -7,7 +7,9 @@ import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
 import com.mydrop.vpn.vpn.MyDropVpnService
+import io.nekohasekai.libbox.Libbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -59,6 +61,29 @@ class SingBoxTunnelController(
                 MyDropVpnService.start(context, config, node.id, node.name)
             }
         }
+    }
+
+    /**
+     * Asks the running core to point its selector at another member.
+     *
+     * A standalone command client rather than the one the service keeps: that one exists to hold
+     * the status and log subscriptions alive, and borrowing it for a one-shot call would tie this
+     * to the service's lifecycle for no reason. This opens a connection, says one thing and closes.
+     */
+    override fun selectOutbound(nodeId: String): Boolean = runCatching {
+        val client = Libbox.newStandaloneCommandClient()
+        try {
+            client.selectOutbound(SingBoxConfigFactory.PROXY_TAG, SingBoxConfigFactory.nodeTag(nodeId))
+        } finally {
+            runCatching { client.disconnect() }
+        }
+        logs.trace("YumiCore", "selected outbound for $nodeId without restarting")
+        true
+    }.getOrElse { error ->
+        // Not an error worth showing: every caller has a working fallback, and the reasons this
+        // fails are ordinary — the tunnel is down, or the server is not in the group.
+        logs.trace("YumiCore", "selectOutbound refused: ${error.message}")
+        false
     }
 
     override fun disconnect() {
