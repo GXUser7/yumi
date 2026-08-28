@@ -351,6 +351,11 @@ def main() -> None:
         action="store_true",
         help="разрешить пост-заглушку без --announce",
     )
+    parser.add_argument(
+        "--no-announce",
+        action="store_true",
+        help="опубликовать релиз на GitHub и ничего не отправлять в канал",
+    )
     args = parser.parse_args()
 
     # `@path` reads the text from a UTF-8 file. Release notes and channel posts are paragraphs of
@@ -369,7 +374,12 @@ def main() -> None:
     # `--announce` goes to the channel, and passing only the first publishes a release with a full
     # changelog next to a post that says "новая сборка" and nothing else. Nobody sees that until
     # they read the channel, by which point a few hundred people have seen it too.
-    if not args.announce and not args.allow_default_announce and not args.dry_run:
+    if (
+        not args.announce
+        and not args.allow_default_announce
+        and not args.no_announce
+        and not args.dry_run
+    ):
         die(
             "нет --announce: в канал ушёл бы текст-заглушка, который ничего не говорит о версии.\n"
             "Передай --announce @файл.txt, или --allow-default-announce, если это правда нужно.",
@@ -410,6 +420,14 @@ def main() -> None:
     )
     release = ensure_release(repo, token, tag, notes)
     links = {apk.name: upload_asset(release, token, apk) for apk in renamed}
+
+    # Not every release is an announcement. A build cut to carry a fix to one person, or to
+    # sit ready while its description is still being written, has somewhere to live: the release
+    # page. The channel post can follow later with --announce-only, against the same tag.
+    if args.no_announce:
+        print("\n→ опубликовано на GitHub; в канал ничего не отправлено (--no-announce)")
+        print("   пост можно отправить позже: tools/release.py --announce-only --announce @файл")
+        return
 
     post(args, env, version, links)
     print("\n→ опубликовано и отправлено в канал")

@@ -16,3 +16,13 @@ captures/
 app/libs/*.aar
 
 __pycache__/
+
+# Разборы, снятые внешними агентами, и логи, которые к ним прилагались. Не в репозиторий:
+# в приложенных логах стоят адреса серверов подписки, а репозиторий публичный.
+.agents/
+Pizda.txt
+ORIGINAL_REQUEST.md
+PROJECT.md
+PROJECT_AUDIT_AND_BUGS.md
+VPN_DISCONNECTION_ANALYSIS.md
+FIXES_DESCRIPTION.md
