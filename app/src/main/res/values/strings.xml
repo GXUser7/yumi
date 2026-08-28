@@ -279,6 +279,7 @@
     <string name="settings_boot_subtitle">Raise the tunnel after the phone restarts</string>
     <string name="settings_fastest">Pick the fastest server</string>
     <string name="settings_fastest_subtitle">Take the lowest-latency server before connecting</string>
+    <string name="settings_failover_section">Server replacement</string>
     <string name="settings_failover">Leave a dead server</string>
     <string name="settings_failover_subtitle">Probe the current server and move to a live one if it dies</string>
     <string name="action_copy_logs">Copy the log</string>

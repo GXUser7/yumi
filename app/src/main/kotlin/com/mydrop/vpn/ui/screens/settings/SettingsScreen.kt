@@ -46,6 +46,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TextButton
@@ -417,35 +418,6 @@ fun SettingsScreen(
                     onCheckedChange = { onUpdate { s -> s.copy(autoSelectFastest = it) } },
                 )
                 SwitchRow(
-                    title = stringResource(R.string.settings_failover),
-                    subtitle = stringResource(R.string.settings_failover_subtitle),
-                    checked = settings.autoFailover,
-                    onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
-                )
-                AnimatedVisibility(visible = settings.autoFailover) {
-                    Column {
-                        SwitchRow(
-                            title = stringResource(R.string.settings_return_home),
-                            subtitle = stringResource(R.string.settings_return_home_subtitle),
-                            checked = settings.returnHome,
-                            onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
-                        )
-                        NavigationRow(
-                            title = stringResource(R.string.settings_failover_servers),
-                            subtitle = if (settings.failoverNodeIds.isEmpty()) {
-                                stringResource(R.string.settings_failover_auto)
-                            } else {
-                                stringResource(
-                                    R.string.settings_failover_manual,
-                                    settings.failoverNodeIds.size,
-                                )
-                            },
-                            icon = Icons.Rounded.SwapHoriz,
-                            onClick = onOpenFailover,
-                        )
-                    }
-                }
-                SwitchRow(
                     title = stringResource(R.string.settings_auto_update),
                     subtitle = stringResource(R.string.settings_auto_update_subtitle),
                     checked = settings.subscriptionAutoUpdate,
@@ -491,6 +463,57 @@ fun SettingsScreen(
             }
         }
 
+
+        /*
+         * Своя секция, а не три строки в общем списке.
+         *
+         * Раньше «Уходить с упавшего сервера», «Возвращаться на мой сервер» и «Серверы для подмены»
+         * лежали в «Поведении» вперемешку с автозапуском и обновлением подписок — одинаковыми
+         * строками, ничем не показывая, что две из них подчинены третьей и что все три вообще про
+         * одно и то же. Владелец так и сказал: непонятно, относятся они к замене сервера или нет.
+         *
+         * Поэтому: отдельная карточка со своим заголовком, а подчинённые настройки — во вложенной
+         * поверхности на тон выше. Вложенность здесь несёт смысл, а не украшает: она ровно и
+         * означает «это работает, только пока включён переключатель сверху», и исчезает вместе с
+         * ним.
+         */
+        item("failover") {
+            SettingsSection(
+                title = stringResource(R.string.settings_failover_section),
+                icon = Icons.Rounded.SwapHoriz,
+            ) {
+                SwitchRow(
+                    title = stringResource(R.string.settings_failover),
+                    subtitle = stringResource(R.string.settings_failover_subtitle),
+                    checked = settings.autoFailover,
+                    onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
+                )
+                AnimatedVisibility(visible = settings.autoFailover) {
+                    DependentGroup {
+                        NavigationRow(
+                            title = stringResource(R.string.settings_failover_servers),
+                            subtitle = if (settings.failoverNodeIds.isEmpty()) {
+                                stringResource(R.string.settings_failover_auto)
+                            } else {
+                                stringResource(
+                                    R.string.settings_failover_manual,
+                                    settings.failoverNodeIds.size,
+                                )
+                            },
+                            icon = Icons.Rounded.Dns,
+                            onClick = onOpenFailover,
+                        )
+                        GroupDivider()
+                        SwitchRow(
+                            title = stringResource(R.string.settings_return_home),
+                            subtitle = stringResource(R.string.settings_return_home_subtitle),
+                            checked = settings.returnHome,
+                            onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
+                        )
+                    }
+                }
+            }
+        }
 
         item("diagnostics") {
             SettingsSection(
@@ -596,6 +619,34 @@ private fun SettingsSection(
             content()
         }
     }
+}
+
+/**
+ * Настройки, подчинённые переключателю над ними.
+ *
+ * Тон выше, чем у карточки-секции, и заметный скруглённый край: на плоском списке невозможно
+ * увидеть, что три строки — это одна мысль, а не три соседние. Отступ сверху отделяет группу от
+ * своего переключателя настолько, чтобы читалось «внутри», а не «следом».
+ */
+@Composable
+private fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        content = content,
+    )
+}
+
+/** Волосяная линия внутри группы: строки разные, но принадлежат одному. */
+@Composable
+private fun GroupDivider() {
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+    )
 }
 
 @Composable

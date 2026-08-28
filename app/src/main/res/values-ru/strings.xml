@@ -275,6 +275,7 @@
     <string name="settings_boot_subtitle">Поднимать туннель после перезагрузки телефона</string>
     <string name="settings_fastest">Выбирать быстрый сервер</string>
     <string name="settings_fastest_subtitle">Перед подключением брать сервер с наименьшей задержкой</string>
+    <string name="settings_failover_section">Замена сервера</string>
     <string name="settings_failover">Уходить с упавшего сервера</string>
     <string name="settings_failover_subtitle">Проверять текущий сервер и переходить на живой, если он упал</string>
     <string name="action_copy_logs">Скопировать журнал</string>
