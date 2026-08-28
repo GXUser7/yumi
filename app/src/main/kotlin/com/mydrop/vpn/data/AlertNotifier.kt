@@ -26,10 +26,13 @@ import com.mydrop.vpn.R
  * permanent one noisy. So there are two ways to silence this — the switch in the app, and the
  * channel in the system settings — and neither of them touches the other.
  */
+/** What an alert is about, so each kind can be silenced on its own. */
+enum class AlertKind { Server, Dns, Update, Lists }
+
 class AlertNotifier(
     private val context: Context,
     private val strings: Strings,
-    private val enabled: () -> Boolean,
+    private val enabled: (AlertKind) -> Boolean,
 ) {
 
     private val manager: NotificationManager?
@@ -39,6 +42,7 @@ class AlertNotifier(
 
     /** The tunnel moved off a server that stopped answering. */
     fun serverLeft(dead: String, replacement: String) = post(
+        kind = AlertKind.Server,
         id = ID_SERVER,
         title = strings.get(R.string.alert_server_dead_title),
         text = strings.get(R.string.alert_server_dead_text, dead, replacement),
@@ -46,6 +50,7 @@ class AlertNotifier(
 
     /** The server is gone and there was nowhere to go: the tunnel is still on it, still broken. */
     fun serverStranded(dead: String) = post(
+        kind = AlertKind.Server,
         id = ID_SERVER,
         title = strings.get(R.string.alert_server_stranded_title),
         text = strings.get(R.string.alert_server_stranded_text, dead),
@@ -53,6 +58,7 @@ class AlertNotifier(
 
     /** Names stopped resolving and the resolver was replaced. */
     fun dnsReplaced(dead: String, replacement: String) = post(
+        kind = AlertKind.Dns,
         id = ID_DNS,
         title = strings.get(R.string.alert_dns_dead_title),
         text = strings.get(R.string.alert_dns_replaced_text, dead, replacement),
@@ -60,6 +66,7 @@ class AlertNotifier(
 
     /** Names stopped resolving and the user has asked for the resolver to be left alone. */
     fun dnsDead(dead: String) = post(
+        kind = AlertKind.Dns,
         id = ID_DNS,
         title = strings.get(R.string.alert_dns_dead_title),
         text = strings.get(R.string.alert_dns_dead_text, dead),
@@ -74,6 +81,7 @@ class AlertNotifier(
      * switched itself off. Neither shows anywhere until the day it matters.
      */
     fun listEmptied(mobile: Boolean) = post(
+        kind = AlertKind.Lists,
         id = ID_LIST,
         title = strings.get(R.string.alert_list_emptied_title),
         text = strings.get(
@@ -83,13 +91,14 @@ class AlertNotifier(
 
     /** A newer release exists. Not a fault, but it arrives the same way and at the same moments. */
     fun updateAvailable(version: String) = post(
+        kind = AlertKind.Update,
         id = ID_UPDATE,
         title = strings.get(R.string.alert_update_title, version),
         text = strings.get(R.string.alert_update_text),
     )
 
-    private fun post(id: Int, title: String, text: String) {
-        if (!enabled()) return
+    private fun post(kind: AlertKind, id: Int, title: String, text: String) {
+        if (!enabled(kind)) return
         val notifications = manager ?: return
         ensureChannel(notifications)
 

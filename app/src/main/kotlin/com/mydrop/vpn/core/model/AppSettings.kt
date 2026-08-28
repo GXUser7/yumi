@@ -193,19 +193,26 @@ data class AppSettings(
      */
     val subscriptionUpdateMinutes: Int = 360,
     val logLevel: LogLevel = LogLevel.Info,
-    /**
-     * Whether the app says out loud that it fixed something.
+    /*
+     * Whether the app says out loud that it fixed something, one kind of event at a time.
      *
      * The whole value of automatic failover is that nobody is watching when it fires, which is
      * exactly why the user never learns that it did: the only lasting symptom is a connect screen
-     * naming a server they did not choose, discovered hours later. Same for a resolver that was
-     * swapped out from under them.
+     * naming a server they did not choose, discovered hours later.
      *
-     * On by default, and a switch rather than a build flag: how chatty a VPN should be about its
-     * own plumbing is a matter of taste, and the honest way to settle a matter of taste is to let
-     * the person whose phone it is settle it.
+     * Split rather than one switch, because the four events differ in how often they happen and in
+     * how much they matter. A server being replaced can happen several times on a bad evening; a
+     * hand-picked list emptying itself happens once and disarms something the user set up
+     * deliberately. Someone who has silenced the first still wants the second.
+     *
+     * All on by default: how chatty a VPN should be about its own plumbing is a matter of taste,
+     * and the honest way to settle a matter of taste is to let the person whose phone it is settle
+     * it — but only after they have seen what there is to silence.
      */
-    val faultAlerts: Boolean = true,
+    val alertServer: Boolean = true,
+    val alertDns: Boolean = true,
+    val alertUpdate: Boolean = true,
+    val alertLists: Boolean = true,
 
     // Updates
     /**

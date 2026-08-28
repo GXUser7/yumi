@@ -5,6 +5,7 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
@@ -98,6 +99,24 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val logs: StateFlow<List<LogEntry>> = container.logs.entries
 
     val updates: StateFlow<com.mydrop.vpn.core.model.UpdateState> = container.updates.state
+
+    init {
+        // The answer to "check for updates" is a fact, not a state: it is read once and then it is
+        // in the way. Left on the screen it also pushed the button it belongs to further down, so
+        // a second tap landed on whatever had slid underneath the finger. Everything that has
+        // nothing left to offer — up to date, or a failure — says so in passing and disappears;
+        // only the states with something to do (a version to download, a download to watch, a file
+        // to install) keep their place on screen.
+        viewModelScope.launch {
+            container.updates.state.collect { state ->
+                when (state) {
+                    is UpdateState.UpToDate -> emit(R.string.settings_update_none, state.version)
+                    is UpdateState.Failed -> emit(state.message)
+                    else -> Unit
+                }
+            }
+        }
+    }
 
     fun checkForUpdate() = container.updates.check(manual = true)
 

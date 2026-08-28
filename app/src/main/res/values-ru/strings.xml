@@ -312,6 +312,15 @@
     <string name="settings_logs">Журнал</string>
     <string name="settings_alerts">Сообщать о неполадках</string>
     <string name="settings_alerts_subtitle">Когда меняется сервер или DNS, а также о новой версии</string>
+    <string name="settings_alerts_section">Уведомления</string>
+    <string name="settings_alert_server">Замена сервера</string>
+    <string name="settings_alert_server_subtitle">Сервер перестал отвечать и туннель переехал — или переезжать было некуда</string>
+    <string name="settings_alert_dns">Замена DNS</string>
+    <string name="settings_alert_dns_subtitle">Резолвер перестал отвечать и был подменён запасным</string>
+    <string name="settings_alert_lists">Список опустел</string>
+    <string name="settings_alert_lists_subtitle">Обновление подписки унесло все серверы из списка подмены или мобильного</string>
+    <string name="settings_alert_update">Новая версия</string>
+    <string name="settings_alert_update_subtitle">Вышло обновление приложения</string>
     <string name="settings_logs_subtitle">Логи ядра и подписок</string>
 
     <string name="settings_about">О приложении</string>

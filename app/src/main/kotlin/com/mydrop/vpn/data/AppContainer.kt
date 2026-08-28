@@ -45,7 +45,16 @@ class AppContainer(context: Context) {
     )
 
     /** Says out loud what the app would otherwise fix in silence. */
-    val alerts = AlertNotifier(appContext, strings, enabled = { settings.value.faultAlerts })
+    val alerts = AlertNotifier(appContext, strings, enabled = { kind ->
+        settings.value.let {
+            when (kind) {
+                AlertKind.Server -> it.alertServer
+                AlertKind.Dns -> it.alertDns
+                AlertKind.Update -> it.alertUpdate
+                AlertKind.Lists -> it.alertLists
+            }
+        }
+    })
 
     val logs = LogRepository(strings, diagnostics)
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)

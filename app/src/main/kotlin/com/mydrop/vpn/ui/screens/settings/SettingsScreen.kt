@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.NetworkPing
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
@@ -554,13 +555,45 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Article,
                     onClick = onOpenLogs,
                 )
-                SwitchRow(
-                    title = stringResource(R.string.settings_alerts),
-                    subtitle = stringResource(R.string.settings_alerts_subtitle),
-                    checked = settings.faultAlerts,
-                    onCheckedChange = { onUpdate { s -> s.copy(faultAlerts = it) } },
-                )
                 QuickTileRow()
+            }
+        }
+
+        /*
+         * Four switches rather than one, because the events differ in how often they arrive and in
+         * what they cost to miss. A replaced server can happen several times on a bad evening; a
+         * hand-picked list emptying itself happens once and quietly disarms something the user set
+         * up. Somebody who has silenced the first still wants the second.
+         */
+        item("alerts") {
+            SettingsSection(
+                title = stringResource(R.string.settings_alerts_section),
+                icon = Icons.Rounded.NotificationsActive,
+            ) {
+                SwitchRow(
+                    title = stringResource(R.string.settings_alert_server),
+                    subtitle = stringResource(R.string.settings_alert_server_subtitle),
+                    checked = settings.alertServer,
+                    onCheckedChange = { onUpdate { s -> s.copy(alertServer = it) } },
+                )
+                SwitchRow(
+                    title = stringResource(R.string.settings_alert_dns),
+                    subtitle = stringResource(R.string.settings_alert_dns_subtitle),
+                    checked = settings.alertDns,
+                    onCheckedChange = { onUpdate { s -> s.copy(alertDns = it) } },
+                )
+                SwitchRow(
+                    title = stringResource(R.string.settings_alert_lists),
+                    subtitle = stringResource(R.string.settings_alert_lists_subtitle),
+                    checked = settings.alertLists,
+                    onCheckedChange = { onUpdate { s -> s.copy(alertLists = it) } },
+                )
+                SwitchRow(
+                    title = stringResource(R.string.settings_alert_update),
+                    subtitle = stringResource(R.string.settings_alert_update_subtitle),
+                    checked = settings.alertUpdate,
+                    onCheckedChange = { onUpdate { s -> s.copy(alertUpdate = it) } },
+                )
             }
         }
 
@@ -822,23 +855,11 @@ private fun UpdateRow(
                 Spacer(Modifier.height(12.dp))
             }
 
-            is UpdateState.Failed -> {
-                Text(
-                    text = state.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.height(12.dp))
-            }
-
-            is UpdateState.UpToDate -> {
-                Text(
-                    text = stringResource(R.string.settings_update_none, state.version),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-            }
+            // Nothing above the button for these two. Both are answers rather than situations —
+            // there is no version to read about and nothing to do next — and both used to push the
+            // button down at the exact moment somebody was looking at it. They are announced in
+            // passing instead; see MainViewModel.
+            is UpdateState.Failed, is UpdateState.UpToDate -> Unit
 
             UpdateState.Idle, UpdateState.Checking -> Unit
         }
