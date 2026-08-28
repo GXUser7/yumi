@@ -394,8 +394,8 @@
     <string name="log_failover_no_answer">“%1$s” did not answer (%2$d/%3$d)</string>
     <string name="log_failover_no_traffic">“%1$s” answers but carries nothing (%2$d/%3$d)</string>
     <string name="log_failover_nothing_to_swap">“%1$s” is not answering, and there is nothing to replace it with</string>
-    <string name="log_mobile_switch">Cellular network — moving to “%1$s”</string>
-    <string name="log_mobile_back">Wi-Fi is back — moving to “%1$s”</string>
+    <string name="log_mobile_switch">Cellular network — moving to “%1$s” (%2$s ms)</string>
+    <string name="log_mobile_back">Wi-Fi is back — moving to “%1$s” (%2$s ms)</string>
     <string name="log_mobile_none_left">On cellular, but not one server from the mobile list is left — staying put</string>
     <string name="log_failover_probing">“%1$s” is not answering — checking %2$d spares</string>
     <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>

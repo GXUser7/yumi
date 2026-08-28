@@ -8,6 +8,7 @@ import com.mydrop.vpn.core.model.FailoverPolicy
 import com.mydrop.vpn.core.model.NetworkEnvironment
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
@@ -136,17 +137,18 @@ class FailoverWatchdog(
 
         when {
             NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
-                val target = fastest(profiles.nodes.filter { it.id in current.mobileNodeIds })
-                if (target == null) {
-                    // Every named mobile server has gone from the subscription. Staying put beats
-                    // guessing: the user said which servers may carry cellular traffic, and none
-                    // of the others were on that list.
+                val pool = profiles.nodes.filter { it.id in current.mobileNodeIds }
+                val chosen = measureAndPick(pool)
+                if (chosen == null) {
+                    // Either the named servers have gone from the subscription, or none of them
+                    // answered from here. Staying put beats guessing: the user said which servers
+                    // may carry cellular traffic, and none of the others were on that list.
                     logs.warn(R.string.log_mobile_none_left)
                     return
                 }
                 savedOrdinaryNodeId = carrying.id
-                logs.info(R.string.log_mobile_switch, target.name)
-                launcher.switchTo(target)
+                logs.info(R.string.log_mobile_switch, chosen.node.name, chosen.millis.toString())
+                launcher.switchTo(chosen.node)
             }
 
             NetworkEnvironment.wantsOrdinaryServer(transport, current.mobileNodeIds, carrying.id) -> {
@@ -164,59 +166,64 @@ class FailoverWatchdog(
                 // never nominated for anything — and pick whichever happened to answer quickest.
                 // The failover list exists precisely to say which servers are acceptable to be
                 // moved onto, and coming home is a move like any other.
-                val target = if (current.restoreWifiNodeOnWifi && remembered != null) {
-                    remembered
-                } else {
-                    ordinaryReplacementFor(remembered ?: carrying, current.mobileNodeIds)
-                        ?: remembered
-                        ?: return
+                if (current.restoreWifiNodeOnWifi && remembered != null) {
+                    savedOrdinaryNodeId = null
+                    logs.info(R.string.log_mobile_back, remembered.name, "")
+                    launcher.switchTo(remembered)
+                    return
                 }
+                val pool = ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds)
+                val chosen = measureAndPick(pool) ?: return
                 savedOrdinaryNodeId = null
-                logs.info(R.string.log_mobile_back, target.name)
-                launcher.switchTo(target)
+                logs.info(R.string.log_mobile_back, chosen.node.name, chosen.millis.toString())
+                launcher.switchTo(chosen.node)
             }
         }
     }
 
     /**
-     * Where the tunnel belongs on an ordinary network, chosen the way a failover would choose.
+     * Which servers are acceptable on an ordinary network, in the order a failover would consider
+     * them.
      *
      * The pool is the user's own failover list, or their subscription when they have not named
      * one — the same pool [swapAwayFrom] draws from, and for the same reason: these are the
      * servers they have said they are willing to be on.
      */
-    private fun ordinaryReplacementFor(anchor: ProxyNode, mobileIds: Set<String>): ProxyNode? {
-        val candidates = FailoverGroup.candidates(
+    private fun ordinaryPoolFor(anchor: ProxyNode, mobileIds: Set<String>): List<ProxyNode> =
+        FailoverGroup.candidates(
             nodes = profiles.nodes,
             selected = anchor,
             latencies = profiles.state.value.latencies,
             limit = FailoverGroup.MAX_GROUP,
             chosen = settings.value.failoverNodeIds,
         ).filter { it.id !in mobileIds }
-        return FailoverChoice.pick(candidates, profiles.state.value.latencies)
-            ?: fastest(candidates)
-    }
+
+    private data class Measured(val node: ProxyNode, val millis: Int)
 
     /**
-     * The quickest of a set, by what was measured last rather than by measuring now.
+     * Measures a pool from where the phone is standing now, and picks from what answered.
      *
-     * Deliberately no fresh sweep. This runs the moment a phone reaches a cellular network, where
-     * a sweep would be several TLS handshakes on somebody's paid data, every time they leave the
-     * house — and if the pick turns out to be dead, the ordinary watchdog notices within half a
-     * minute and replaces it from the same list.
+     * The measuring is the point. An earlier version read the stored numbers instead, to save a
+     * few handshakes on somebody's paid data — and the numbers it read had been taken on home
+     * Wi-Fi, which says nothing whatever about the same servers reached over cellular from a
+     * street. Choosing a mobile server by its Wi-Fi latency is choosing by a measurement of a
+     * different thing.
+     *
+     * Selection is [FailoverChoice], exactly as in an ordinary failover: unanswered servers are
+     * out, servers half again slower than the pack's median are out, and the winner is drawn at
+     * random from the rest rather than being the fastest — so a subscription's worth of phones
+     * leaving home at nine in the morning do not all land on the same server.
      */
-    private fun fastest(nodes: List<ProxyNode>): ProxyNode? {
-        val latencies = profiles.state.value.latencies
-        return nodes
-            .filter { it.settings != com.mydrop.vpn.core.model.ProxySettings.Direct }
-            .minByOrNull { node ->
-                val result = latencies[node.id]
-                when {
-                    result == null -> Int.MAX_VALUE - 1
-                    result.failed -> Int.MAX_VALUE
-                    else -> result.millis
-                }
-            }
+    private suspend fun measureAndPick(pool: List<ProxyNode>): Measured? {
+        val candidates = pool.filter { it.settings != ProxySettings.Direct }
+        if (candidates.isEmpty()) return null
+
+        val measured = latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
+            profiles.recordLatency(result)
+        }
+        val fresh = measured.associateBy { it.nodeId }
+        val winner = FailoverChoice.pick(candidates, fresh) ?: return null
+        return Measured(winner, fresh[winner.id]?.millis ?: 0)
     }
 
     /** Follows the tunnel: a watch runs for exactly as long as one connection lives. */
