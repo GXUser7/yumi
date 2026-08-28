@@ -416,11 +416,21 @@ class FailoverWatchdog(
         logs.warn(R.string.log_failover_probing, dead.name, candidates.size)
         // Measured now, not read from the profile: what mattered an hour ago says nothing about
         // which servers are up during the outage this is reacting to.
-        val fresh = mutableMapOf<String, com.mydrop.vpn.core.model.LatencyResult>()
-        latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
-            fresh[result.nodeId] = result
+        //
+        // Built from what measureAll returns, not collected in its callback along the way. That
+        // callback runs on up to sixteen coroutines at once — see LatencyTester.measureAll — and
+        // the map it used to fill was an ordinary LinkedHashMap. Concurrent writes to one of those
+        // lose entries, and a lost entry is indistinguishable here from a server that never
+        // answered: the choice below sees fewer live candidates than there are, picks a slower
+        // one, or finds none at all and leaves the tunnel sitting on the dead server it was
+        // supposed to be escaping. Worst exactly when it matters most, because the more spares
+        // the user has chosen, the more writers there are to collide.
+        //
+        // The callback stays, but only for the side effect that is already safe.
+        val measured = latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
             profiles.recordLatency(result)
         }
+        val fresh = measured.associateBy { it.nodeId }
 
         val chosen = FailoverChoice.pick(candidates, fresh)
         if (chosen == null) {

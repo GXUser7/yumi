@@ -358,9 +358,22 @@ object SingBoxConfigFactory {
     private fun buildTunInbound(settings: AppSettings): JsonObject = buildJsonObject {
         put("type", "tun")
         put("tag", "tun-in")
+        // The IPv6 address is unconditional, and that is the whole fix for a leak.
+        //
+        // A VpnService captures only the routes it is given, and a route can only be given for a
+        // family the interface has an address in. With IPv6 switched off the tunnel had no v6
+        // address, so no `::/0` route was installed, so Android left the *physical* interface as
+        // the default gateway for every IPv6 packet — on any dual-stack Wi-Fi or carrier network
+        // that is the user's real address and their traffic in the clear, while the app showed a
+        // connected tunnel. "IPv6 off" has to mean "no IPv6 leaves this phone", not "IPv6 is
+        // somebody else's problem".
+        //
+        // So the address is always there, the route is always installed, and what happens to the
+        // captured traffic is decided in the routing rules below: carried when the user wants
+        // IPv6, refused immediately when they do not.
         putJsonArray("address") {
             add("172.19.0.1/30")
-            if (settings.enableIpv6) add("fdfe:dcba:9876::1/126")
+            add("fdfe:dcba:9876::1/126")
         }
         put("mtu", settings.mtu)
         // auto_route is meaningless on Android: routes come from VpnService.Builder, which the
@@ -451,6 +464,20 @@ object SingBoxConfigFactory {
                 addJsonObject {
                     put("protocol", "dns")
                     put("action", "hijack-dns")
+                }
+            }
+
+            // Refused rather than carried, and refused rather than dropped.
+            //
+            // The tunnel now captures IPv6 so that none of it escapes; this is what it does with
+            // it. `reject` answers the application at once, so a browser doing Happy Eyeballs
+            // gives up on the AAAA and uses the A record in milliseconds. Silently dropping the
+            // packets instead would make every dual-stack connection wait out a timeout first,
+            // which is the "internet is slow" that switching IPv6 off is meant to avoid.
+            if (!settings.enableIpv6) {
+                addJsonObject {
+                    putJsonArray("ip_cidr") { add("::/0") }
+                    put("action", "reject")
                 }
             }
 

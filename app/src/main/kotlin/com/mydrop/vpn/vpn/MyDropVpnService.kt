@@ -54,7 +54,6 @@ import java.io.File
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface as JavaNetworkInterface
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -94,13 +93,10 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         /**
          * How long a lost default interface is given to be replaced before the core is told it
-         * has none. Long enough to cover a Wi-Fi → cellular handover, short enough that a real
-         * loss is not hidden from the core for a noticeable stretch.
+         * has none. Long enough to cover a Wi-Fi → cellular handover and transient Wi-Fi signal
+         * glitches, short enough that a real loss is not hidden from the core for a noticeable stretch.
          */
-        private const val INTERFACE_LOSS_GRACE_MILLIS = 600L
-
-        /** fd 2 is process-wide, so the redirect is installed exactly once. */
-        private val stderrCaptured = AtomicBoolean(false)
+        private const val INTERFACE_LOSS_GRACE_MILLIS = 2000L
 
         /** Nanoseconds — libbox durations come straight from Go. */
         private const val STATUS_INTERVAL_NANOS = 1_000_000_000L
@@ -345,36 +341,6 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     /**
-     * Routes the Go runtime's stderr into logcat and the in-app journal.
-     *
-     * When the core hits a fatal error it prints the panic and goroutine dump to file descriptor
-     * 2 and then raises SIGABRT. Android discards native stderr, so all that survives is a
-     * tombstone whose only frame is `runtime.raise` — the place the process was killed, never the
-     * place it broke. Without this, every core-level abort looks identical and says nothing.
-     *
-     * Done once per process, before [Libbox.setup], because the runtime caches nothing about the
-     * descriptor and later writes follow whatever fd 2 points at.
-     */
-    private fun captureNativeStderr() {
-        if (!stderrCaptured.compareAndSet(false, true)) return
-        runCatching {
-            val pipe = ParcelFileDescriptor.createPipe()
-            Os.dup2(pipe[1].fileDescriptor, 2)
-            pipe[1].close()
-
-            scope.launch {
-                ParcelFileDescriptor.AutoCloseInputStream(pipe[0]).bufferedReader()
-                    .forEachLine { line ->
-                        android.util.Log.e(NATIVE_TAG, line)
-                        runCatching { logs.error(R.string.log_core_line, line) }
-                    }
-            }
-        }.onFailure {
-            android.util.Log.w(NATIVE_TAG, "stderr capture unavailable: ${it.message}")
-        }
-    }
-
-    /**
      * Raises the tunnel, or moves a running one onto a new configuration.
      *
      * Both are the same call. `startOrReloadService` is the core's own swap: it closes the running
@@ -396,7 +362,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     nodeName = requestedNodeName
                     _state.value = VpnState.Connecting(nodeId, VpnState.Connecting.Phase.Starting)
 
-                    captureNativeStderr()
+                    NativeStderrCapture.install(logs)
 
                     _state.value =
                         VpnState.Connecting(nodeId, VpnState.Connecting.Phase.Handshaking)
@@ -719,6 +685,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         if (routeCount == 0) {
             builder.addRoute("0.0.0.0", 0)
+            // Unconditional now: the core always gives the tunnel an IPv6 address, precisely so
+            // that this route can exist. Leaving it out is how IPv6 used to walk out of the phone
+            // past a connected tunnel — see buildTunInbound for the whole of it.
             if (hasInet6) builder.addRoute("::", 0)
         }
 
@@ -914,24 +883,21 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             setUnderlying(network)
             runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
 
-            // Telling the core about the new interface does not rescue the connections that were
-            // pinned to the old one — those are already dead, and nothing else reaps them. The
-            // watchdog would only notice forty-odd seconds later and then draw the wrong
-            // conclusion, switching servers over a server that was never at fault.
-            // Two shapes of the same event. A different interface is the obvious one; the same
-            // interface returning after the core was told there was none is the one that hid for a
-            // long time, and it is what Wi-Fi dropping and reconnecting looks like from here.
-            //
-            // Only on an actual change: the first interface a tunnel gets is not one, and resetting
-            // there would throw away the connections the core has just opened.
+            // Resetting the core's network drops all active sockets with "operation was canceled".
+            // We only want to execute this destructive reset on a genuine handover between
+            // different interfaces (e.g. Wi-Fi <-> Cellular). When an interface merely recovers
+            // from a momentary hiccup on the same physical link (e.g. wlan0 -> wlan0), we update
+            // the default interface with the core, allowing existing TCP streams and retransmissions
+            // to recover naturally without dropping active client connections.
             val changed = previousName != null && previousName != name
-            if (changed || recovered) {
-                val what = if (changed) "handover $previousName -> $name" else "recovered on $name"
-                logs.trace(NATIVE_TAG, "$what, resetting network")
+            if (changed) {
+                logs.trace(NATIVE_TAG, "handover $previousName -> $name, resetting network")
                 resetCoreNetwork()
                 // And tell the watchdog, which would otherwise learn about it from a probe that
                 // is up to a full interval away.
                 _handovers.tryEmit(name)
+            } else if (recovered) {
+                logs.trace(NATIVE_TAG, "recovered on $name, keeping existing sockets")
             }
         }
 

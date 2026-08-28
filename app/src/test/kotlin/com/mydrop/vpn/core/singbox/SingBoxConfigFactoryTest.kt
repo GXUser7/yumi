@@ -28,14 +28,21 @@ class SingBoxConfigFactoryTest {
      */
     @Test
     fun `blocking QUIC rejects only 443 and only when asked`() {
+        // Scoped to QUIC rules: the tunnel also refuses IPv6 by default, which is a reject rule
+        // of its own and has nothing to do with this setting.
         val off = config("vless://uuid@se.example.com:443?security=tls#N").routeRules
-        assertTrue(off.none { it["action"]?.jsonPrimitive?.content == "reject" })
+        // `as?` rather than `.jsonArray`: the DNS hijack rule carries `protocol` as a bare string.
+        assertTrue(off.none { (it["protocol"] as? JsonArray)?.any { p -> p.jsonPrimitive.content == "quic" } == true })
 
         val on = config(
             "vless://uuid@se.example.com:443?security=tls#N",
             AppSettings(blockQuic = true),
         ).routeRules
-        val rule = on.first { it["action"]?.jsonPrimitive?.content == "reject" }
+        // The IPv6 refusal is a reject rule too, and it comes first — pick by what it matches.
+        val rule = on.first {
+            (it["protocol"] as? JsonArray)?.any { p -> p.jsonPrimitive.content == "quic" } == true
+        }
+        assertEquals("reject", rule["action"]!!.jsonPrimitive.content)
         assertEquals("quic", rule["protocol"]!!.jsonArray.single().jsonPrimitive.content)
         assertEquals(443, rule["port"]!!.jsonArray.single().jsonPrimitive.int)
     }
@@ -246,11 +253,48 @@ class SingBoxConfigFactoryTest {
         )["dns"]!!.jsonObject
         assertEquals("ipv4_only", dns["strategy"]!!.jsonPrimitive.content)
 
-        val tun = config(
+    }
+
+    /**
+     * Switching IPv6 off has to mean "none of it leaves the phone", not "it is somebody else's".
+     *
+     * A VpnService captures only the routes it is handed, and a route can only be handed over for
+     * a family the interface has an address in. With no v6 address on the tunnel there was no
+     * `::/0` route, and Android went on using the *physical* interface as the default gateway for
+     * every IPv6 packet — the user's real address and their traffic in the clear, underneath an
+     * app that said it was connected.
+     *
+     * So the address is always there and the traffic is always captured; the setting decides what
+     * happens to it afterwards.
+     */
+    @Test
+    fun `ipv6 is captured and refused rather than left to leak`() {
+        val off = config(
             "vless://u@a.example.com:443?security=tls#N",
             AppSettings(enableIpv6 = false),
-        )["inbounds"]!!.jsonArray.first().jsonObject
-        assertEquals(1, tun["address"]!!.jsonArray.size)
+        )
+        val addresses = off["inbounds"]!!.jsonArray.first().jsonObject["address"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+        assertTrue("the tunnel needs a v6 address to be given a v6 route", addresses.size == 2)
+        assertTrue(addresses.any { it.contains(':') })
+
+        // Refused, not dropped: an immediate answer sends the browser to the A record at once,
+        // where silence would make it wait out a timeout on every dual-stack name.
+        val refusal = off.routeRules.first {
+            it["ip_cidr"]?.jsonArray?.any { c -> c.jsonPrimitive.content == "::/0" } == true
+        }
+        assertEquals("reject", refusal["action"]!!.jsonPrimitive.content)
+
+        // And with IPv6 wanted, nothing refuses it.
+        val on = config(
+            "vless://u@a.example.com:443?security=tls#N",
+            AppSettings(enableIpv6 = true),
+        )
+        assertTrue(
+            on.routeRules.none {
+                it["ip_cidr"]?.jsonArray?.any { c -> c.jsonPrimitive.content == "::/0" } == true
+            },
+        )
     }
 
     @Test
