@@ -151,16 +151,50 @@ class FailoverWatchdog(
 
             NetworkEnvironment.wantsOrdinaryServer(transport, current.mobileNodeIds, carrying.id) -> {
                 val remembered = savedOrdinaryNodeId
-                    ?.takeIf { current.restoreWifiNodeOnWifi }
                     ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
-                val target = remembered
-                    ?: fastest(profiles.nodes.filter { it.id !in current.mobileNodeIds })
-                    ?: return
+                    ?.takeIf { it.id !in current.mobileNodeIds }
+                // The switch says which of two answers to prefer, and both are deliberate.
+                //
+                // Remembering is predictable: the tunnel comes back to the server it left. Not
+                // remembering runs the ordinary choice — over the same pool a failover would use,
+                // which is the list the user curated, never the whole subscription.
+                //
+                // The pool is the point. Choosing "the fastest server that is not on the mobile
+                // list" would range over the entire subscription — hundreds of servers the user
+                // never nominated for anything — and pick whichever happened to answer quickest.
+                // The failover list exists precisely to say which servers are acceptable to be
+                // moved onto, and coming home is a move like any other.
+                val target = if (current.restoreWifiNodeOnWifi && remembered != null) {
+                    remembered
+                } else {
+                    ordinaryReplacementFor(remembered ?: carrying, current.mobileNodeIds)
+                        ?: remembered
+                        ?: return
+                }
                 savedOrdinaryNodeId = null
                 logs.info(R.string.log_mobile_back, target.name)
                 launcher.switchTo(target)
             }
         }
+    }
+
+    /**
+     * Where the tunnel belongs on an ordinary network, chosen the way a failover would choose.
+     *
+     * The pool is the user's own failover list, or their subscription when they have not named
+     * one — the same pool [swapAwayFrom] draws from, and for the same reason: these are the
+     * servers they have said they are willing to be on.
+     */
+    private fun ordinaryReplacementFor(anchor: ProxyNode, mobileIds: Set<String>): ProxyNode? {
+        val candidates = FailoverGroup.candidates(
+            nodes = profiles.nodes,
+            selected = anchor,
+            latencies = profiles.state.value.latencies,
+            limit = FailoverGroup.MAX_GROUP,
+            chosen = settings.value.failoverNodeIds,
+        ).filter { it.id !in mobileIds }
+        return FailoverChoice.pick(candidates, profiles.state.value.latencies)
+            ?: fastest(candidates)
     }
 
     /**
