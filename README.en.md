@@ -40,9 +40,46 @@ sites and addresses go around the VPN. The geo rules ship inside the app, so con
 for lists to be downloaded. Separately: local network bypass, ad-domain blocking and per-app split
 tunnelling.
 
-**Changing servers on a live tunnel** does not break the connection: the core switches in place,
-and the traffic counters and the session timer survive the switch. If a server stops answering, the
-app moves itself to a live one from the same subscription.
+**Changing servers on a live tunnel** does not break the connection: the servers live in the
+configuration as a group, and moving between them is a pointer swap inside the core. The tunnel,
+the DNS cache and every open connection stay where they are, and the traffic counters and session
+timer pass through the switch without resetting.
+
+**Leaving a server that stopped working.** While the tunnel is up the app asks it for a page every
+twenty seconds — not a ping at the port from outside, but data pulled through, because a server can
+answer on its port while carrying nothing at all. Two failures in a row, the second three seconds
+after the first, and the tunnel moves to a server that works. Which servers those may be is yours
+to say: the replacement list is chosen by hand rather than filled with the whole subscription.
+
+It also tries not to blame a server for somebody else's fault. A phone with no internet — a lift, a
+tube station — is not a dead server, and the checks simply pause. A change of network closes the
+connections pinned to the old one at once instead of leaving them to time out. And when nothing
+answers at all, the app stays put: that means the fault is not the server's.
+
+**Your own servers for mobile data.** A second list. While it is empty every network shares one
+list; fill it, and moving to a cellular network moves the tunnel onto one of these and keeps it
+there — a replacement for a failure comes from the same list — while returning to Wi-Fi chooses
+from the ordinary replacement list.
+
+What counts is the cellular network itself, not a metered one: "metered" describes a billing
+arrangement rather than a network, so a temporarily unmetered 5G plan and a home Wi-Fi marked as
+limited both stay out of it. The move waits for the network to settle — four seconds onto cellular,
+twelve on the way back — because at the edge of coverage a phone flickers between networks for as
+long as somebody stands there. With the screen off the move is deferred: some firmwares switch
+Wi-Fi off along with the screen and fall back to cellular.
+
+**A fallback resolver.** A dead resolver is the one failure changing servers cannot fix, and the
+least visible: every site stops opening while the tunnel demonstrably carries traffic. The health
+check has a second half that resolves a name through your own DNS; two failures in a row and the
+app moves to `1.1.1.1` until the next reconnection, and says so.
+
+**Updates from inside the app.** There is no store, so nothing updates the app but the app: a check
+every twelve hours or on a button, a download, and a handover to the system installer.
+
+**Notices about what it repaired by itself.** The whole value of moving off a failed server is that
+nobody is watching when it happens — which is exactly why nobody learns that it did. Four separate
+switches: a replaced server, a replaced resolver, a hand-picked list emptied by a subscription
+refresh, a new version.
 
 **And also.** English and Russian — the system language by default, or pick one explicitly in
 settings. A quick settings tile (with an add button, if your shell does not offer one), auto-start
