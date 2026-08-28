@@ -4,8 +4,10 @@ import android.app.Notification as AndroidNotification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.InetAddresses
@@ -18,10 +20,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import android.system.Os
 import android.system.OsConstants
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
 import com.mydrop.vpn.R
@@ -148,6 +152,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         )
         val handovers: SharedFlow<String> = _handovers.asSharedFlow()
 
+        private val _wakeups = MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+
+        /** See [com.mydrop.vpn.data.TunnelController.wakeups] for what this is for. */
+        val wakeups: SharedFlow<Unit> = _wakeups.asSharedFlow()
+
         fun start(context: Context, config: String, nodeId: String, nodeName: String) {
             val intent = Intent(context, MyDropVpnService::class.java).apply {
                 action = ACTION_START
@@ -210,6 +222,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         getSystemService(ConnectivityManager::class.java)
     }
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Screen-on and idle-mode listener; see [startWakeMonitor]. */
+    private var wakeReceiver: BroadcastReceiver? = null
 
     /** The listener the current monitor reports to, so a late close cannot unregister a new one. */
     private var interfaceListener: InterfaceUpdateListener? = null
@@ -408,6 +423,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     if (!reloading || sessionStartedAtMillis == 0L) {
                         sessionStartedAtMillis = System.currentTimeMillis()
                     }
+                    startWakeMonitor()
                     _state.value = VpnState.Connected(nodeId, sessionStartedAtMillis)
                     logs.info(
                         if (reloading) R.string.log_tunnel_switched else R.string.log_tunnel_up,
@@ -485,6 +501,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         commandServer = null
 
         stopDefaultInterfaceMonitor()
+        stopWakeMonitor()
 
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
@@ -1022,6 +1039,46 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         interfaceListener = null
         reportedInterface = null
         lastReportedInterfaceName = null
+    }
+
+    /**
+     * Tells the watchdog the phone is awake again.
+     *
+     * Registered in code rather than the manifest because `ACTION_SCREEN_ON` cannot be declared
+     * there — a deliberate platform restriction, since it would otherwise wake every installed app
+     * dozens of times a day. Here it costs nothing: the receiver lives exactly as long as a
+     * tunnel does, and the broadcasts it listens for are sent whether or not anybody is listening.
+     *
+     * Two events rather than one. The screen coming on is the moment somebody is about to use the
+     * connection; leaving idle mode is the same moment for a phone that woke without its screen —
+     * an alarm, a call, a sync window.
+     */
+    private fun startWakeMonitor() {
+        if (wakeReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                _wakeups.tryEmit(Unit)
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_ON).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+            }
+        }
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                receiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            wakeReceiver = receiver
+        }
+    }
+
+    private fun stopWakeMonitor() {
+        wakeReceiver?.let { runCatching { unregisterReceiver(it) } }
+        wakeReceiver = null
     }
 
     /**

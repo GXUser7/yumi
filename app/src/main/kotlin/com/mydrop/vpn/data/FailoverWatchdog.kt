@@ -127,10 +127,11 @@ class FailoverWatchdog(
             // handover that arrives *during* a probe would otherwise fall on the floor: the flow
             // has no replay, and between cycles there is no subscriber to buffer it. Conflated
             // because two handovers in a row still only pose one question, and it is the same one.
-            val handovers = Channel<String>(Channel.CONFLATED)
-            // A child of this watch, so it dies with it: cancelling `watching` cancels the
-            // collector too, and there is nothing to unwind by hand.
-            launch { tunnel.handovers.collect { handovers.trySend(it) } }
+            val nudges = Channel<Nudge>(Channel.CONFLATED)
+            // Children of this watch, so they die with it: cancelling `watching` cancels the
+            // collectors too, and there is nothing to unwind by hand.
+            launch { tunnel.handovers.collect { nudges.trySend(Nudge.Handover(it)) } }
+            launch { tunnel.wakeups.collect { nudges.trySend(Nudge.Awake) } }
 
             var failures = 0
             var recoveries = 0
@@ -147,6 +148,9 @@ class FailoverWatchdog(
             // were this.
             var firstPass = true
             var movedTo: String? = null
+            // Wall of its own, so a screen that comes on twice in three seconds does not buy two
+            // probes. Monotonic, like everything else here that measures elapsed time.
+            var lastProbeAtMillis = 0L
             while (isActive) {
                 // Whether this is the first thing asked of the tunnel since it came up. Used to
                 // tell a return that was a mistake from a server that worked and then died.
@@ -158,19 +162,34 @@ class FailoverWatchdog(
                 // connection pinned to the old interface, so whether this server still works is a
                 // question with a fresh answer — waiting out the clock to ask it is up to twenty
                 // seconds of an outage the user is already feeling.
+                movedTo = null
                 if (firstPass) {
                     firstPass = false
                 } else {
-                    movedTo = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
-                        handovers.receive()
+                    val nudge = withTimeoutOrNull(FailoverPolicy.nextProbeDelayMillis(failures)) {
+                        nudges.receive()
                     }
-                    if (movedTo != null) {
-                        logs.trace(TAG, "handover to $movedTo, probing early")
-                        // Measured after the core has had a moment to re-dial. Probing into the
-                        // gap a handover opens measures the handover, not the server — and with
-                        // one failure now enough to move, that reading would cost a switch every
-                        // time the user walked out of Wi-Fi range.
-                        delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                    when (nudge) {
+                        is Nudge.Handover -> {
+                            movedTo = nudge.name
+                            logs.trace(TAG, "handover to ${nudge.name}, probing early")
+                            // Measured after the core has had a moment to re-dial. Probing into
+                            // the gap a handover opens measures the handover, not the server, and
+                            // that reading would cost a switch every time somebody walked out of
+                            // Wi-Fi range.
+                            delay(FailoverPolicy.HANDOVER_SETTLE_MILLIS)
+                        }
+
+                        // The phone was asleep, so this loop was too — see TunnelController.wakeups
+                        // for the measurements. Nothing was reset and nothing needs to settle; the
+                        // point is only to have looked before the user does.
+                        Nudge.Awake -> {
+                            val since = SystemClock.elapsedRealtime() - lastProbeAtMillis
+                            if (since < FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS) continue
+                            logs.trace(TAG, "phone is awake after ${since / 1000}s, probing early")
+                        }
+
+                        null -> Unit
                     }
                 }
                 if (!settings.value.autoFailover) {
@@ -227,6 +246,7 @@ class FailoverWatchdog(
                 // ordinary shape of DPI interference. Only the through-tunnel check sees that.
                 // Candidates and the home node keep the direct probe below: there is no tunnel to
                 // them to ask through.
+                lastProbeAtMillis = SystemClock.elapsedRealtime()
                 val throughTunnel = tunnelHealth.passes(configs.probe.value)
                 val alive = throughTunnel
                     ?: !latencyTester.measure(current, settings.value.pingMode).failed
@@ -381,6 +401,15 @@ class FailoverWatchdog(
                 }
             }
         }
+    }
+
+    /** Why the wait between probes ended. */
+    private sealed interface Nudge {
+        /** The tunnel moved between physical networks; [name] is the new interface. */
+        data class Handover(val name: String) : Nudge
+
+        /** The screen came on, or the system left idle mode. */
+        data object Awake : Nudge
     }
 
     private fun stopWatch() {

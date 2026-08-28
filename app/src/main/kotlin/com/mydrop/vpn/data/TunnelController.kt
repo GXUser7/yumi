@@ -33,6 +33,26 @@ interface TunnelController {
     val handovers: Flow<String> get() = emptyFlow()
 
     /**
+     * Emits when the phone wakes up and somebody is about to use the tunnel.
+     *
+     * The watchdog's schedule is a coroutine delay, and a coroutine delay does not run while the
+     * processor is suspended. Measured on a phone left on a desk: a check that should have run
+     * every twenty seconds ran a hundred times in ten hours, with thirty-nine gaps over five
+     * minutes and one of forty. That is not a bug to fix — in Doze the CPU is genuinely off, and
+     * the only ways around it are a wakelock that costs the night's battery or an alarm the system
+     * grants roughly once every nine minutes. Every client on the phone sleeps the same way.
+     *
+     * What can be fixed is the moment it is felt. Nobody minds an unchecked tunnel while the phone
+     * is in a pocket; they mind the first seconds after picking it up, when the tunnel has been
+     * dead since three in the morning and the app has not looked yet. So instead of beating the
+     * clock, the check is hung on the event: the screen coming on, or the system leaving idle.
+     *
+     * Costs nothing while asleep — no alarms, no wakelocks, only a broadcast that was going to be
+     * sent anyway.
+     */
+    val wakeups: Flow<Unit> get() = emptyFlow()
+
+    /**
      * Whether the device has a default network at all.
      *
      * True by default: a controller that cannot know must not claim the phone is offline, because
