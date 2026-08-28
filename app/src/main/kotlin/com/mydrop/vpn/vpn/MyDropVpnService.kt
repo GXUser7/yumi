@@ -883,21 +883,37 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             setUnderlying(network)
             runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
 
-            // Resetting the core's network drops all active sockets with "operation was canceled".
-            // We only want to execute this destructive reset on a genuine handover between
-            // different interfaces (e.g. Wi-Fi <-> Cellular). When an interface merely recovers
-            // from a momentary hiccup on the same physical link (e.g. wlan0 -> wlan0), we update
-            // the default interface with the core, allowing existing TCP streams and retransmissions
-            // to recover naturally without dropping active client connections.
+            // Telling the core about the new interface does not rescue the connections that were
+            // pinned to the old one — those are already dead, and nothing else reaps them. The
+            // watchdog would only notice a probe interval later and then draw the wrong
+            // conclusion, blaming a server that was never at fault.
+            //
+            // Two shapes of the same event. A different interface is the obvious one; the same
+            // interface returning after the core was told there was none is the one that hid for a
+            // long time, and it is what Wi-Fi dropping and reconnecting looks like from here.
+            //
+            // Both reset, and the second one is worth spelling out, because it was briefly removed
+            // on the argument that a reset "drops active sockets" and a link that merely hiccuped
+            // should be allowed to recover its TCP streams on its own. By this point there are no
+            // streams left to spare. `recovered` is set in exactly one place — the confirmation
+            // runnable in `onLost` — immediately before the core is told `("", -1)`, and that
+            // report is itself what takes every in-flight connection down. Anything reaching here
+            // was absent for longer than INTERFACE_LOSS_GRACE_MILLIS, which means Android has
+            // since handed out a new netid and the old sockets cannot carry anything regardless.
+            // Skipping the reset therefore preserves nothing; it only leaves the corpses to time
+            // out on their own, fifteen to forty-five seconds each, and leaves the watchdog to
+            // discover the mess and blame the server for it.
+            //
+            // Only on an actual change: the first interface a tunnel gets is not one, and resetting
+            // there would throw away the connections the core has just opened.
             val changed = previousName != null && previousName != name
-            if (changed) {
-                logs.trace(NATIVE_TAG, "handover $previousName -> $name, resetting network")
+            if (changed || recovered) {
+                val what = if (changed) "handover $previousName -> $name" else "recovered on $name"
+                logs.trace(NATIVE_TAG, "$what, resetting network")
                 resetCoreNetwork()
                 // And tell the watchdog, which would otherwise learn about it from a probe that
                 // is up to a full interval away.
                 _handovers.tryEmit(name)
-            } else if (recovered) {
-                logs.trace(NATIVE_TAG, "recovered on $name, keeping existing sockets")
             }
         }
 
