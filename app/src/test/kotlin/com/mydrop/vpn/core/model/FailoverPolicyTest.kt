@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.model
 
 import com.mydrop.vpn.core.model.FailoverPolicy.Decision
+import com.mydrop.vpn.core.model.FailoverPolicy.FAILURES_BEFORE_SWAP
 import com.mydrop.vpn.core.model.FailoverPolicy.MAX_FAILBACKS
 import com.mydrop.vpn.core.model.FailoverPolicy.SWITCH_COOLDOWN_MILLIS
 import org.junit.Assert.assertEquals
@@ -26,23 +27,27 @@ class FailoverPolicyTest {
     }
 
     /**
-     * One failure is now enough, which reverses what 0.3.2 taught — and the reason it is safe is
-     * not that the threshold got braver but that the probe got better. It asks for a page through
-     * the tunnel rather than shaking hands with a port, so a failure means traffic did not get
-     * through. Waiting for a second one only adds an outage.
+     * One failed probe is not enough, and the second one is what tells two very different things
+     * apart: a server that stopped carrying traffic, and a phone whose own connection dropped a
+     * request. A journal caught the difference costing three servers in nine minutes on a walk.
+     * The confirmation is deliberately cheap — three seconds, not another full interval.
      */
     @Test
-    fun `one failed probe is enough to leave`() {
-        assertEquals(Decision.LeaveCurrent, decide(failures = 1))
+    fun `one failed probe is not enough to leave`() {
+        assertEquals(Decision.Hold, decide(failures = 1))
+        assertEquals(Decision.LeaveCurrent, decide(failures = FAILURES_BEFORE_SWAP))
     }
 
-    /** The rate limit, not the count, is what keeps a single failure from causing a flap. */
+    /** The rate limit, not the count, is what keeps a run of failures from causing a flap. */
     @Test
-    fun `a single failure still cannot outrun the escape limit`() {
-        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 10_000L))
+    fun `a confirmed failure still cannot outrun the escape limit`() {
+        assertEquals(Decision.Hold, decide(failures = FAILURES_BEFORE_SWAP, sinceSwitch = 10_000L))
         assertEquals(
             Decision.LeaveCurrent,
-            decide(failures = 1, sinceSwitch = FailoverPolicy.ESCAPE_COOLDOWN_MILLIS),
+            decide(
+                failures = FAILURES_BEFORE_SWAP,
+                sinceSwitch = FailoverPolicy.ESCAPE_COOLDOWN_MILLIS,
+            ),
         )
     }
 
@@ -61,7 +66,7 @@ class FailoverPolicyTest {
     fun `a handover does not exempt a move from the escape limit`() {
         assertEquals(
             Decision.Hold,
-            decide(failures = 1, sinceSwitch = 5_000L, afterHandover = true),
+            decide(failures = FAILURES_BEFORE_SWAP, sinceSwitch = 5_000L, afterHandover = true),
         )
     }
 
@@ -148,14 +153,19 @@ class FailoverPolicyTest {
     }
 
     /**
-     * The cost of noticing, stated as time rather than as constants.
+     * The cost of noticing, stated as time rather than as constants — because time is what the
+     * user sits through, and constants are what gets changed without anybody adding it up.
      *
-     * 0.3.2 needed two failures on a flat twenty-second cadence: fifty seconds with a five-second
-     * probe timeout, and that is what a user actually sat through. It now takes one interval and
-     * one timeout, and a handover skips even the interval.
+     * Two failures are required again, as in 0.3.2, but they no longer cost what they cost then.
+     * 0.3.2 waited a flat twenty seconds between both: fifty seconds with a five-second probe
+     * timeout. The confirming probe now comes three seconds after the first, so the second failure
+     * is nearly free and the whole budget is one ordinary interval plus two timeouts.
+     *
+     * That is the deal being asserted here: asking twice is worth it only while asking twice stays
+     * cheap. Should the suspect interval ever drift back towards the ordinary one, this fails.
      */
     @Test
-    fun `noticing a dead server costs one interval, not two`() {
+    fun `confirming a dead server costs seconds, not another interval`() {
         val probeTimeout = 5_000L
         var elapsed = 0L
         var failures = 0
@@ -166,7 +176,11 @@ class FailoverPolicyTest {
 
         val oldWorstCase = (FailoverPolicy.PROBE_INTERVAL_MILLIS + probeTimeout) * 2
         assertTrue("took ${elapsed}ms, 0.3.2 took ${oldWorstCase}ms", elapsed < oldWorstCase)
-        assertTrue("took ${elapsed}ms, expected under 30s", elapsed <= 30_000L)
+        assertTrue("took ${elapsed}ms, expected under 35s", elapsed <= 35_000L)
+
+        // The confirmation itself is the part that has to stay cheap.
+        val confirmation = FailoverPolicy.SUSPECT_PROBE_INTERVAL_MILLIS + probeTimeout
+        assertTrue("confirming took ${confirmation}ms", confirmation <= 10_000L)
 
         // And the path that matters when the network changes underneath the tunnel.
         val afterHandover = FailoverPolicy.HANDOVER_SETTLE_MILLIS + probeTimeout
@@ -262,7 +276,12 @@ class FailoverPolicyTest {
     fun `the very first failure outranks a pending return home`() {
         assertEquals(
             Decision.LeaveCurrent,
-            decide(failures = 1, recoveries = 9, hasHome = true, sinceSwitch = 171_000L),
+            decide(
+                failures = FAILURES_BEFORE_SWAP,
+                recoveries = 9,
+                hasHome = true,
+                sinceSwitch = 171_000L,
+            ),
         )
     }
 
@@ -279,9 +298,12 @@ class FailoverPolicyTest {
         )
 
         // Too soon to leave, and too soon to go home.
-        assertEquals(Decision.Hold, decide(failures = 1, sinceSwitch = 10_000L))
+        assertEquals(Decision.Hold, decide(failures = FAILURES_BEFORE_SWAP, sinceSwitch = 10_000L))
         // Long enough to leave, still nowhere near long enough to go home.
-        assertEquals(Decision.LeaveCurrent, decide(failures = 1, sinceSwitch = 60_000L))
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(failures = FAILURES_BEFORE_SWAP, sinceSwitch = 60_000L),
+        )
         assertEquals(
             Decision.Hold,
             decide(recoveries = 5, hasHome = true, sinceSwitch = 60_000L),
@@ -337,10 +359,17 @@ class FailoverPolicyTest {
      */
     @Test
     fun `a clock that jumped backwards does not switch failover off`() {
-        assertEquals(Decision.LeaveCurrent, decide(failures = 1, sinceSwitch = -900_000L))
         assertEquals(
             Decision.LeaveCurrent,
-            decide(failures = 1, sinceSwitch = -900_000L, afterHandover = true),
+            decide(failures = FAILURES_BEFORE_SWAP, sinceSwitch = -900_000L),
+        )
+        assertEquals(
+            Decision.LeaveCurrent,
+            decide(
+                failures = FAILURES_BEFORE_SWAP,
+                sinceSwitch = -900_000L,
+                afterHandover = true,
+            ),
         )
     }
 

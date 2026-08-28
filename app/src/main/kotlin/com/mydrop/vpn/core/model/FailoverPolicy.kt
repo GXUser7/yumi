@@ -31,23 +31,36 @@ object FailoverPolicy {
     /**
      * Consecutive failed probes before the tunnel leaves the server it is on.
      *
-     * One, and that is a deliberate reversal of what 0.3.2 taught. Back then a probe was a bare
-     * TCP handshake against the server's port, which says nothing about whether the proxy behind
-     * it works and everything about whether a single packet got lost — acting on one of those was
-     * what made the tunnel flap thirty times in twenty minutes.
+     * Two, and the second one is cheap: [SUSPECT_PROBE_INTERVAL_MILLIS] after the first, not a
+     * whole interval later. So confirming costs about three seconds of an outage that is already
+     * happening, and buys the difference between "traffic did not get through once" and "traffic
+     * does not get through".
      *
-     * The probe is no longer that. `TunnelHealthCheck` asks for a page *through the tunnel*, so a
-     * failure means traffic did not get through, not that a handshake was slow. That is a far
-     * stronger signal, and waiting for a second one only adds an outage the user sits through.
-     * The rate limit that actually prevents flapping is [SWITCH_COOLDOWN_MILLIS], and it stays.
+     * It went to one for a while, on the argument that a through-tunnel probe is a strong enough
+     * signal to act on alone — unlike the bare TCP handshake of 0.3.2, which said nothing about
+     * the proxy and everything about whether one packet was lost. The argument was right about the
+     * probe and wrong about what else can fail. A journal settled it: walking out to the shops on
+     * cellular, the app left three different servers in nine minutes, each on a single failed
+     * probe, and everything went green the second Wi-Fi came back. None of those servers was
+     * broken; the phone's own connection was. One failed probe cannot tell those apart, and the
+     * cost of guessing wrong is a torn-down tunnel, every open connection in it, and a tunnel that
+     * has quietly moved to another country.
+     *
+     * Two probes three seconds apart is not proof either, but a link that drops one request rarely
+     * drops the next one that soon, and a dead server always does.
      */
-    const val FAILURES_BEFORE_SWAP = 1
+    const val FAILURES_BEFORE_SWAP = 2
 
     /** Gap between probes while the server is answering. */
     const val PROBE_INTERVAL_MILLIS = 20_000L
 
-    /** Gap between probes once one has already failed. */
-    const val SUSPECT_PROBE_INTERVAL_MILLIS = 5_000L
+    /**
+     * Gap between probes once one has already failed.
+     *
+     * This is the whole cost of asking twice, so it is short: the user is inside an outage from the
+     * moment the first probe fails, and every second of the wait is one they sit through.
+     */
+    const val SUSPECT_PROBE_INTERVAL_MILLIS = 3_000L
 
     /** Consecutive answered probes before the tunnel returns to the user's own server. */
     const val PROBES_BEFORE_FAILBACK = 5
@@ -122,10 +135,10 @@ object FailoverPolicy {
      *
      * So the wait shrinks exactly when it is expensive, and the steady-state cost does not move.
      *
-     * With [FAILURES_BEFORE_SWAP] now at one, the suspect interval only matters for the case where
-     * a probe fails and the policy still holds — a cooldown that has not expired. The worst case
-     * for noticing a dead server is one ordinary interval plus one probe timeout, and a handover
-     * short-circuits even that.
+     * The suspect interval is what the confirming probe of [FAILURES_BEFORE_SWAP] waits out, which
+     * is why it is three seconds rather than five: it is paid inside every real outage. Worst case
+     * for leaving a dead server is one ordinary interval to notice, then a probe timeout, three
+     * seconds, and a second timeout. A handover short-circuits the first of those.
      */
     fun nextProbeDelayMillis(consecutiveFailures: Int): Long =
         if (consecutiveFailures > 0) SUSPECT_PROBE_INTERVAL_MILLIS else PROBE_INTERVAL_MILLIS
