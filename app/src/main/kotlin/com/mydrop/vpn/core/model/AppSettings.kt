@@ -158,6 +158,31 @@ data class AppSettings(
      * neighbours from the chosen server's own subscription.
      */
     val failoverNodeIds: Set<String> = emptySet(),
+    /**
+     * Servers the tunnel may use while the phone is on a cellular network.
+     *
+     * Empty means the feature does not exist: one pool for every network, exactly as before. That
+     * is deliberate — a list nobody filled in must not change anybody's behaviour.
+     *
+     * Filled, it becomes the *only* pool while the phone is on cellular: the tunnel moves onto one
+     * of these when the network becomes cellular, and a failure there is replaced from this list
+     * and no other. Providers sell servers tuned for mobile networks, and the point of naming them
+     * is to actually be on one when it matters.
+     *
+     * Cellular means cellular — [android.net.NetworkCapabilities.TRANSPORT_CELLULAR] — and not
+     * "metered". A 5G plan can report itself temporarily unmetered, and a home Wi-Fi can be marked
+     * metered by its owner; keying off the meter would switch the feature off and on for reasons
+     * that have nothing to do with which network the phone is on.
+     */
+    val mobileNodeIds: Set<String> = emptySet(),
+    /**
+     * Whether returning to Wi-Fi puts the tunnel back on the exact server it left.
+     *
+     * Off, coming home simply runs the ordinary choice, which may land somewhere else and is one
+     * fewer thing to reason about. On, the server chosen before leaving is remembered and restored
+     * — predictable, at the cost of one more switch.
+     */
+    val restoreWifiNodeOnWifi: Boolean = false,
     val subscriptionAutoUpdate: Boolean = true,
     /**
      * How often subscriptions refresh themselves, in minutes.

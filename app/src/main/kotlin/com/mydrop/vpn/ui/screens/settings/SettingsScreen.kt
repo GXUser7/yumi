@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Widgets
@@ -141,6 +142,7 @@ fun SettingsScreen(
     onOpenLogs: () -> Unit,
     onOpenSplitTunnel: () -> Unit,
     onOpenFailover: () -> Unit,
+    onOpenMobileNodes: () -> Unit,
     updates: UpdateState,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
@@ -503,6 +505,32 @@ fun SettingsScreen(
                             icon = Icons.Rounded.Dns,
                             onClick = onOpenFailover,
                         )
+                        GroupDivider()
+                        NavigationRow(
+                            title = stringResource(R.string.settings_mobile_nodes),
+                            subtitle = if (settings.mobileNodeIds.isEmpty()) {
+                                stringResource(R.string.settings_mobile_nodes_off)
+                            } else {
+                                stringResource(
+                                    R.string.settings_mobile_nodes_chosen,
+                                    settings.mobileNodeIds.size,
+                                )
+                            },
+                            icon = Icons.Rounded.SignalCellularAlt,
+                            onClick = onOpenMobileNodes,
+                        )
+                        // Only once the list means something: a switch about coming back from a
+                        // network the tunnel never leaves is a switch about nothing.
+                        AnimatedVisibility(visible = settings.mobileNodeIds.isNotEmpty()) {
+                            SwitchRow(
+                                title = stringResource(R.string.settings_restore_wifi),
+                                subtitle = stringResource(R.string.settings_restore_wifi_subtitle),
+                                checked = settings.restoreWifiNodeOnWifi,
+                                onCheckedChange = {
+                                    onUpdate { s -> s.copy(restoreWifiNodeOnWifi = it) }
+                                },
+                            )
+                        }
                         GroupDivider()
                         SwitchRow(
                             title = stringResource(R.string.settings_return_home),

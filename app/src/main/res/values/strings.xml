@@ -204,6 +204,16 @@
 
     <!-- ===================================================== Failover screen -->
 
+    <string name="mobile_nodes_title">Servers for\nmobile data</string>
+    <string name="mobile_nodes_off">Off: one list for every network</string>
+    <string name="mobile_nodes_explanation">When the phone moves to a cellular network the tunnel moves onto a server from this list and stays within it: a replacement for a failure is taken from here too. While the list is empty nothing changes and every network shares one list. What counts is the cellular network itself, not a metered one — a temporarily unmetered 5G plan and a home Wi-Fi marked as limited both stay out of it. Put two or three servers here at least; from one there is nowhere to go.</string>
+    <string name="mobile_nodes_clear">Clear and stop separating networks</string>
+
+    <string name="settings_mobile_nodes">Servers for mobile data</string>
+    <string name="settings_mobile_nodes_off">Not separated: one list everywhere</string>
+    <string name="settings_mobile_nodes_chosen">Chosen: %1$d</string>
+    <string name="settings_restore_wifi">Restore the previous server</string>
+    <string name="settings_restore_wifi_subtitle">Coming back to Wi-Fi puts the tunnel on the server it left, instead of choosing again</string>
     <string name="failover_title">Server\nfailover</string>
     <string name="failover_automatic">Chosen automatically</string>
     <string name="failover_chosen">%1$s chosen</string>
@@ -387,6 +397,8 @@
     <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>
     <string name="log_failover_switching">Switching to “%1$s” (%2$s ms)</string>
     <string name="log_failover_pruned_all">The spare servers vanished from the subscription (%1$d) — the choice is automatic again</string>
+    <string name="log_mobile_pruned">Servers that no longer exist were removed from the mobile list: %1$d</string>
+    <string name="log_mobile_pruned_all">The mobile servers vanished from the subscription (%1$d) — the mobile list is empty again</string>
     <string name="log_failover_pruned">Servers that no longer exist were removed from the spares list: %1$d</string>
 
     <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>

@@ -1,13 +1,14 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.StaleSelection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Drops servers that no longer exist out of the failover list.
+ * Drops servers that no longer exist out of the lists that name servers by id.
  *
  * Node identity is derived from the endpoint, so a provider that rotates addresses hands back a
  * different set of ids on every refresh. [ProfileRepository.applySubscriptionUpdate] cleans up
@@ -37,20 +38,42 @@ class StaleSelectionPruner(
                 .map { state -> state.nodes.map { it.id }.toSet() }
                 .distinctUntilChanged()
                 .collect { alive ->
-                    // An empty profile is a profile that has not loaded yet as often as it is one
-                    // with nothing in it, and pruning against it would wipe a choice the user made.
-                    if (alive.isEmpty()) return@collect
+                    val current = settings.value
+                    val pruned = StaleSelection.prune(
+                        alive = alive,
+                        failover = current.failoverNodeIds,
+                        mobile = current.mobileNodeIds,
+                    ) ?: return@collect
 
-                    val chosen = settings.value.failoverNodeIds
-                    val kept = chosen intersect alive
-                    if (kept.size == chosen.size) return@collect
+                    // One write for both, so a refresh that empties them together never leaves a
+                    // moment where one list has gone and the other has not.
+                    settings.update {
+                        it.copy(failoverNodeIds = pruned.failover, mobileNodeIds = pruned.mobile)
+                    }
 
-                    val lost = chosen.size - kept.size
-                    settings.update { it.copy(failoverNodeIds = kept) }
-                    logs.info(
-                        if (kept.isEmpty()) R.string.log_failover_pruned_all else R.string.log_failover_pruned,
-                        lost,
-                    )
+                    if (pruned.lostFailover > 0) {
+                        logs.info(
+                            if (pruned.failoverEmptied) {
+                                R.string.log_failover_pruned_all
+                            } else {
+                                R.string.log_failover_pruned
+                            },
+                            pruned.lostFailover,
+                        )
+                    }
+                    if (pruned.lostMobile > 0) {
+                        // Louder than the failover list emptying: that one falling back to the
+                        // subscription is a defensible default, while this one falling back means
+                        // a feature the user switched on has switched itself off.
+                        logs.info(
+                            if (pruned.mobileEmptied) {
+                                R.string.log_mobile_pruned_all
+                            } else {
+                                R.string.log_mobile_pruned
+                            },
+                            pruned.lostMobile,
+                        )
+                    }
                 }
         }
     }

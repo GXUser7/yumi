@@ -54,7 +54,8 @@ import com.mydrop.vpn.ui.components.ImportConfirmDialog
 import com.mydrop.vpn.ui.components.PillNavigationBar
 import com.mydrop.vpn.ui.screens.apps.SplitTunnelScreen
 import com.mydrop.vpn.ui.screens.connect.ConnectScreen
-import com.mydrop.vpn.ui.screens.failover.FailoverScreen
+import com.mydrop.vpn.ui.screens.failover.NodePickerKind
+import com.mydrop.vpn.ui.screens.failover.NodePickerScreen
 import com.mydrop.vpn.ui.screens.logs.LogsScreen
 import com.mydrop.vpn.ui.screens.scan.ScanScreen
 import com.mydrop.vpn.ui.screens.servers.PingAllButtonContent
@@ -74,6 +75,7 @@ object Routes {
     const val SPLIT_TUNNEL = "split_tunnel"
     const val SCAN = "scan"
     const val FAILOVER = "failover"
+    const val MOBILE_NODES = "mobile-nodes"
 }
 
 private enum class TopLevel(
@@ -229,6 +231,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
                     onOpenFailover = { navController.navigate(Routes.FAILOVER) },
+                    onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
                     updates = updates,
                     onCheckUpdate = viewModel::checkForUpdate,
                     onDownloadUpdate = viewModel::downloadUpdate,
@@ -255,8 +258,21 @@ fun MyDropApp(viewModel: MainViewModel) {
                 )
             }
 
+            composable(Routes.MOBILE_NODES) {
+                NodePickerScreen(
+                    kind = NodePickerKind.Mobile,
+                    settings = state.settings,
+                    nodes = state.nodes,
+                    latencies = state.latencies,
+                    onUpdate = viewModel::updateSettings,
+                    onBack = { navController.popBackStack() },
+                    contentPadding = contentPadding,
+                )
+            }
+
             composable(Routes.FAILOVER) {
-                FailoverScreen(
+                NodePickerScreen(
+                    kind = NodePickerKind.Failover,
                     settings = state.settings,
                     nodes = state.nodes,
                     latencies = state.latencies,

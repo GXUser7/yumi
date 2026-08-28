@@ -41,14 +41,28 @@ import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.format.pluralServers
 
 /**
- * Chooses which servers the tunnel is allowed to move onto.
+ * Which list of servers this screen is editing.
  *
- * Left empty, the group is filled from the current server's own subscription. Naming servers
- * explicitly is what makes the feature usable across providers, and it is also the only way to
- * say "not that one" about a server that technically works.
+ * The two lists are the same act — naming servers by hand — for two different questions, so they
+ * are the same screen with different words. Splitting them into two files would duplicate the
+ * picker to change three strings, and the copy for both belongs in one place where it can be read
+ * side by side.
+ */
+enum class NodePickerKind { Failover, Mobile }
+
+/**
+ * Chooses which servers the tunnel is allowed to use.
+ *
+ * For [NodePickerKind.Failover], left empty the group is filled from the current server's own
+ * subscription. Naming servers explicitly is what makes the feature usable across providers, and
+ * it is also the only way to say "not that one" about a server that technically works.
+ *
+ * For [NodePickerKind.Mobile], empty means the feature does not exist and every network shares one
+ * pool. Filled, it becomes the only pool the tunnel may use on a cellular network.
  */
 @Composable
-fun FailoverScreen(
+fun NodePickerScreen(
+    kind: NodePickerKind,
     settings: AppSettings,
     nodes: List<ProxyNode>,
     latencies: Map<String, LatencyResult>,
@@ -59,7 +73,12 @@ fun FailoverScreen(
 ) {
     // A direct outbound would take traffic out of the tunnel entirely, so it is not offered.
     val candidates = nodes.filter { it.settings != ProxySettings.Direct }
-    val chosen = settings.failoverNodeIds
+    val mobile = kind == NodePickerKind.Mobile
+    val chosen = if (mobile) settings.mobileNodeIds else settings.failoverNodeIds
+
+    fun withChosen(ids: Set<String>): (AppSettings) -> AppSettings = { current ->
+        if (mobile) current.copy(mobileNodeIds = ids) else current.copy(failoverNodeIds = ids)
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -68,10 +87,14 @@ fun FailoverScreen(
     ) {
         item(key = "header") {
             ScreenHeader(
-                title = stringResource(R.string.failover_title),
+                title = stringResource(
+                    if (mobile) R.string.mobile_nodes_title else R.string.failover_title,
+                ),
                 titleStyle = MaterialTheme.typography.headlineLarge,
                 subtitle = if (chosen.isEmpty()) {
-                    stringResource(R.string.failover_automatic)
+                    stringResource(
+                        if (mobile) R.string.mobile_nodes_off else R.string.failover_automatic,
+                    )
                 } else {
                     stringResource(R.string.failover_chosen, pluralServers(chosen.size))
                 },
@@ -88,7 +111,11 @@ fun FailoverScreen(
 
         item(key = "explainer") {
             Text(
-                text = stringResource(R.string.failover_explanation, FailoverGroup.MAX_GROUP),
+                text = if (mobile) {
+                    stringResource(R.string.mobile_nodes_explanation)
+                } else {
+                    stringResource(R.string.failover_explanation, FailoverGroup.MAX_GROUP)
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -98,10 +125,18 @@ fun FailoverScreen(
         if (chosen.isNotEmpty()) {
             item(key = "reset") {
                 TextButton(
-                    onClick = { onUpdate { it.copy(failoverNodeIds = emptySet()) } },
+                    onClick = { onUpdate(withChosen(emptySet())) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 ) {
-                    Text(stringResource(R.string.failover_clear_selection))
+                    Text(
+                        stringResource(
+                            if (mobile) {
+                                R.string.mobile_nodes_clear
+                            } else {
+                                R.string.failover_clear_selection
+                            },
+                        ),
+                    )
                 }
             }
         }
@@ -123,12 +158,7 @@ fun FailoverScreen(
                 latency = latencies[node.id],
                 checked = node.id in chosen,
                 onToggle = {
-                    onUpdate { current ->
-                        val ids = current.failoverNodeIds
-                        current.copy(
-                            failoverNodeIds = if (node.id in ids) ids - node.id else ids + node.id,
-                        )
-                    }
+                    onUpdate(withChosen(if (node.id in chosen) chosen - node.id else chosen + node.id))
                 },
                 modifier = Modifier.padding(horizontal = 16.dp),
             )

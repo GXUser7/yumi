@@ -200,6 +200,16 @@
 
     <!-- ===================================================== Экран подмены -->
 
+    <string name="mobile_nodes_title">Серверы для\nмобильного</string>
+    <string name="mobile_nodes_off">Выключено: один список на все сети</string>
+    <string name="mobile_nodes_explanation">Когда телефон уходит на сотовую сеть, туннель переезжает на сервер из этого списка и остаётся в его пределах: замену при падении тоже берёт только отсюда. Пока список пуст, ничего не меняется — на всех сетях работает общий список. Считается именно сотовая сеть, а не платная: временно безлимитный 5G и домашний Wi-Fi с ограничением трафика сюда не попадают. Кладите хотя бы два-три сервера — из одного уходить будет некуда.</string>
+    <string name="mobile_nodes_clear">Очистить и не разделять сети</string>
+
+    <string name="settings_mobile_nodes">Серверы для мобильного</string>
+    <string name="settings_mobile_nodes_off">Не разделять: везде общий список</string>
+    <string name="settings_mobile_nodes_chosen">Выбрано: %1$d</string>
+    <string name="settings_restore_wifi">Возвращать прежний сервер</string>
+    <string name="settings_restore_wifi_subtitle">При возврате на Wi-Fi включать тот же сервер, что был до выхода, а не выбирать заново</string>
     <string name="failover_title">Подмена\nсервера</string>
     <string name="failover_automatic">Выбирается автоматически</string>
     <string name="failover_chosen">Выбрано %1$s</string>
@@ -383,6 +393,8 @@
     <string name="log_failover_all_dead">Ни один запасной сервер не ответил — остаюсь на «%1$s»</string>
     <string name="log_failover_switching">Переключаюсь на «%1$s» (%2$s мс)</string>
     <string name="log_failover_pruned_all">Запасные серверы исчезли из подписки (%1$d) — выбор снова автоматический</string>
+    <string name="log_mobile_pruned">Из мобильного списка убрано серверов, которых больше нет: %1$d</string>
+    <string name="log_mobile_pruned_all">Мобильные серверы исчезли из подписки (%1$d) — список снова пуст</string>
     <string name="log_failover_pruned">Из списка запасных убрано серверов, которых больше нет: %1$d</string>
 
     <string name="log_dns_switching">DNS «%1$s» перестал отвечать — перехожу на %2$s</string>
