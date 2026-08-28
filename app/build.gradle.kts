@@ -43,8 +43,8 @@ android {
         applicationId = "com.mydrop.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.4.4"
+        versionCode = 14
+        versionName = "0.4.5"
         // ABI selection lives in `splits.abi` below; the two cannot both be set.
     }
 
