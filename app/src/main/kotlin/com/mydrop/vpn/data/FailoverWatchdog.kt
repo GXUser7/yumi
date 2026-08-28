@@ -5,6 +5,8 @@ import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.FailoverPolicy
+import com.mydrop.vpn.core.model.NetworkEnvironment
+import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
@@ -14,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -85,8 +88,106 @@ class FailoverWatchdog(
      */
     private val failbacks = mutableMapOf<String, Int>()
 
+    /**
+     * The network the tunnel has been arranged for, as opposed to the one the callbacks are
+     * shouting about this second. Only changes once a transport has held for its settling time.
+     */
+    private var confirmedTransport = NetworkTransport.None
+
+    /**
+     * Where the tunnel was before it went onto the mobile list, so coming home can be a return
+     * rather than a fresh guess. Cleared once it has been used or has stopped existing.
+     */
+    private var savedOrdinaryNodeId: String? = null
+
+    /**
+     * Moves the tunnel between the ordinary servers and the mobile ones as the phone changes
+     * network — but only once the change has held.
+     *
+     * `collectLatest` is doing the work: a new value cancels the coroutine still waiting out the
+     * previous one, so a transport that does not survive its settling time never reaches the
+     * bottom of this block. That is the whole debounce, and it is why the firmware storms
+     * described in [NetworkEnvironment] cost nothing.
+     *
+     * The screen gate is the second half. Several firmwares switch Wi-Fi off when the screen goes
+     * off and fall back to cellular; without waiting for somebody to be looking, every press of
+     * the power button would read as leaving the house and move the tunnel twice.
+     */
+    private fun watchTransport() {
+        scope.launch {
+            combine(tunnel.transport, tunnel.screenOn) { transport, awake -> transport to awake }
+                .collectLatest { (transport, awake) ->
+                    if (!awake) return@collectLatest
+                    if (!NetworkEnvironment.actionable(transport)) return@collectLatest
+                    if (transport == confirmedTransport) return@collectLatest
+
+                    delay(NetworkEnvironment.settleMillis(transport))
+                    confirmedTransport = transport
+                    applyTransport(transport)
+                }
+        }
+    }
+
+    private suspend fun applyTransport(transport: NetworkTransport) {
+        val current = settings.value
+        if (current.mobileNodeIds.isEmpty()) return
+        if (tunnel.state.value !is VpnState.Connected) return
+        val carrying = profiles.selectedNode() ?: return
+
+        when {
+            NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
+                val target = fastest(profiles.nodes.filter { it.id in current.mobileNodeIds })
+                if (target == null) {
+                    // Every named mobile server has gone from the subscription. Staying put beats
+                    // guessing: the user said which servers may carry cellular traffic, and none
+                    // of the others were on that list.
+                    logs.warn(R.string.log_mobile_none_left)
+                    return
+                }
+                savedOrdinaryNodeId = carrying.id
+                logs.info(R.string.log_mobile_switch, target.name)
+                launcher.switchTo(target)
+            }
+
+            NetworkEnvironment.wantsOrdinaryServer(transport, current.mobileNodeIds, carrying.id) -> {
+                val remembered = savedOrdinaryNodeId
+                    ?.takeIf { current.restoreWifiNodeOnWifi }
+                    ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
+                val target = remembered
+                    ?: fastest(profiles.nodes.filter { it.id !in current.mobileNodeIds })
+                    ?: return
+                savedOrdinaryNodeId = null
+                logs.info(R.string.log_mobile_back, target.name)
+                launcher.switchTo(target)
+            }
+        }
+    }
+
+    /**
+     * The quickest of a set, by what was measured last rather than by measuring now.
+     *
+     * Deliberately no fresh sweep. This runs the moment a phone reaches a cellular network, where
+     * a sweep would be several TLS handshakes on somebody's paid data, every time they leave the
+     * house — and if the pick turns out to be dead, the ordinary watchdog notices within half a
+     * minute and replaces it from the same list.
+     */
+    private fun fastest(nodes: List<ProxyNode>): ProxyNode? {
+        val latencies = profiles.state.value.latencies
+        return nodes
+            .filter { it.settings != com.mydrop.vpn.core.model.ProxySettings.Direct }
+            .minByOrNull { node ->
+                val result = latencies[node.id]
+                when {
+                    result == null -> Int.MAX_VALUE - 1
+                    result.failed -> Int.MAX_VALUE
+                    else -> result.millis
+                }
+            }
+    }
+
     /** Follows the tunnel: a watch runs for exactly as long as one connection lives. */
     fun start() {
+        watchTransport()
         scope.launch {
             tunnel.state.collectLatest { state ->
                 when (state) {

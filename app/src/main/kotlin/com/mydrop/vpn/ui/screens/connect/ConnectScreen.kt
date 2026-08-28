@@ -289,7 +289,14 @@ private fun Headline(state: MainUiState, statsExpanded: Boolean, modifier: Modif
             stringResource((state.vpnState as VpnState.Connecting).phase.labelRes),
             node?.name ?: stringResource(R.string.connect_the_server),
         )
-        connected != null -> node?.let { "${it.name} · ${it.protocol.name}" }
+        // The mobile mark answers the question a server nobody chose always raises: why this one.
+        // Without it the tunnel silently sits somewhere else after a walk to the shops, and the
+        // only explanation is a line in a journal the user has no reason to open.
+        connected != null -> node?.let {
+            val mobile = it.id in state.settings.mobileNodeIds
+            val mark = if (mobile) " · " + stringResource(R.string.connect_mobile_server) else ""
+            "${it.name} · ${it.protocol.name}$mark"
+        }
             ?: stringResource(R.string.connect_tunnel_active)
         node != null -> stringResource(R.string.connect_direct_with_standby, node.name)
         else -> stringResource(R.string.connect_no_server)

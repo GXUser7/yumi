@@ -30,6 +30,7 @@ import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.LogEntry
+import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.net.interfaceCidr
@@ -151,6 +152,27 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             onBufferOverflow = BufferOverflow.DROP_OLDEST,
         )
         val handovers: SharedFlow<String> = _handovers.asSharedFlow()
+
+        /**
+         * What kind of network is under the tunnel right now.
+         *
+         * Read from the physical network rather than the tunnel: the app excludes itself from its
+         * own VPN, so the default network it sees stays the real one. Anything reading this
+         * through the tunnel would be told `TRANSPORT_VPN` and learn nothing.
+         */
+        private val _transport = MutableStateFlow(NetworkTransport.None)
+        val transport: StateFlow<NetworkTransport> = _transport.asStateFlow()
+
+        /**
+         * Whether somebody is looking at the phone.
+         *
+         * Not a nicety. Several firmwares — Huawei and some Samsung and Xiaomi builds — switch
+         * Wi-Fi off when the screen goes off and fall back to cellular, which means that without
+         * this every press of the power button would read as leaving the house. Anything that acts
+         * on the network changing has to be able to wait until there is somebody to act for.
+         */
+        private val _screenOn = MutableStateFlow(true)
+        val screenOn: StateFlow<Boolean> = _screenOn.asStateFlow()
 
         private val _wakeups = MutableSharedFlow<Unit>(
             extraBufferCapacity = 1,
@@ -897,6 +919,15 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             val expensive =
                 !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            _transport.value = when {
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ->
+                    NetworkTransport.Cellular
+
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ->
+                    NetworkTransport.Wifi
+
+                else -> NetworkTransport.Other
+            }
 
             // `onCapabilitiesChanged` fires for every capability the system revises, which on a
             // busy Wi-Fi network is several times a minute and almost never about anything this
@@ -1005,6 +1036,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     reportedInterface = null
                     interfaceWasLost = true
                     _hasNetwork.value = false
+                    _transport.value = NetworkTransport.None
                     logs.trace(NATIVE_TAG, "defaultInterface -> (none)")
                     setUnderlying(null)
                     runCatching { listener.updateDefaultInterface("", -1, false, false) }
@@ -1087,10 +1119,16 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (wakeReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                    _screenOn.value = false
+                    return
+                }
+                _screenOn.value = true
                 _wakeups.tryEmit(Unit)
             }
         }
         val filter = IntentFilter(Intent.ACTION_SCREEN_ON).apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
             }
@@ -1108,7 +1146,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 ContextCompat.RECEIVER_EXPORTED,
             )
             wakeReceiver = receiver
-            logs.trace(NATIVE_TAG, "wake monitor on")
+            // Asked once at startup rather than assumed: a tunnel raised by Always-on VPN or by the
+            // boot receiver comes up with the screen off, and starting from "on" would let the
+            // first network change through the gate it exists to hold.
+            _screenOn.value = runCatching {
+                getSystemService(PowerManager::class.java)?.isInteractive != false
+            }.getOrDefault(true)
+            logs.trace(NATIVE_TAG, "wake monitor on, screen ${if (_screenOn.value) "on" else "off"}")
         }.onFailure {
             // Loud, because a silent failure here is invisible: the app goes on working and simply
             // never notices anything while the screen is off.

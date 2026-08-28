@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import android.content.Intent
+import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
@@ -74,8 +75,21 @@ interface TunnelController {
      */
     val hasNetwork: StateFlow<Boolean> get() = AlwaysOnline
 
+    /**
+     * What kind of network is under the tunnel. See [com.mydrop.vpn.core.model.NetworkTransport].
+     *
+     * [NetworkTransport.Other] by default: a controller that cannot tell must not claim the phone
+     * is on cellular, because that would move the tunnel onto the mobile list for a reason that
+     * does not exist.
+     */
+    val transport: StateFlow<NetworkTransport> get() = UnknownTransport
+
+    /** Whether somebody is looking at the phone; true by default, see the service for why. */
+    val screenOn: StateFlow<Boolean> get() = AlwaysOnline
+
     companion object {
         private val AlwaysOnline = MutableStateFlow(true)
+        private val UnknownTransport = MutableStateFlow(NetworkTransport.Other)
     }
 
     /**

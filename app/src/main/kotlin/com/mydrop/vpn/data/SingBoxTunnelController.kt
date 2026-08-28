@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
@@ -36,6 +37,8 @@ class SingBoxTunnelController(
     override val handovers: Flow<String> = MyDropVpnService.handovers
     override val wakeups: Flow<Unit> = MyDropVpnService.wakeups
     override val hasNetwork: StateFlow<Boolean> = MyDropVpnService.hasNetwork
+    override val transport: StateFlow<NetworkTransport> = MyDropVpnService.transport
+    override val screenOn: StateFlow<Boolean> = MyDropVpnService.screenOn
 
     /**
      * Building a configuration extracts the bundled rule-sets and reads the settings store, and
