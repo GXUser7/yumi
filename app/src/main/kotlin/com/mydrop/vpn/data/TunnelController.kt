@@ -63,7 +63,7 @@ interface TunnelController {
      * @return false when it could not be done — no tunnel, or a server that is not in the group.
      *   The caller is expected to fall back to [connect], which always works and costs more.
      */
-    fun selectOutbound(nodeId: String): Boolean = false
+    fun selectOutbound(node: ProxyNode): Boolean = false
 
     /**
      * Whether the device has a default network at all.

@@ -70,14 +70,20 @@ class SingBoxTunnelController(
      * the status and log subscriptions alive, and borrowing it for a one-shot call would tie this
      * to the service's lifecycle for no reason. This opens a connection, says one thing and closes.
      */
-    override fun selectOutbound(nodeId: String): Boolean = runCatching {
+    override fun selectOutbound(node: ProxyNode): Boolean = runCatching {
+        check(state.value is VpnState.Connected) { "no tunnel to switch inside" }
         val client = Libbox.newStandaloneCommandClient()
         try {
-            client.selectOutbound(SingBoxConfigFactory.PROXY_TAG, SingBoxConfigFactory.nodeTag(nodeId))
+            client.selectOutbound(
+                SingBoxConfigFactory.PROXY_TAG,
+                SingBoxConfigFactory.nodeTag(node.id),
+            )
         } finally {
             runCatching { client.disconnect() }
         }
-        logs.trace("YumiCore", "selected outbound for $nodeId without restarting")
+        // Before returning, so nobody can observe a tunnel that has moved and a screen that has not.
+        MyDropVpnService.noteNode(node.id, node.name)
+        logs.trace("YumiCore", "switched to ${node.name} without restarting the core")
         true
     }.getOrElse { error ->
         // Not an error worth showing: every caller has a working fallback, and the reasons this

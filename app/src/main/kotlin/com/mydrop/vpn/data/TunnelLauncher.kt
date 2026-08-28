@@ -50,8 +50,18 @@ class TunnelLauncher(
      * Moves the tunnel onto [node] and records it as the selection, so the server list, the
      * connect screen and the notification all name the server that is really carrying traffic.
      */
+    /**
+     * Moves the tunnel onto [node], the cheapest way that works.
+     *
+     * The selector inside the core can usually do it by swapping a pointer, which leaves the TUN,
+     * the DNS cache and every open connection alone. It cannot when the tunnel is down, or when
+     * the server is not one of the group's members — a switch to somewhere outside the pool the
+     * config was built around. Then the tunnel is rebuilt, which always works and costs the user
+     * every connection they had open.
+     */
     fun switchTo(node: ProxyNode) {
         profiles.selectNode(node.id)
+        if (tunnel.selectOutbound(node)) return
         tunnel.connect(node, "failover")
     }
 

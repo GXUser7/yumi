@@ -160,6 +160,34 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         /** See [com.mydrop.vpn.data.TunnelController.wakeups] for what this is for. */
         val wakeups: SharedFlow<Unit> = _wakeups.asSharedFlow()
 
+        /**
+         * The live service, so a switch that does not restart anything can still tell the truth.
+         *
+         * Cleared in `onDestroy`. A static reference to a Service is a leak worth naming, and this
+         * one is bounded: the service is a foreground singleton that exists exactly while a tunnel
+         * does, and this companion already holds its state, traffic and handovers for the same
+         * reason — the watchdog and the UI live in the same process and need them.
+         */
+        private var live: MyDropVpnService? = null
+
+        /**
+         * Records which server is carrying traffic now, without touching the core.
+         *
+         * Called after the selector has been pointed somewhere else. Without it the tunnel would
+         * be on one server while the notification and the connect screen named another — the exact
+         * confusion this app has already been bitten by, where the screen showed a server nobody
+         * had chosen and nothing explained why.
+         */
+        fun noteNode(nodeId: String, nodeName: String) {
+            val service = live ?: return
+            service.nodeId = nodeId
+            service.nodeName = nodeName
+            if (_state.value is VpnState.Connected) {
+                _state.value = VpnState.Connected(nodeId, service.sessionStartedAtMillis)
+            }
+            service.updateNotification()
+        }
+
         fun start(context: Context, config: String, nodeId: String, nodeName: String) {
             val intent = Intent(context, MyDropVpnService::class.java).apply {
                 action = ACTION_START
@@ -261,6 +289,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         // journal whether the service reloaded the core or Android destroyed and recreated the
         // whole service — and those have completely different causes.
         logs.trace(NATIVE_TAG, "service onCreate #${hashCode()}")
+        live = this
         createNotificationChannel()
     }
 
@@ -350,6 +379,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onDestroy() {
         logs.trace(NATIVE_TAG, "service onDestroy #${hashCode()}")
+        if (live === this) live = null
         stopTunnel()
         scope.cancel()
         super.onDestroy()
