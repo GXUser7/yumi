@@ -128,3 +128,11 @@ of it is checked without a device.
 
 The core is [sing-box](https://github.com/SagerNet/sing-box) by SagerNet. The geo rules come from
 its own `sing-geosite` and `sing-geoip` repositories.
+
+## License
+
+[GNU GPL v3 or later](LICENSE). Copyright © 2026 GXUser7.
+
+The choice was not a free one: sing-box is distributed under GPLv3 and `libbox.aar` is linked
+straight into the app, so the app as a whole has to be GPLv3 as well. In practice that means
+anyone handing out a built APK owes the source alongside it, under the same licence.
