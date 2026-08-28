@@ -67,6 +67,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+              Long-pressing the quick settings tile. With nothing answering this action the
+              system falls back to the app's page in Settings, which is not what anybody
+              long-pressing a VPN tile is after. CATEGORY_DEFAULT is not in AOSP's own lookup,
+              but costs nothing and covers firmwares that resolve this the startActivity way.
+            -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
             <!-- Happ-compatible deep links: happ://add/<base64url-subscription-url> etc. -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
