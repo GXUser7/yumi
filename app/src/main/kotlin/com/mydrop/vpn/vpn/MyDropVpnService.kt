@@ -1065,14 +1065,24 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
             }
         }
+        // Exported, and that is not a slip. These are broadcasts from the system, not from this
+        // app, and a receiver registered NOT_EXPORTED accepts only the app's own — it registers
+        // without complaint and then never fires, which is exactly how this went out the first
+        // time. Protected system broadcasts cannot be forged by other apps, so the flag costs
+        // nothing here.
         runCatching {
             ContextCompat.registerReceiver(
                 this,
                 receiver,
                 filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED,
+                ContextCompat.RECEIVER_EXPORTED,
             )
             wakeReceiver = receiver
+            logs.trace(NATIVE_TAG, "wake monitor on")
+        }.onFailure {
+            // Loud, because a silent failure here is invisible: the app goes on working and simply
+            // never notices anything while the screen is off.
+            logs.trace(NATIVE_TAG, "wake monitor unavailable: ${it.message}")
         }
     }
 
