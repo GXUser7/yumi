@@ -21,6 +21,7 @@ __pycache__/
 # в приложенных логах стоят адреса серверов подписки, а репозиторий публичный.
 .agents/
 Pizda.txt
+LastQuest.txt
 ORIGINAL_REQUEST.md
 PROJECT.md
 PROJECT_AUDIT_AND_BUGS.md
