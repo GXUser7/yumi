@@ -11,6 +11,11 @@ VPN-клиент для Android: подписки, серверы по ссыл�
 Почти всем нужен файл **arm64-v8a**. Сборка `armeabi-v7a` — только для очень старых телефонов;
 если не уверены, какая у вас, берите arm64. Нужен Android 8.0 или новее.
 
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/screenshots/tunnel-off.png" width="240"> | <img src="docs/screenshots/connected.png" width="240"> | <img src="docs/screenshots/session.png" width="240"> |
+| <img src="docs/screenshots/servers.png" width="240"> | <img src="docs/screenshots/subscriptions.png" width="240"> | <img src="docs/screenshots/speed.png" width="240"> |
+
 ## Что умеет
 
 **Добавить можно почти что угодно.** Ссылки `vless://`, `vmess://`, `trojan://`, `ss://`,

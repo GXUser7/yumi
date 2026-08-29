@@ -11,6 +11,11 @@ on the [sing-box](https://github.com/SagerNet/sing-box) core and a Material 3 Ex
 Almost everybody wants the **arm64-v8a** file. The `armeabi-v7a` build is only for very old
 phones; if you are not sure which one you have, take arm64. Android 8.0 or newer is required.
 
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/screenshots/tunnel-off.png" width="240"> | <img src="docs/screenshots/connected.png" width="240"> | <img src="docs/screenshots/session.png" width="240"> |
+| <img src="docs/screenshots/servers.png" width="240"> | <img src="docs/screenshots/subscriptions.png" width="240"> | <img src="docs/screenshots/speed.png" width="240"> |
+
 ## What it can do
 
 **You can add almost anything.** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`,
