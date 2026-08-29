@@ -2,11 +2,14 @@ package com.mydrop.vpn.ui.screens.connect
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -60,6 +63,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.format.ValueAndUnit
@@ -183,9 +187,29 @@ fun ConnectScreen(
                     ) { _, amount -> travel += amount }
                 },
         ) {
+            // Read out here: the transition lambda below is not a composition, so the motion
+            // scheme has to be resolved before it rather than inside it.
+            val glide = MaterialTheme.motionScheme.defaultSpatialSpec<IntOffset>()
+            val appearing = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            val leaving = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+
             AnimatedContent(
                 targetState = statsExpanded,
-                transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
+                // The panel is opened by dragging upwards, so it arrives from below and leaves
+                // downwards — the movement is the same gesture continued, which a crossfade threw
+                // away. The figure it replaces only steps aside: a full slide on both halves
+                // reads as two things fighting for the same space.
+                transitionSpec = {
+                    if (targetState) {
+                        slideInVertically(glide) { it } + fadeIn(appearing) togetherWith
+                            slideOutVertically(glide) { -it / 8 } + fadeOut(leaving)
+                    } else {
+                        slideInVertically(glide) { -it / 8 } + fadeIn(appearing) togetherWith
+                            slideOutVertically(glide) { it } + fadeOut(leaving)
+                    // Nothing here changes size, and the default transform would clip whichever
+                    // half is mid-slide against the box it is sliding out of.
+                    } using SizeTransform(clip = false)
+                },
                 label = "stage",
             ) { expanded ->
                 if (expanded) {
@@ -381,16 +405,6 @@ private fun FlowFigure(
             downloadColor = semantic.download,
             uploadColor = semantic.upload,
             warming = warming,
-        )
-
-        // Grip: the figure is the statistics panel collapsed, and this says so.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 12.dp)
-                .size(width = 34.dp, height = 4.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)),
         )
 
         LatencyBadge(
