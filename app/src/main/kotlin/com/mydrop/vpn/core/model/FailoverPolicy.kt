@@ -123,6 +123,25 @@ object FailoverPolicy {
      */
     const val DNS_FAILURES_BEFORE_FALLBACK = 2
 
+    /**
+     * Bytes that must have arrived through the tunnel since the previous probe for a failed probe
+     * to be disbelieved.
+     *
+     * Download, not upload: a dead exit still swallows everything the phone pushes into it, and
+     * only a live one sends anything back. Thirty-two kilobytes is more than acknowledgements and
+     * retransmissions of a stalled connection produce, and far less than a phone doing anything at
+     * all — so an idle phone never vetoes, and a busy one on a working server always does.
+     */
+    const val TRAFFIC_VETO_BYTES = 32L * 1024
+
+    /**
+     * How many probes in a row traffic may overrule before the probe is believed anyway.
+     *
+     * A server can rot while one old connection keeps trickling, and without a bound that trickle
+     * would pin the tunnel to it for good.
+     */
+    const val MAX_TRAFFIC_VETOES = 3
+
 
     /**
      * How long to wait before the next probe.

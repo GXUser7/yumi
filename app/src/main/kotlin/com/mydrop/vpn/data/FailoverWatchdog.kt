@@ -281,6 +281,10 @@ class FailoverWatchdog(
             var recoveries = 0
             // Names that failed to resolve in a row, and whether the user has already been told.
             var dnsFailures = 0
+            // Cumulative counter read at every probe, so the difference is what arrived between
+            // two of them.
+            var lastDownloadBytes = tunnel.traffic.value.downloadBytes
+            var vetoes = 0
             var dnsReported = false
             // Only so the hold is announced once per outage rather than every probe.
             var offline = false
@@ -395,7 +399,40 @@ class FailoverWatchdog(
                 val alive = throughTunnel
                     ?: !latencyTester.measure(current, settings.value.pingMode).failed
 
-                failures = if (alive) 0 else failures + 1
+                // Bytes that arrived through the tunnel outrank the probe's opinion of it.
+                //
+                // The probe is one plain HTTP request to one host, and it fails for reasons that
+                // have nothing to do with the exit: a momentary stall, a slow round trip past the
+                // five-second limit, that one host being throttled where everything else is not.
+                // Measured on a phone over an evening it failed 13.5% of the time — and eight of
+                // the ten servers it condemned were, in the same seconds, carrying the owner's
+                // own connections without a single error.
+                //
+                // Download is the half that cannot be faked. A dead exit still accepts whatever
+                // the phone uploads into it; only a live one sends bytes back. So if traffic has
+                // been arriving since the last probe, the exit works, whatever the probe says.
+                //
+                // Bounded, because a server can rot while an old connection keeps trickling: after
+                // three vetoes in a row the probe is believed anyway.
+                val arrived = tunnel.traffic.value.downloadBytes
+                val sinceLastProbe = arrived - lastDownloadBytes
+                lastDownloadBytes = arrived
+                val vetoed = !alive &&
+                    sinceLastProbe >= FailoverPolicy.TRAFFIC_VETO_BYTES &&
+                    vetoes < FailoverPolicy.MAX_TRAFFIC_VETOES
+                if (vetoed) {
+                    vetoes++
+                    logs.trace(
+                        TAG,
+                        "probe failed but $sinceLastProbe bytes arrived since the last one — " +
+                            "the exit is carrying traffic " +
+                            "(veto $vetoes/${FailoverPolicy.MAX_TRAFFIC_VETOES})",
+                    )
+                } else if (alive) {
+                    vetoes = 0
+                }
+
+                failures = if (alive || vetoed) 0 else failures + 1
                 if (!alive && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
                     logs.debug(
                         // Two different diagnoses, and telling them apart is most of the value of

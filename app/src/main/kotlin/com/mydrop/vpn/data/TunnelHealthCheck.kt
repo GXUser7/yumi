@@ -124,7 +124,15 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
     private companion object {
         const val TAG = "YumiFailover"
 
-        /** Comfortably inside the watchdog's probe interval, so a hang cannot stack up. */
-        const val TIMEOUT_MILLIS = 5_000
+        /**
+         * Comfortably inside the watchdog's probe interval, so a hang cannot stack up — but not
+         * so tight that a slow answer counts as no answer.
+         *
+         * Five seconds used to be the limit, and the longest probe that still made it back took
+         * 4925 ms. A cutoff the successes are already touching is not measuring whether the exit
+         * works; it is measuring whether the exit is fast, and then reporting the answer as death.
+         * Eight leaves the failing probe and its confirmation inside one twenty-second cycle.
+         */
+        const val TIMEOUT_MILLIS = 8_000
     }
 }
