@@ -106,7 +106,7 @@ class AppContainer(context: Context) {
             nodes = state.nodes,
             selected = selected,
             latencies = state.latencies,
-            limit = com.mydrop.vpn.core.model.FailoverGroup.MAX_GROUP,
+            limit = com.mydrop.vpn.core.model.FailoverGroup.roomFor(mobile.size),
             chosen = current.failoverNodeIds,
         )
         // The chosen server first, so a truncated group still contains the one that matters.
@@ -206,7 +206,7 @@ class AppContainer(context: Context) {
 
     private companion object {
         /** Members past this buy nothing: the app only ever chooses from the lists above. */
-        const val SWITCHABLE_LIMIT = 24
+        const val SWITCHABLE_LIMIT = com.mydrop.vpn.core.model.FailoverGroup.SWITCHABLE
     }
 
     init {

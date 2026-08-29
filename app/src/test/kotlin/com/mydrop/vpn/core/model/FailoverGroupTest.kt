@@ -1,5 +1,6 @@
 package com.mydrop.vpn.core.model
 
+import kotlin.random.Random
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -141,4 +142,57 @@ class FailoverGroupTest {
 
         assertTrue(FailoverGroup.candidates(nodes, nodes[0], emptyMap(), limit = 1).isEmpty())
     }
+
+    @Test
+    fun `a lot is drawn from the whole list, not its head`() {
+        // Twenty nominated servers, seven drawn, many times over: if the draw were the ordering
+        // in disguise, the same seven would come back every time. The bug this replaces did
+        // exactly that — a phone retried one corner of the list all evening while the rest of it
+        // sat untouched.
+        val pool = (1..20).map { node("n$it", "h$it.example.com") }
+        val seen = mutableSetOf<String>()
+        repeat(30) { seed ->
+            val drawn = FailoverGroup.sample(pool, random = Random(seed.toLong()))
+            assertEquals(7, drawn.size)
+            drawn.forEach { seen += it.id }
+        }
+        assertEquals(pool.size, seen.size)
+    }
+
+    @Test
+    fun `the same seed draws the same lot`() {
+        val pool = (1..20).map { node("n$it", "h$it.example.com") }
+        assertEquals(
+            FailoverGroup.sample(pool, random = Random(7)).map { it.id },
+            FailoverGroup.sample(pool, random = Random(7)).map { it.id },
+        )
+    }
+
+    @Test
+    fun `a short list is taken whole rather than thinned`() {
+        val pool = (1..4).map { node("n$it", "h$it.example.com") }
+        assertEquals(4, FailoverGroup.sample(pool, random = Random(1)).size)
+    }
+
+    @Test
+    fun `the group always leaves room for the servers alongside it`() {
+        // Whatever the mobile list costs, the three parts have to fit in one selector group:
+        // a draw from a longer list than the core holds is a switch that cannot happen.
+        for (mobile in 0..40) {
+            val spares = (FailoverGroup.roomFor(mobile) - 1).coerceAtLeast(0)
+            assertTrue(
+                "selected + mobile + spares must fit in one selector group",
+                1 + mobile + spares <= maxOf(FailoverGroup.SWITCHABLE, 1 + mobile),
+            )
+        }
+        // And a mobile list that fills the group on its own leaves no spares at all, rather than
+        // naming servers the core was never given.
+        assertEquals(emptyList<ProxyNode>(), FailoverGroup.candidates(
+            nodes = (1..5).map { node("n$it") },
+            selected = node("cur"),
+            latencies = emptyMap(),
+            limit = FailoverGroup.roomFor(FailoverGroup.SWITCHABLE),
+        ))
+    }
+
 }

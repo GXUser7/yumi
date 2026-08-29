@@ -190,13 +190,15 @@ class FailoverWatchdog(
      * servers they have said they are willing to be on.
      */
     private fun ordinaryPoolFor(anchor: ProxyNode, mobileIds: Set<String>): List<ProxyNode> =
-        FailoverGroup.candidates(
-            nodes = profiles.nodes,
-            selected = anchor,
-            latencies = profiles.state.value.latencies,
-            limit = FailoverGroup.MAX_GROUP,
-            chosen = settings.value.failoverNodeIds,
-        ).filter { it.id !in mobileIds }
+        FailoverGroup.sample(
+            FailoverGroup.candidates(
+                nodes = profiles.nodes,
+                selected = anchor,
+                latencies = profiles.state.value.latencies,
+                limit = FailoverGroup.roomFor(mobileIds.size),
+                chosen = settings.value.failoverNodeIds,
+            ).filter { it.id !in mobileIds },
+        )
 
     private data class Measured(val node: ProxyNode, val millis: Int)
 
@@ -583,12 +585,17 @@ class FailoverWatchdog(
         }
 
     private suspend fun swapAwayFrom(dead: ProxyNode) {
-        val candidates = FailoverGroup.candidates(
-            nodes = profiles.nodes,
-            selected = dead,
-            latencies = profiles.state.value.latencies,
-            limit = FailoverGroup.MAX_GROUP,
-            chosen = settings.value.failoverNodeIds,
+        // The whole group first, then seven of it by lot. Drawing from the group and not from
+        // the raw list is what keeps the switch instant: the core can only be pointed at its own
+        // members, and everything in here is one.
+        val candidates = FailoverGroup.sample(
+            FailoverGroup.candidates(
+                nodes = profiles.nodes,
+                selected = dead,
+                latencies = profiles.state.value.latencies,
+                limit = FailoverGroup.roomFor(settings.value.mobileNodeIds.size),
+                chosen = settings.value.failoverNodeIds,
+            ),
         )
         if (candidates.isEmpty()) {
             logs.warn(R.string.log_failover_nothing_to_swap, dead.name)

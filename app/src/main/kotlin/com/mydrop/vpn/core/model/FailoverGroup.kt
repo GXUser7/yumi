@@ -1,5 +1,7 @@
 package com.mydrop.vpn.core.model
 
+import kotlin.random.Random
+
 /**
  * Assembles the pool of servers the tunnel is allowed to move onto.
  *
@@ -11,11 +13,36 @@ package com.mydrop.vpn.core.model
 object FailoverGroup {
 
     /**
-     * Servers kept as candidates, the current one included. Every candidate is measured during a
-     * switch, so a whole subscription in the pool would turn one dead server into a hundred
-     * probes; past a handful the extra candidates buy nothing anyway.
+     * Servers measured during one switch, the current one included. A whole subscription in the
+     * pool would turn one dead server into a hundred probes; past a handful the extra candidates
+     * buy nothing anyway.
      */
     const val MAX_GROUP = 8
+
+    /**
+     * Servers written into the core's selector group.
+     *
+     * Larger than [MAX_GROUP] on purpose. Switching without restarting the core means pointing
+     * the selector at another of its own members, so a server the watchdog might choose has to
+     * be in here already — and [sample] chooses at random, which means every server it could
+     * draw has to be. Membership is cheap: an outbound is a few hundred bytes of configuration
+     * that costs nothing until it carries traffic.
+     */
+    const val SWITCHABLE = 24
+
+    /**
+     * The `limit` to ask [candidates] for when [mobileCount] servers are also going into the
+     * group, so that the three parts together still fit inside [SWITCHABLE].
+     *
+     * Both the builder of the group and the watchdog choosing inside it have to arrive at the
+     * same number. If the watchdog draws from a longer list than the group holds, the lot can
+     * fall on a server the core has never heard of, and an instant switch becomes a failed one.
+     *
+     * Deliberately allowed to reach zero. A mobile list long enough to fill the group on its own
+     * leaves no room for spares, and [candidates] answers such a limit with nothing — which is
+     * the truth, and better than handing back names the core cannot be pointed at.
+     */
+    fun roomFor(mobileCount: Int): Int = SWITCHABLE - mobileCount
 
     /**
      * Companions for [selected], best first.
@@ -62,5 +89,28 @@ object FailoverGroup {
             .toList()
 
         return pool.take(limit - 1)
+    }
+
+    /**
+     * [count] of them minus the current server, drawn by lot.
+     *
+     * The ordering [candidates] applies is right for deciding who belongs in the group at all,
+     * and wrong for deciding who gets measured during an outage: it is built from numbers taken
+     * before the outage began, so it hands back the same handful every time — including the
+     * servers that have just been failing. A phone watched through one bad evening tried the
+     * same seven spares on every swap while fourteen others sat in the list untouched.
+     *
+     * Drawing at random has no opinion about which server is best, and that is the point. Over
+     * successive attempts it covers the whole list the user nominated instead of re-testing one
+     * corner of it, and nothing that answers is ever unreachable because a stale measurement put
+     * it eighth. What answers is still decided afterwards, by measuring.
+     */
+    fun sample(
+        pool: List<ProxyNode>,
+        count: Int = MAX_GROUP,
+        random: Random = Random,
+    ): List<ProxyNode> {
+        if (count <= 1) return emptyList()
+        return if (pool.size <= count - 1) pool else pool.shuffled(random).take(count - 1)
     }
 }
