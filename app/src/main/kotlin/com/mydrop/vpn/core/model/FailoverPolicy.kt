@@ -142,6 +142,16 @@ object FailoverPolicy {
      */
     const val MAX_TRAFFIC_VETOES = 3
 
+    /**
+     * How long to wait for the core to report what it measured through the group.
+     *
+     * The test itself runs inside the core against every member at once, so this is one round trip
+     * plus its own timeout, not a sum over the candidates. Short, because it is spent during an
+     * outage the user is already sitting through, and there is a working fallback at the end of
+     * it — the direct probe that used to be the only measurement there was.
+     */
+    const val CORE_URLTEST_BUDGET_MILLIS = 6_000L
+
 
     /**
      * How long to wait before the next probe.

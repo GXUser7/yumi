@@ -5,6 +5,7 @@ import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.FailoverPolicy
+import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NetworkEnvironment
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -239,6 +241,37 @@ class FailoverWatchdog(
         )
 
     private data class Measured(val node: ProxyNode, val millis: Int)
+
+    /**
+     * What the core measured through each candidate, or nothing if it could not be asked.
+     *
+     * This is the measurement that matches the diagnosis. A server is left because traffic stopped
+     * coming back through it, and the replacement used to be chosen by dialling candidates' ports
+     * from the phone — a probe the app's own code describes as blind to exactly this failure,
+     * since a server under interference answers on its port and carries nothing. Asking the core
+     * to pull a page through each member of the group measures the same property the departure was
+     * decided on.
+     *
+     * Falls back rather than fails: without a live tunnel, or when the answers do not arrive in
+     * time, the caller measures the old way. A worse number is better than no candidate at all.
+     */
+    private suspend fun coreMeasured(candidates: List<ProxyNode>): Map<String, LatencyResult> {
+        if (!tunnel.requestUrlTest()) return emptyMap()
+        val tags = candidates.associateBy { SingBoxConfigFactory.nodeTag(it.id) }
+        val delays = withTimeoutOrNull(FailoverPolicy.CORE_URLTEST_BUDGET_MILLIS) {
+            tunnel.coreDelays.first { reported -> reported.keys.any { it in tags } }
+        } ?: return emptyMap()
+
+        val now = System.currentTimeMillis()
+        val measured = delays.mapNotNull { (tag, millis) ->
+            tags[tag]?.let { node ->
+                node.id to LatencyResult(node.id, millis, now, failed = false)
+            }
+        }.toMap()
+        measured.values.forEach(profiles::recordLatency)
+        logs.trace(TAG, "core measured ${measured.size}/${candidates.size} candidates through themselves")
+        return measured
+    }
 
     /**
      * Measures a pool from where the phone is standing now, and picks from what answered.
@@ -715,10 +748,12 @@ class FailoverWatchdog(
         // the user has chosen, the more writers there are to collide.
         //
         // The callback stays, but only for the side effect that is already safe.
-        val measured = latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
-            profiles.recordLatency(result)
+        val throughCore = coreMeasured(candidates)
+        val fresh = throughCore.ifEmpty {
+            latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
+                profiles.recordLatency(result)
+            }.associateBy { it.nodeId }
         }
-        val fresh = measured.associateBy { it.nodeId }
 
         val chosen = FailoverChoice.pick(candidates, fresh)
         if (chosen == null) {

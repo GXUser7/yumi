@@ -33,6 +33,26 @@ class SingBoxTunnelController(
 
     override val state: StateFlow<VpnState> = MyDropVpnService.state
     override val traffic: StateFlow<TrafficStats> = MyDropVpnService.traffic
+
+    override val coreDelays: StateFlow<Map<String, Int>> = MyDropVpnService.coreDelays
+
+    override fun requestUrlTest(): Boolean = runCatching {
+        check(state.value is VpnState.Connected) { "no tunnel to measure through" }
+        MyDropVpnService.forgetCoreDelays()
+        val client = Libbox.newStandaloneCommandClient()
+        try {
+            // The group, not one server. sing-box answers a URL test on any outbound group by
+            // walking its members and pulling the test page through each — so one request covers
+            // every candidate the tunnel could move onto, measured the way the tunnel is used.
+            client.urlTest(SingBoxConfigFactory.PROXY_TAG)
+        } finally {
+            runCatching { client.disconnect() }
+        }
+        true
+    }.getOrElse { error ->
+        logs.trace("YumiCore", "urlTest refused: ${error.message}")
+        false
+    }
     override val isReal: Boolean = true
     override val handovers: Flow<String> = MyDropVpnService.handovers
     override val wakeups: Flow<Unit> = MyDropVpnService.wakeups

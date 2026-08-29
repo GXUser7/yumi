@@ -415,6 +415,7 @@
     <string name="log_failover_pruned">Servers that no longer exist were removed from the spares list: %1$d</string>
 
     <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>
+    <string name="log_settings_reapplied">Settings changed — rebuilding the tunnel</string>
     <string name="log_dns_dead">Resolver “%1$s” stopped answering; the fallback is switched off</string>
     <string name="log_dns_fallback_also_dead">The fallback resolver (%1$s) is not answering either — the fault is probably elsewhere</string>
 

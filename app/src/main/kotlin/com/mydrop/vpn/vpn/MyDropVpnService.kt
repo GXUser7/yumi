@@ -33,6 +33,7 @@ import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
 import com.mydrop.vpn.core.net.interfaceCidr
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
@@ -114,6 +115,29 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         private val _traffic = MutableStateFlow(TrafficStats.Zero)
         val traffic: StateFlow<TrafficStats> = _traffic.asStateFlow()
+
+        /**
+         * Round trips the core measured *through* each server of the selector group, by node tag.
+         *
+         * The only numbers in the app that describe the thing that actually breaks. Everything
+         * else measures the server's port from the phone, which under interference answers
+         * cheerfully while the sessions behind it die — the failure this app exists to escape.
+         * These come from the core pulling a page through each outbound in turn, so a server that
+         * accepts connections and carries nothing scores no delay at all and simply is not here.
+         */
+        private val _coreDelays = MutableStateFlow<Map<String, Int>>(emptyMap())
+        val coreDelays: StateFlow<Map<String, Int>> = _coreDelays.asStateFlow()
+
+        /**
+         * Empties the table before a fresh test is asked for.
+         *
+         * Without it the answer to "has the core measured yet" is yes before it has started: the
+         * flow still holds whatever the last test found, and a caller waiting for numbers is
+         * handed the previous outage's.
+         */
+        fun forgetCoreDelays() {
+            _coreDelays.value = emptyMap()
+        }
 
         /**
          * Emitted with the new interface name whenever the tunnel moves between physical
@@ -575,6 +599,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         lastDownloadBytes = 0
         sessionStartedAtMillis = 0
         _traffic.value = TrafficStats.Zero
+        _coreDelays.value = emptyMap()
         _state.value = failure ?: VpnState.Disconnected
 
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -600,6 +625,10 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             CommandClientOptions().apply {
                 addCommand(Libbox.CommandStatus)
                 addCommand(Libbox.CommandLog)
+                // Carries the per-server round trips the core measures through the group. Local
+                // IPC that only speaks when something changed; it costs nothing to keep open and
+                // saves opening a second client every time a server has to be replaced.
+                addCommand(Libbox.CommandGroup)
                 statusInterval = STATUS_INTERVAL_NANOS
             },
         )
@@ -713,7 +742,23 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun setDefaultLogLevel(level: Int) = Unit
         override fun updateClashMode(newMode: String?) = Unit
         override fun writeConnectionEvents(message: io.nekohasekai.libbox.ConnectionEvents?) = Unit
-        override fun writeGroups(message: io.nekohasekai.libbox.OutboundGroupIterator?) = Unit
+        override fun writeGroups(message: io.nekohasekai.libbox.OutboundGroupIterator?) {
+            if (message == null || stale) return
+            val delays = mutableMapOf<String, Int>()
+            while (message.hasNext()) {
+                val group = message.next() ?: continue
+                if (group.tag != SingBoxConfigFactory.PROXY_TAG) continue
+                val items = group.items
+                while (items.hasNext()) {
+                    val item = items.next() ?: continue
+                    // Zero means "never measured" and negative means "measured and failed"; both
+                    // are absences rather than numbers, and an absence has to stay absent — a
+                    // server that answered nothing must not be chosen for answering in 0 ms.
+                    if (item.urlTestDelay > 0) delays[item.tag] = item.urlTestDelay
+                }
+            }
+            if (delays.isNotEmpty()) _coreDelays.value = delays
+        }
         override fun writeOutbounds(message: io.nekohasekai.libbox.OutboundGroupItemIterator?) = Unit
     }
 

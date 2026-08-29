@@ -195,6 +195,16 @@ class AppContainer(context: Context) {
         scope = applicationScope,
     )
 
+    /** Hands a running tunnel a new configuration when a setting it was built from changes. */
+    val tunnelSettingsApplier = TunnelSettingsApplier(
+        settings = settings,
+        profiles = profiles,
+        tunnel = tunnel,
+        launcher = tunnelLauncher,
+        logs = logs,
+        scope = applicationScope,
+    )
+
     /** Keeps the failover list free of servers a subscription refresh has taken away. */
     val staleSelectionPruner = StaleSelectionPruner(
         profiles = profiles,
@@ -216,6 +226,7 @@ class AppContainer(context: Context) {
         }
         failoverWatchdog.start()
         staleSelectionPruner.start()
+        tunnelSettingsApplier.start()
         subscriptionScheduler.start()
         updateScheduler.start()
     }

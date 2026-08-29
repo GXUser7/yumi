@@ -411,6 +411,7 @@
     <string name="log_failover_pruned">Из списка запасных убрано серверов, которых больше нет: %1$d</string>
 
     <string name="log_dns_switching">DNS «%1$s» перестал отвечать — перехожу на %2$s</string>
+    <string name="log_settings_reapplied">Настройки изменились — пересобираю туннель</string>
     <string name="log_dns_dead">DNS «%1$s» перестал отвечать, а запасной выключен</string>
     <string name="log_dns_fallback_also_dead">Запасной DNS (%1$s) тоже не отвечает — дело, скорее всего, не в нём</string>
 

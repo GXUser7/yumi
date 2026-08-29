@@ -67,6 +67,25 @@ interface TunnelController {
     fun selectOutbound(node: ProxyNode): Boolean = false
 
     /**
+     * Round trips the core measured through each server of the group, keyed by node id.
+     *
+     * Empty for anything that is not a live sing-box tunnel, and empty until a test has been
+     * asked for with [requestUrlTest].
+     */
+    val coreDelays: StateFlow<Map<String, Int>> get() = NoDelays
+
+    /**
+     * Asks the running core to pull a page through every server in the group, one by one.
+     *
+     * The measurement the app cannot make for itself. Everything it can reach from the phone
+     * describes the server's port; this describes whether traffic comes back out the far side,
+     * which is the only property that matters when choosing where to move a broken tunnel.
+     *
+     * Returns false when there is no tunnel to ask. Answers arrive later, in [coreDelays].
+     */
+    fun requestUrlTest(): Boolean = false
+
+    /**
      * Whether the device has a default network at all.
      *
      * True by default: a controller that cannot know must not claim the phone is offline, because
@@ -89,6 +108,7 @@ interface TunnelController {
 
     companion object {
         private val AlwaysOnline = MutableStateFlow(true)
+        private val NoDelays = MutableStateFlow(emptyMap<String, Int>())
         private val UnknownTransport = MutableStateFlow(NetworkTransport.Other)
     }
 
