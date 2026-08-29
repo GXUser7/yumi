@@ -439,6 +439,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
                     val server = commandServer ?: createCommandServer()
 
+                    // Retired before the figures are read, not after the new client is built.
+                    // The outgoing core's status stream is still live at this point and sends a
+                    // total about once a second; one arriving between the banking below and the
+                    // new subscription would put the old core's figure back into `lastUploadBytes`
+                    // and get it banked a second time on the next reload — a session counter that
+                    // grows by a server's worth of traffic every time the server changes.
+                    statusGeneration.incrementAndGet()
+
                     // The core's counters start over with the new service, so bank what the old one
                     // moved before it goes away.
                     if (reloading) {

@@ -54,6 +54,17 @@ class TunnelConfigBuilder(
      */
     val dnsFallback: StateFlow<Boolean> = _dnsFallback.asStateFlow()
 
+    /**
+     * Forgets the loopback inbound when the tunnel carrying it goes away.
+     *
+     * Left standing, the port it names is closed but the endpoint is not null, so the health check
+     * reads a refused connection as "the server did not answer" instead of "there is nothing to
+     * ask" — and the direct measurement it is supposed to fall back on is never reached.
+     */
+    fun forgetProbe() {
+        _probe.value = null
+    }
+
     fun useDnsFallback(active: Boolean) {
         _dnsFallback.value = active
     }

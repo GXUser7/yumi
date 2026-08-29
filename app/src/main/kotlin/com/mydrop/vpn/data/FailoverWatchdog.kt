@@ -116,13 +116,29 @@ class FailoverWatchdog(
      */
     private fun watchTransport() {
         scope.launch {
-            combine(tunnel.transport, tunnel.screenOn) { transport, awake -> transport to awake }
-                .collectLatest { (transport, awake) ->
+            combine(
+                tunnel.transport,
+                tunnel.screenOn,
+                tunnel.state,
+            ) { transport, awake, state -> Triple(transport, awake, state) }
+                .collectLatest { (transport, awake, state) ->
+                    // Nothing is applied while the tunnel is down, and — the part that was
+                    // missing — nothing is *remembered* as applied either. Marking the transport
+                    // confirmed on a dead tunnel meant that turning the VPN on afterwards, still
+                    // on the same network, matched the remembered value and was skipped: the
+                    // mobile list was never consulted for the network the phone was already on.
+                    if (state !is VpnState.Connected) {
+                        confirmedTransport = NetworkTransport.None
+                        return@collectLatest
+                    }
                     if (!awake) return@collectLatest
                     if (!NetworkEnvironment.actionable(transport)) return@collectLatest
                     if (transport == confirmedTransport) return@collectLatest
 
                     delay(NetworkEnvironment.settleMillis(transport))
+                    // Re-checked after the wait: the settle is seconds long and the tunnel can go
+                    // down inside it.
+                    if (tunnel.state.value !is VpnState.Connected) return@collectLatest
                     confirmedTransport = transport
                     applyTransport(transport)
                 }
@@ -274,6 +290,7 @@ class FailoverWatchdog(
                         // thing in the world to be up again, and one that stayed swapped until
                         // somebody noticed would be a setting the user never chose.
                         configs.useDnsFallback(false)
+                        configs.forgetProbe()
                     }
                 }
             }

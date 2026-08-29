@@ -70,6 +70,12 @@ class TunnelLauncher(
         // them: the file on disk changed, the core kept querying the resolver that had stopped
         // answering.
         if (!reloadConfig && tunnel.selectOutbound(node)) return
+        // Rebuilding is the fallback for "the pointer could not be moved", and one of the reasons
+        // it cannot be moved is that the tunnel is being torn down underneath: the command socket
+        // goes away mid-call, the swap reports failure, and the rebuild below would bring back the
+        // tunnel the user just asked to stop. A switch has somewhere to go only while there is
+        // something to switch.
+        if (!tunnel.state.value.isActive) return
         tunnel.connect(node, if (reloadConfig) "config reload" else "failover")
     }
 

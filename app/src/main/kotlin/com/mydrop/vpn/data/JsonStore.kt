@@ -104,10 +104,17 @@ class JsonStore<T>(
             val temp = File(file.parentFile, "${file.name}.tmp")
             temp.writeText(json.encodeToString(serializer, value))
             if (!temp.renameTo(file)) {
-                // Renaming onto an existing file fails on some Android storage layers. Copying is
-                // not atomic, which is why it is the fallback rather than the path.
-                file.writeText(temp.readText())
-                temp.delete()
+                // Renaming onto an existing file fails on some Android storage layers, and the
+                // copy below is not atomic: a process killed halfway through it leaves the file
+                // truncated, which is worse than any state this was trying to save. So the
+                // destination is removed and the rename tried once more — onto a name that no
+                // longer exists, which is the case those layers do allow. Copying stays as the
+                // last resort it was always meant to be.
+                file.delete()
+                if (!temp.renameTo(file)) {
+                    file.writeText(temp.readText())
+                    temp.delete()
+                }
             }
         }.onFailure(onWriteFailure)
     }

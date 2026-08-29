@@ -39,18 +39,31 @@ class StaleSelectionPruner(
                 .map { state -> state.nodes.map { it.id }.toSet() }
                 .distinctUntilChanged()
                 .collect { alive ->
-                    val current = settings.value
-                    val pruned = StaleSelection.prune(
-                        alive = alive,
-                        failover = current.failoverNodeIds,
-                        mobile = current.mobileNodeIds,
-                    ) ?: return@collect
-
+                    // Computed inside the update rather than from a snapshot taken before it.
+                    // Read first and written after, a list the user was editing in the settings
+                    // screen at that moment would be overwritten by the state from before their
+                    // edit. The lambda sees whatever is current when it runs, and reruns if that
+                    // changed underneath.
+                    var applied: StaleSelection.Pruned? = null
                     // One write for both, so a refresh that empties them together never leaves a
                     // moment where one list has gone and the other has not.
-                    settings.update {
-                        it.copy(failoverNodeIds = pruned.failover, mobileNodeIds = pruned.mobile)
+                    settings.update { current ->
+                        val pruned = StaleSelection.prune(
+                            alive = alive,
+                            failover = current.failoverNodeIds,
+                            mobile = current.mobileNodeIds,
+                        )
+                        applied = pruned
+                        if (pruned == null) {
+                            current
+                        } else {
+                            current.copy(
+                                failoverNodeIds = pruned.failover,
+                                mobileNodeIds = pruned.mobile,
+                            )
+                        }
                     }
+                    val pruned = applied ?: return@collect
 
                     if (pruned.lostFailover > 0) {
                         logs.info(
