@@ -96,6 +96,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val CHANNEL_ID = "mydrop_tunnel"
         private const val NATIVE_TAG = "YumiCore"
 
+        /** gRPC's word for "the caller hung up", which on these streams is always us. */
+        private const val CANCELLED = "context canceled"
+
         /**
          * How long a lost default interface is given to be replaced before the core is told it
          * has none. Long enough to cover a Wi-Fi → cellular handover and transient Wi-Fi signal
@@ -613,7 +616,17 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun connected() = Unit
 
         override fun disconnected(message: String?) {
-            if (!message.isNullOrEmpty()) logs.warn(R.string.log_core_line, message)
+            if (message.isNullOrEmpty()) return
+            // Stopping the tunnel closes these streams, and libbox reports the closure as an
+            // error — so every ordinary disconnect wrote two warnings about a cancellation the
+            // app had just performed on purpose. Kept, because a stream that dies while the
+            // tunnel is meant to be up is worth knowing about; demoted when it is the shutdown
+            // we asked for.
+            if (stale || CANCELLED in message) {
+                logs.trace(NATIVE_TAG, "core stream closed: $message")
+                return
+            }
+            logs.warn(R.string.log_core_line, message)
         }
 
         override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
