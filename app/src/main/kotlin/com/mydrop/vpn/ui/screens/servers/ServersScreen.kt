@@ -87,13 +87,13 @@ fun ServersScreen(
     onPing: (String) -> Unit,
     onRemove: (String) -> Unit,
     onSetTlsInsecure: (String, Boolean) -> Unit,
+    onToggleGroup: (String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
     var sharing by remember { mutableStateOf<ProxyNode?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(ServerSort.Default) }
-    val collapsedGroups = remember { mutableStateOf(emptySet<String>()) }
 
     // Read outside the remember block: it is not a composition, so it cannot resolve resources,
     // and the label is the only thing in there that depends on the language.
@@ -146,20 +146,16 @@ fun ServersScreen(
         }
 
         groups.forEach { group ->
-            val collapsed = group.id in collapsedGroups.value
+            // Settings rather than local state: folding a three-hundred-server subscription
+            // shut is a decision, and it used to come undone on every trip to another tab.
+            val collapsed = group.id in state.settings.collapsedGroupIds
 
             item(key = "header-${group.id}") {
                 GroupHeader(
                     title = group.title,
                     count = group.nodes.size,
                     collapsed = collapsed,
-                    onToggle = {
-                        collapsedGroups.value = if (collapsed) {
-                            collapsedGroups.value - group.id
-                        } else {
-                            collapsedGroups.value + group.id
-                        }
-                    },
+                    onToggle = { onToggleGroup(group.id) },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }

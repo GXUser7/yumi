@@ -569,6 +569,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun updateSettings(transform: (AppSettings) -> AppSettings) =
         container.settings.update(transform)
 
+    /** Folds one subscription group on the servers tab shut, or opens it again. */
+    fun toggleServerGroup(groupId: String) = updateSettings { settings ->
+        settings.copy(
+            collapsedGroupIds = if (groupId in settings.collapsedGroupIds) {
+                settings.collapsedGroupIds - groupId
+            } else {
+                settings.collapsedGroupIds + groupId
+            },
+        )
+    }
+
     /**
      * Null puts the resolver from settings back in charge.
      *

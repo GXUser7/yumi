@@ -228,4 +228,15 @@ data class AppSettings(
      * still amounts to one check rather than six — see [com.mydrop.vpn.data.UpdateScheduler].
      */
     val lastUpdateCheckEpochMillis: Long = 0L,
+
+    // Server list
+    /**
+     * Subscription groups the user has folded shut on the servers tab.
+     *
+     * Persisted rather than remembered, because the state it holds is a decision and not a scroll
+     * position: a subscription of three hundred servers folds away once and should stay that way
+     * across tab switches and restarts. Held here by group id, so a subscription that goes away
+     * takes its entry with it the moment nothing renders that group any more.
+     */
+    val collapsedGroupIds: Set<String> = emptySet(),
 )
