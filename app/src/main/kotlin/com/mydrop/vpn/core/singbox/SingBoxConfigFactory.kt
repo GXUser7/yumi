@@ -505,6 +505,17 @@ object SingBoxConfigFactory {
                     putJsonArray("inbound") { add(PROBE_TAG) }
                     putJsonArray("domain") { add(ProbeTargets.DNS) }
                     put("action", "resolve")
+                    // Without these the check answers itself. The name's TTL is four minutes and
+                    // the probe runs every twenty seconds, so the core serves its own cache and
+                    // the resolver is never asked: measured over an hour and a half on the phone,
+                    // 76 lookups came from cache against 9 that reached the resolver. A resolver
+                    // that died would keep testing healthy until the entry expired — which is
+                    // precisely the outage this probe exists to catch.
+                    put("disable_cache", true)
+                    // The optimistic cache serves a stale answer while it refreshes in the
+                    // background. That is the right behaviour for browsing and the wrong one
+                    // here, for the same reason.
+                    put("disable_optimistic_cache", true)
                 }
                 addJsonObject {
                     putJsonArray("inbound") { add(PROBE_TAG) }

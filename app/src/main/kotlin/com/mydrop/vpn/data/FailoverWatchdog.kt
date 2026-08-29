@@ -431,6 +431,18 @@ class FailoverWatchdog(
                     // resolver that was fine.
                     false -> if (firstProbe) {
                         logs.trace(TAG, "first dns lookup after connect failed, not counting it")
+                    } else if (tunnelHealth.passes(configs.probe.value) == false) {
+                        // The tunnel probe that licensed this question is five seconds old, and
+                        // five seconds is long enough for a flaky exit to have died in between.
+                        // That is not a hypothetical: it swapped a working resolver on a phone
+                        // whose server was answering every other probe — the DNS check timed out
+                        // for the same reason the tunnel check did thirty seconds later, and only
+                        // one of the two carries the word "dns" in its name.
+                        //
+                        // So the verdict is re-taken at the moment of the failure rather than
+                        // inherited from before it. A tunnel that fails right now means the exit
+                        // is the fault, and the resolver keeps its record clean.
+                        logs.trace(TAG, "dns failed, but so does the tunnel now — not the resolver")
                     } else {
                         dnsFailures++
                     }

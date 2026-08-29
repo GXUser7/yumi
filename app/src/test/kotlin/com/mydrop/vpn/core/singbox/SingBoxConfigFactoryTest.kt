@@ -407,6 +407,12 @@ class SingBoxConfigFactoryTest {
             ProbeTargets.DNS,
             resolve["domain"]!!.jsonArray.single().jsonPrimitive.content,
         )
+        // Both caches off, or the check answers itself: the name's TTL outlives the probe
+        // interval more than tenfold, so a cached hit means the resolver was never asked and a
+        // dead one would keep testing healthy until the entry expired.
+        assertEquals(true, resolve["disable_cache"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals(true, resolve["disable_optimistic_cache"]!!.jsonPrimitive.content.toBoolean())
+
         // And the tunnel probe is deliberately NOT in it: it has to keep passing while DNS is
         // dead, or a broken resolver would send the watchdog hunting through every server.
         assertTrue(rules.none { rule ->
