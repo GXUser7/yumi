@@ -148,6 +148,7 @@ class FailoverWatchdog(
                 }
                 savedOrdinaryNodeId = carrying.id
                 logs.info(R.string.log_mobile_switch, chosen.node.name, chosen.millis.toString())
+                noteSwitch(chosen.node)
                 launcher.switchTo(chosen.node)
             }
 
@@ -169,6 +170,7 @@ class FailoverWatchdog(
                 if (current.restoreWifiNodeOnWifi && remembered != null) {
                     savedOrdinaryNodeId = null
                     logs.info(R.string.log_mobile_back, remembered.name, "")
+                    noteSwitch(remembered)
                     launcher.switchTo(remembered)
                     return
                 }
@@ -176,9 +178,28 @@ class FailoverWatchdog(
                 val chosen = measureAndPick(pool) ?: return
                 savedOrdinaryNodeId = null
                 logs.info(R.string.log_mobile_back, chosen.node.name, chosen.millis.toString())
+                noteSwitch(chosen.node)
                 launcher.switchTo(chosen.node)
             }
         }
+    }
+
+    /**
+     * Stamps a move so the cooldowns can see it.
+     *
+     * Moving because the phone changed network is a move like any other, and it used to leave this
+     * clock untouched — so the moment the tunnel landed on a cellular server, every cooldown was
+     * measured from whenever the last *failover* had been, usually long enough ago to count as
+     * expired. The policy would then be free to decide, on the very next probe, that it was time
+     * to go home to the Wi-Fi server the phone had just left.
+     */
+    private fun noteSwitch(node: ProxyNode) {
+        lastSwitchAtMillis = SystemClock.elapsedRealtime()
+        // Recorded as this watchdog's own doing. Without it the probe loop compares the server now
+        // carrying traffic against the last server a *failover* chose, finds them different, and
+        // reads the mismatch as the user having tapped something — then forgets the way home. A
+        // move onto the mobile list is not somebody choosing by hand; it is this object choosing.
+        autoChosenId = node.id
     }
 
     /**
@@ -197,7 +218,8 @@ class FailoverWatchdog(
                 latencies = profiles.state.value.latencies,
                 limit = FailoverGroup.roomFor(mobileIds.size),
                 chosen = settings.value.failoverNodeIds,
-            ).filter { it.id !in mobileIds },
+                exclude = mobileIds,
+            ),
         )
 
     private data class Measured(val node: ProxyNode, val millis: Int)
@@ -242,6 +264,11 @@ class FailoverWatchdog(
                     else -> {
                         stopWatch()
                         forgetHome()
+                        // The give-up counter is scoped to one connection, and this object is a
+                        // singleton: without clearing it, a server penalised at breakfast was
+                        // still barred from being returned to at midnight, across every
+                        // disconnect in between, until the process itself died.
+                        failbacks.clear()
                         // The fallback resolver lasts exactly as long as the connection that
                         // needed it. A resolver that was down twenty minutes ago is the likeliest
                         // thing in the world to be up again, and one that stayed swapped until
@@ -265,8 +292,6 @@ class FailoverWatchdog(
             )
             // A tunnel that just came up has not had time to break, and the core is still
             // settling. Probing into that only produces a false alarm.
-            delay(GRACE_MILLIS)
-
             // Collected into a conflated channel rather than raced against directly, because a
             // handover that arrives *during* a probe would otherwise fall on the floor: the flow
             // has no replay, and between cycles there is no subscriber to buffer it. Conflated
@@ -277,6 +302,13 @@ class FailoverWatchdog(
             launch { tunnel.handovers.collect { nudges.trySend(Nudge.Handover(it)) } }
             launch { tunnel.wakeups.collect { nudges.trySend(Nudge.Awake) } }
 
+            // Subscribed before the grace, not after it. These flows have no replay, so fifteen
+            // seconds of listening to nothing meant every network change in the first fifteen
+            // seconds of a tunnel was lost — and the first fifteen seconds, right after a switch
+            // or a reconnect, is exactly when the phone is most likely to be moving between
+            // networks. The channel holds whatever arrives during the wait.
+            delay(GRACE_MILLIS)
+
             var failures = 0
             var recoveries = 0
             // Names that failed to resolve in a row, and whether the user has already been told.
@@ -285,6 +317,15 @@ class FailoverWatchdog(
             // two of them.
             var lastDownloadBytes = tunnel.traffic.value.downloadBytes
             var vetoes = 0
+            // Whether the very first thing this tunnel was asked came back a failure.
+            //
+            // The check below used to read `firstProbe` directly, and could not ever be true:
+            // leaving requires two failures in a row, which cannot have happened before the second
+            // pass, and by the second pass `firstProbe` is false. So the penalty it guards was
+            // dead code, and the round trip it was written to stop — going home to a server that
+            // answers on its port and carries nothing, then leaving again seconds later — kept
+            // repeating until MAX_FAILBACKS ran out, at the cost of a second outage.
+            var firstProbeFailed = false
             var dnsReported = false
             // Only so the hold is announced once per outage rather than every probe.
             var offline = false
@@ -433,6 +474,7 @@ class FailoverWatchdog(
                 }
 
                 failures = if (alive || vetoed) 0 else failures + 1
+                if (firstProbe) firstProbeFailed = !alive && !vetoed
                 if (!alive && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
                     logs.debug(
                         // Two different diagnoses, and telling them apart is most of the value of
@@ -537,7 +579,9 @@ class FailoverWatchdog(
                             // The resolver is baked into the document the core reads at startup,
                             // so changing it means handing the core a new one. Same server, same
                             // everything else — the reconnection is the delivery mechanism.
-                            launcher.switchTo(current)
+                            // Reload, not a pointer swap: the resolver lives in the document
+                            // the core read at startup, and only handing it a new one changes it.
+                            launcher.switchTo(current, reloadConfig = true)
                             continue
                         }
 
@@ -584,7 +628,7 @@ class FailoverWatchdog(
                         // Without this the round trip is simply repeated until MAX_FAILBACKS runs
                         // out, and the user pays a second outage to learn what the first one had
                         // already shown.
-                        if (firstProbe && (failbacks[current.id] ?: 0) > 0) {
+                        if (firstProbeFailed && (failbacks[current.id] ?: 0) > 0) {
                             failbacks[current.id] = FailoverPolicy.MAX_FAILBACKS + 1
                             logs.trace(TAG, "${current.name} failed on return, not going back")
                         }
@@ -683,8 +727,7 @@ class FailoverWatchdog(
         ) {
             homeNode = dead
         }
-        autoChosenId = chosen.id
-        lastSwitchAtMillis = SystemClock.elapsedRealtime()
+        noteSwitch(chosen)
         launcher.switchTo(chosen)
     }
 

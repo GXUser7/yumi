@@ -192,19 +192,30 @@ object SingBoxConfigFactory {
             //
             // Falls back to the single outbound when there is nobody to switch to: a group of one
             // is a pointer that can only point at itself.
-            val members = group.filter { it.settings != ProxySettings.Direct }
-            if (members.size > 1) {
-                members.forEach { member ->
-                    // A member that cannot be expressed is dropped rather than fatal: it would
-                    // only ever have been one destination among several, and refusing to start the
-                    // tunnel over it would be a worse trade than not offering it.
-                    runCatching { add(buildOutbound(member, nodeTag(member.id))) }
+            // Serialised before anything is written, because what the group may name and what
+            // the document actually contains have to be the same set. A member that cannot be
+            // expressed is dropped rather than fatal — it would have been one destination among
+            // several — but its tag has to go with it: naming an outbound the document does not
+            // define makes sing-box reject the whole configuration with "outbound not found", and
+            // then no server works rather than one. The selected server is the exception; if that
+            // one cannot be built there is nothing to connect to at all, and the failure belongs
+            // upstream where it is already handled.
+            val members = group
+                .filter { it.settings != ProxySettings.Direct }
+                .mapNotNull { member ->
+                    runCatching { member to buildOutbound(member, nodeTag(member.id)) }.getOrNull()
                 }
+            // The selected node has to be inside the group it is the default of. It drops out
+            // when it is a direct outbound, and when its own serialisation failed.
+            val selectable = members.takeIf { list -> list.any { it.first.id == node.id } }.orEmpty()
+
+            if (selectable.size > 1) {
+                selectable.forEach { (_, outbound) -> add(outbound) }
                 addJsonObject {
                     put("type", "selector")
                     put("tag", PROXY_TAG)
                     putJsonArray("outbounds") {
-                        members.forEach { add(nodeTag(it.id)) }
+                        selectable.forEach { (member, _) -> add(nodeTag(member.id)) }
                     }
                     // Where the group points when the core starts. Without `experimental.cache_file`
                     // sing-box has no memory of a previous choice, so this is the whole of it —

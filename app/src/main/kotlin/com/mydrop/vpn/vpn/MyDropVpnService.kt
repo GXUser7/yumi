@@ -1109,6 +1109,10 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun stopDefaultInterfaceMonitor() {
         cancelPendingInterfaceLoss()
+        // Belongs to the monitor being torn down, not to the next one. Left standing, the first
+        // callback of a freshly started monitor reads as "the interface came back" and resets the
+        // core's network — throwing away the connections a brand-new tunnel has just opened.
+        interfaceWasLost = false
         networkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
         networkCallback = null
         interfaceListener = null
@@ -1132,12 +1136,26 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (wakeReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_SCREEN_OFF) {
-                    _screenOn.value = false
-                    return
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> _screenOn.value = false
+
+                    Intent.ACTION_SCREEN_ON -> {
+                        _screenOn.value = true
+                        _wakeups.tryEmit(Unit)
+                    }
+
+                    // Fires on the way into idle as well as out of it, and the old `else` branch
+                    // read both as "the phone woke up" — so going to sleep raised the screen flag
+                    // and asked for a probe, which is the one moment the phone should be left
+                    // alone. Only the way out is a wake-up, and even that is not a screen: a
+                    // maintenance window is the phone doing chores with nobody looking, so the
+                    // flag that guards moving servers between networks stays where it was.
+                    PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
+                        val idle = getSystemService(PowerManager::class.java)?.isDeviceIdleMode
+                        if (idle == true) return
+                        _wakeups.tryEmit(Unit)
+                    }
                 }
-                _screenOn.value = true
-                _wakeups.tryEmit(Unit)
             }
         }
         val filter = IntentFilter(Intent.ACTION_SCREEN_ON).apply {

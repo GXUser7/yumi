@@ -65,6 +65,7 @@ object FailoverGroup {
         latencies: Map<String, LatencyResult>,
         limit: Int,
         chosen: Set<String> = emptySet(),
+        exclude: Set<String> = emptySet(),
     ): List<ProxyNode> {
         if (limit <= 1) return emptyList()
 
@@ -75,6 +76,12 @@ object FailoverGroup {
         val pool = nodes
             .asSequence()
             .filter { it.id != selected.id }
+            // Excluded before the cut, not after it. Filtering a list that has already been
+            // trimmed to its first few can empty it outright: when the servers the caller does
+            // not want happen to be the fastest ones, they fill every slot and the caller is
+            // handed nothing — which is how coming back to Wi-Fi found no ordinary server to
+            // come back to.
+            .filter { it.id !in exclude }
             .filter { if (chosen.isEmpty()) it.subscriptionId == selected.subscriptionId else it.id in chosen }
             // A direct outbound carries traffic outside the proxy entirely. As a fallback it
             // would quietly turn "my VPN switched servers" into "my VPN stopped being a VPN".

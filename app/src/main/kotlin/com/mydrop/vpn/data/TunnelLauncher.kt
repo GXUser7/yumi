@@ -59,10 +59,18 @@ class TunnelLauncher(
      * config was built around. Then the tunnel is rebuilt, which always works and costs the user
      * every connection they had open.
      */
-    fun switchTo(node: ProxyNode) {
+    fun switchTo(node: ProxyNode, reloadConfig: Boolean = false) {
         profiles.selectNode(node.id)
-        if (tunnel.selectOutbound(node)) return
-        tunnel.connect(node, "failover")
+        // A pointer swap moves the tunnel between servers the running core already holds. It
+        // cannot deliver anything else — and the resolver is not a server, it is baked into the
+        // document the core read at startup. Asking the selector to point at the node it is
+        // already pointing at succeeds, returns true, and the caller walks away believing a new
+        // configuration was installed when nothing was reloaded at all. That is how the fallback
+        // resolver came to be announced in the journal on every outage and applied on none of
+        // them: the file on disk changed, the core kept querying the resolver that had stopped
+        // answering.
+        if (!reloadConfig && tunnel.selectOutbound(node)) return
+        tunnel.connect(node, if (reloadConfig) "config reload" else "failover")
     }
 
     fun disconnect() = tunnel.disconnect()
