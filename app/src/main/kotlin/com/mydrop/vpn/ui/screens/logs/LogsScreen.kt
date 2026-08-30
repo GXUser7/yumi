@@ -18,11 +18,15 @@ import androidx.compose.material.icons.Icons
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import androidx.core.content.FileProvider
+import java.io.File
 import android.widget.Toast
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,6 +62,9 @@ fun LogsScreen(
     var minimumLevel by remember { mutableStateOf(LogEntry.Level.Debug) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val subject = stringResource(R.string.logs_send_subject)
+    val hint = stringResource(R.string.logs_send_hint, TELEGRAM_FOR_LOGS)
+    val nothingToSend = stringResource(R.string.logs_send_nothing)
     val copiedTemplate = stringResource(R.string.logs_copied)
     val nothingToCopy = stringResource(R.string.logs_nothing_to_copy)
 
@@ -96,6 +103,12 @@ fun LogsScreen(
                     onClick = {
                         copyToClipboard(context, visible, copiedTemplate, nothingToCopy)
                     },
+                )
+                Spacer(Modifier.width(8.dp))
+                TonalIconButton(
+                    Icons.Rounded.Share,
+                    stringResource(R.string.action_send_logs),
+                    onClick = { shareJournalFile(context, subject, hint, nothingToSend) },
                 )
                 Spacer(Modifier.width(8.dp))
                 TonalIconButton(
@@ -207,3 +220,45 @@ private fun copyToClipboard(
         Toast.makeText(context, copiedTemplate.format(entries.size), Toast.LENGTH_SHORT).show()
     }
 }
+
+/**
+ * Hands the journal file to whatever the user picks to send it with.
+ *
+ * The file itself rather than the text on screen, and deliberately: the on-screen journal is the
+ * short human-readable one, while the file underneath carries the probe-by-probe trace and the
+ * core's own output — which is the half that answers "what happened at four in the morning". It is
+ * also fifty megabytes at its largest, so it is passed by reference through a FileProvider and
+ * never read into memory here.
+ *
+ * The destination is put in the message text rather than the chooser, because a plain share intent
+ * cannot pre-select a chat. The reader picks the app; the text says where it goes.
+ */
+private fun shareJournalFile(
+    context: Context,
+    subject: String,
+    hint: String,
+    nothingToSend: String,
+) {
+    val file = File(File(context.filesDir, "diagnostics"), "yumi.log")
+    if (!file.isFile || file.length() == 0L) {
+        Toast.makeText(context, nothingToSend, Toast.LENGTH_LONG).show()
+        return
+    }
+    val uri = runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.logs", file)
+    }.getOrNull() ?: run {
+        Toast.makeText(context, nothingToSend, Toast.LENGTH_LONG).show()
+        return
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, subject)
+        putExtra(Intent.EXTRA_TEXT, hint)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(Intent.createChooser(send, subject)) }
+}
+
+/** Where the journal is asked to be sent. Named here so it is one edit, not a search. */
+private const val TELEGRAM_FOR_LOGS = "https://t.me/BBnov22"

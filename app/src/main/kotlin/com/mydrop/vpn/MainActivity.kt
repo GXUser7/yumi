@@ -6,9 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.LocaleList
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -72,6 +75,7 @@ class MainActivity : ComponentActivity() {
 
         handleIntent(intent)
         requestNotificationPermissionIfNeeded()
+        askToIgnoreBatteryOptimisationsOnce()
 
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -126,6 +130,39 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Without this the tunnel's foreground notification is silently dropped on Android 13+. */
+    /**
+     * Asks, once, to be left alone by battery optimisation.
+     *
+     * Doze does not spare a VpnService — the idle state machine weighs the screen, the charger and
+     * the motion sensor, and a foreground notification is not among its inputs. So a tunnel left
+     * up overnight stops moving traffic between maintenance windows, and every app routed through
+     * it goes quiet: a message arrives at Google's servers and the phone learns about it hours
+     * later. Nothing in the app can work around that from the inside; the exemption is the only
+     * door, and it belongs to the person whose battery it is.
+     *
+     * Once, and remembered either way. Somebody who says no has decided something reasonable, and
+     * asking again on every launch would be the app arguing with them.
+     */
+    private fun askToIgnoreBatteryOptimisationsOnce() {
+        val container = (application as MyDropApplication).container
+        if (container.settings.value.batteryPromptShown) return
+
+        val power = getSystemService(PowerManager::class.java) ?: return
+        if (power.isIgnoringBatteryOptimizations(packageName)) return
+
+        container.settings.update { it.copy(batteryPromptShown = true) }
+        // Wrapped, because a few firmwares ship without the Activity that answers this and throw
+        // rather than showing anything. A missing dialog is not worth a crash on first launch.
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.fromParts("package", packageName, null),
+                ),
+            )
+        }
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val granted = ContextCompat.checkSelfPermission(

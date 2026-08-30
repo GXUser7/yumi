@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The diagnostic journal, and nothing else.
+
+  A separate authority from the one the installer uses rather than a second entry inside it: the
+  two holes through the sandbox are opened for different reasons and closed by different code, and
+  a file meant for a chat should never be reachable through the door the package installer walks in.
+  Scoped to the directory the journal is written to, so widening one never quietly widens the other.
+-->
+<paths>
+    <files-path
+        name="diagnostics"
+        path="diagnostics/" />
+</paths>

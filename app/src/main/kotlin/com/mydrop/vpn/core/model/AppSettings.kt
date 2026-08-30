@@ -239,4 +239,15 @@ data class AppSettings(
      * takes its entry with it the moment nothing renders that group any more.
      */
     val collapsedGroupIds: Set<String> = emptySet(),
+
+    // Background
+    /**
+     * Whether the owner of the phone has already been asked to spare the app from battery
+     * optimisation.
+     *
+     * Asked once, and remembered whatever the answer was. Declining is a legitimate choice — a
+     * tunnel that only works while the screen is on is still a tunnel — and re-asking every launch
+     * would turn one question into nagging.
+     */
+    val batteryPromptShown: Boolean = false,
 )

@@ -342,6 +342,20 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         createNotificationChannel()
     }
 
+    /**
+     * Swiping the app out of Recents must not take the tunnel with it.
+     *
+     * Stock Android leaves a started foreground service alone here, and the default implementation
+     * does nothing — but several OEM shells treat the swipe as "the user is done with this app"
+     * and tear down its services unless the app says otherwise. Overriding it and declining to
+     * stop is what says otherwise. There is a deliberate asymmetry with the notification's own
+     * stop action: leaving the app is not the same gesture as switching the tunnel off, and only
+     * one of them should disconnect anything.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        logs.trace(NATIVE_TAG, "task removed from recents — tunnel stays up")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         logs.trace(
             NATIVE_TAG,
@@ -1205,6 +1219,18 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     // flag that guards moving servers between networks stays where it was.
                     PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
                         val idle = getSystemService(PowerManager::class.java)?.isDeviceIdleMode
+                        // Told to the core either way, which is the point of listening at all.
+                        //
+                        // Going idle, the core is asked to pause: its own timers and keepalives
+                        // are about to fire into a network the system has suspended, and every
+                        // one of those is a wakeup spent to accomplish nothing. Coming out, it is
+                        // asked to wake — and that is the half that matters for the user, because
+                        // connections that died quietly during the night are re-dialled then
+                        // rather than at whatever moment the core next happens to notice.
+                        runCatching {
+                            if (idle == true) commandServer?.pause() else commandServer?.wake()
+                        }
+                        logs.trace(NATIVE_TAG, "device idle mode -> ${idle == true}")
                         if (idle == true) return
                         _wakeups.tryEmit(Unit)
                     }
