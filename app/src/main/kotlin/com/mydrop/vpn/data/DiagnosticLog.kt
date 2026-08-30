@@ -70,7 +70,23 @@ class DiagnosticLog(directory: File, private val enabled: Boolean) {
     private companion object {
         const val FILE_NAME = "yumi.log"
 
-        /** Two of these at most, so the whole thing is bounded at four megabytes. */
-        const val MAX_BYTES = 2L * 1024 * 1024
+        /**
+         * Two of these at most, so the whole thing is bounded at fifty megabytes.
+         *
+         * Four used to be the bound, and four megabytes is not a night. Measured on a phone: two
+         * megabytes rotated away in three minutes of ordinary evening use — the core logs a line
+         * per connection and one video app produced eighteen hundred of them — so a fault that
+         * happened while somebody slept was already overwritten by the time they woke up and said
+         * so. A log that cannot hold the interval between noticing a problem and being asked about
+         * it is not a diagnostic.
+         *
+         * Fifty is affordable because this is debug-only storage in the app's private directory,
+         * and because the quiet case is the one that matters: with the screen off the core writes
+         * almost nothing, so a night costs kilobytes. The cap exists for the loud case.
+         *
+         * [read] concatenates both halves into one string and has no caller inside the app; if one
+         * ever appears, it must stream instead — fifty megabytes of UTF-16 is a hundred in memory.
+         */
+        const val MAX_BYTES = 25L * 1024 * 1024
     }
 }
