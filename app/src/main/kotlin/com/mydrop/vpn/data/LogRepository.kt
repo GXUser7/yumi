@@ -22,7 +22,24 @@ import kotlinx.coroutines.flow.asStateFlow
 class LogRepository(
     private val strings: Strings,
     private val diagnostics: DiagnosticLog? = null,
-    private val capacity: Int = 2_000,
+    /**
+     * Lines kept for the screen.
+     *
+     * Two thousand used to be it, and two thousand is not a night. The core logs a line per
+     * connection through [log] rather than [trace], so those lines land here as well as in the
+     * file — and one video app waking up produced eighteen hundred of them in three minutes. A
+     * fault from four in the morning was gone from the journal before its owner had finished
+     * breakfast, which is the one moment the journal exists for.
+     *
+     * Twenty thousand costs a few megabytes of heap: an entry is a timestamp, an enum reference
+     * and a line of a hundred-odd characters. Worth it for the same reason the file was raised to
+     * fifty megabytes — the quiet hours are cheap to keep and impossible to reconstruct.
+     *
+     * Note for anyone raising it further: every write publishes a fresh copy of the whole buffer,
+     * so the cost of a line grows with the cap. At this size a burst is a fraction of a percent of
+     * one core; ten times this would want a coalescing publisher first.
+     */
+    private val capacity: Int = 20_000,
 ) {
 
     private val buffer = ArrayDeque<LogEntry>(capacity)
