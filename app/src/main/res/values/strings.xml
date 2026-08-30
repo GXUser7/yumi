@@ -294,10 +294,14 @@
     <string name="settings_failover">Leave a dead server</string>
     <string name="settings_failover_subtitle">Probe the current server and move to a live one if it dies</string>
     <string name="action_copy_logs">Copy the log</string>
-    <string name="action_send_logs">Send the journal file</string>
-    <string name="logs_send_subject">Yumi journal</string>
+    <string name="action_save_logs">Save the journal file</string>
+    <string name="logs_saved_title">Journal saved</string>
+    <string name="logs_saved_text">“%1$s” is in your Downloads folder.
+
+Send it here: %2$s</string>
+    <string name="logs_saved_open_telegram">Open Telegram</string>
+    <string name="logs_save_failed">Could not save the file to Downloads</string>
     <string name="logs_send_nothing">There is no journal file yet — it is only kept in debug builds</string>
-    <string name="logs_send_hint">Send the file here: %1$s</string>
     <string name="logs_copied">Log copied: %1$d lines</string>
     <string name="logs_nothing_to_copy">Nothing to copy</string>
     <string name="settings_return_home">Return to my server</string>

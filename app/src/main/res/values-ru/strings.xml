@@ -290,10 +290,14 @@
     <string name="settings_failover">Уходить с упавшего сервера</string>
     <string name="settings_failover_subtitle">Проверять текущий сервер и переходить на живой, если он упал</string>
     <string name="action_copy_logs">Скопировать журнал</string>
-    <string name="action_send_logs">Отправить файл журнала</string>
-    <string name="logs_send_subject">Журнал Yumi</string>
+    <string name="action_save_logs">Скачать файл журнала</string>
+    <string name="logs_saved_title">Журнал сохранён</string>
+    <string name="logs_saved_text">Файл «%1$s» лежит в папке «Загрузки».
+
+Пришлите его сюда: %2$s</string>
+    <string name="logs_saved_open_telegram">Открыть телеграм</string>
+    <string name="logs_save_failed">Не удалось сохранить файл в «Загрузки»</string>
     <string name="logs_send_nothing">Файла журнала пока нет — он ведётся только в отладочной сборке</string>
-    <string name="logs_send_hint">Отправьте файл сюда: %1$s</string>
     <string name="logs_copied">Журнал скопирован: %1$d строк</string>
     <string name="logs_nothing_to_copy">Копировать нечего</string>
     <string name="settings_return_home">Возвращаться на мой сервер</string>

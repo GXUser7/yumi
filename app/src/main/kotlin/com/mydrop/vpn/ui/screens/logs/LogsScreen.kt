@@ -20,21 +20,30 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import androidx.core.content.FileProvider
+import android.content.ContentValues
+import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.widget.Toast
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,9 +71,11 @@ fun LogsScreen(
     var minimumLevel by remember { mutableStateOf(LogEntry.Level.Debug) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
-    val subject = stringResource(R.string.logs_send_subject)
-    val hint = stringResource(R.string.logs_send_hint, TELEGRAM_FOR_LOGS)
     val nothingToSend = stringResource(R.string.logs_send_nothing)
+    val saveFailed = stringResource(R.string.logs_save_failed)
+    val scope = rememberCoroutineScope()
+    // The name the file landed under, which is also the flag that the dialog should be up.
+    var savedAs by remember { mutableStateOf<String?>(null) }
     val copiedTemplate = stringResource(R.string.logs_copied)
     val nothingToCopy = stringResource(R.string.logs_nothing_to_copy)
 
@@ -106,9 +117,21 @@ fun LogsScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 TonalIconButton(
-                    Icons.Rounded.Share,
-                    stringResource(R.string.action_send_logs),
-                    onClick = { shareJournalFile(context, subject, hint, nothingToSend) },
+                    Icons.Rounded.Download,
+                    stringResource(R.string.action_save_logs),
+                    onClick = {
+                        // Off the main thread: the journal is fifty megabytes at its largest, and
+                        // copying that where the frames are drawn would freeze the screen for the
+                        // whole of it.
+                        scope.launch {
+                            val name = withContext(Dispatchers.IO) { saveJournalToDownloads(context) }
+                            when (name) {
+                                null -> Toast.makeText(context, nothingToSend, Toast.LENGTH_LONG).show()
+                                "" -> Toast.makeText(context, saveFailed, Toast.LENGTH_LONG).show()
+                                else -> savedAs = name
+                            }
+                        }
+                    },
                 )
                 Spacer(Modifier.width(8.dp))
                 TonalIconButton(
@@ -118,6 +141,29 @@ fun LogsScreen(
                 )
             },
         )
+
+        savedAs?.let { name ->
+            AlertDialog(
+                onDismissRequest = { savedAs = null },
+                title = { Text(stringResource(R.string.logs_saved_title)) },
+                text = { Text(stringResource(R.string.logs_saved_text, name, TELEGRAM_FOR_LOGS)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        savedAs = null
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(TELEGRAM_FOR_LOGS)),
+                            )
+                        }
+                    }) { Text(stringResource(R.string.logs_saved_open_telegram)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { savedAs = null }) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                },
+            )
+        }
 
         Row(
             modifier = Modifier
@@ -222,42 +268,51 @@ private fun copyToClipboard(
 }
 
 /**
- * Hands the journal file to whatever the user picks to send it with.
+ * Writes the journal into the phone's Downloads folder and answers with the name it landed under.
  *
- * The file itself rather than the text on screen, and deliberately: the on-screen journal is the
- * short human-readable one, while the file underneath carries the probe-by-probe trace and the
- * core's own output — which is the half that answers "what happened at four in the morning". It is
- * also fifty megabytes at its largest, so it is passed by reference through a FileProvider and
- * never read into memory here.
+ * The file rather than the text on screen, and deliberately: the on-screen journal is the short
+ * human-readable one, while the file underneath carries the probe-by-probe trace and the core's own
+ * output — the half that answers "what happened at four in the morning".
  *
- * The destination is put in the message text rather than the chooser, because a plain share intent
- * cannot pre-select a chat. The reader picks the app; the text says where it goes.
+ * Downloads rather than a share sheet, because a share sheet is not a reliable way to move fifty
+ * megabytes: some apps refuse the size, some re-encode, and on this phone the send simply did not
+ * go through. A file on disk can be attached by hand, from any app, as many times as needed.
+ *
+ * @return the file name on success, `null` when there is no journal to save, and an empty string
+ *   when saving itself failed — three outcomes the caller reports differently.
  */
-private fun shareJournalFile(
-    context: Context,
-    subject: String,
-    hint: String,
-    nothingToSend: String,
-) {
-    val file = File(File(context.filesDir, "diagnostics"), "yumi.log")
-    if (!file.isFile || file.length() == 0L) {
-        Toast.makeText(context, nothingToSend, Toast.LENGTH_LONG).show()
-        return
-    }
-    val uri = runCatching {
-        FileProvider.getUriForFile(context, "${context.packageName}.logs", file)
-    }.getOrNull() ?: run {
-        Toast.makeText(context, nothingToSend, Toast.LENGTH_LONG).show()
-        return
-    }
-    val send = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        putExtra(Intent.EXTRA_SUBJECT, subject)
-        putExtra(Intent.EXTRA_TEXT, hint)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    runCatching { context.startActivity(Intent.createChooser(send, subject)) }
+private fun saveJournalToDownloads(context: Context): String? {
+    val source = File(File(context.filesDir, "diagnostics"), "yumi.log")
+    if (!source.isFile || source.length() == 0L) return null
+
+    // Named by the moment it was taken, so two of them never collide and the useful one is
+    // obvious afterwards.
+    val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
+    val name = "yumi-$stamp.log"
+
+    return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val target: Uri = context.contentResolver
+                .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return@runCatching ""
+            context.contentResolver.openOutputStream(target)?.use { out ->
+                source.inputStream().use { it.copyTo(out) }
+            } ?: return@runCatching ""
+        } else {
+            // Before scoped storage there is no MediaStore entry to insert; the public directory
+            // is written to directly, which on these versions is what the permission below allows.
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            source.copyTo(File(dir, name), overwrite = true)
+        }
+        name
+    }.getOrDefault("")
 }
 
 /** Where the journal is asked to be sent. Named here so it is one edit, not a search. */

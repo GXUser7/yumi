@@ -20,6 +20,15 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!--
+      Only for saving the journal to Downloads, and only where there is no other way: from Android
+      10 the file is inserted through MediaStore and needs no permission at all, which is why this
+      one stops at 28.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!--
       Handing a downloaded APK to Android's package installer. This permission only buys the right
       to *ask*: the installer still shows its own confirmation, and on Android 8 and later the user
       has to have allowed this app to install packages at all, in a settings screen no app can
@@ -195,19 +204,6 @@
                 android:resource="@xml/update_paths" />
         </provider>
 
-        <!--
-          The journal, handed to whatever the user picks to send it with. Its own authority, so the
-          directory it exposes has nothing to do with the one the installer reads from.
-        -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.logs"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/log_paths" />
-        </provider>
 
     </application>
 
