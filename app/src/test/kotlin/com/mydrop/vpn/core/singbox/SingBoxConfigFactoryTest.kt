@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -221,6 +222,70 @@ class SingBoxConfigFactoryTest {
         assertEquals("udp", direct["type"]!!.jsonPrimitive.content)
         assertEquals("8.8.8.8", direct["server"]!!.jsonPrimitive.content)
         assertNull(direct["detour"])
+    }
+
+    /**
+     * What the watchdog reads to decide whether to police the resolver at all. A resolver somebody
+     * chose is a statement to be honoured; the shipped one carries no statement, and policing it
+     * cost three full tunnel rebuilds in fifteen hours of a moving LTE connection.
+     */
+    @Test
+    fun `the shipped resolver is told from one somebody chose`() {
+        assertTrue(
+            SingBoxConfigFactory.isShippedResolver(
+                SingBoxConfigFactory.DEFAULT_REMOTE_DNS,
+                RoutingMode.Global,
+            ),
+        )
+        assertTrue(
+            SingBoxConfigFactory.isShippedResolver(
+                SingBoxConfigFactory.DEFAULT_DIRECT_DNS,
+                RoutingMode.Direct,
+            ),
+        )
+        assertFalse(
+            SingBoxConfigFactory.isShippedResolver("https://dns.adguard.com/dns-query", RoutingMode.Global),
+        )
+    }
+
+    /**
+     * Typed by hand is the same resolver as never touched — the user said "selected or written
+     * in", and the tunnel cannot tell the two apart anyway. Only the string it queries counts.
+     */
+    @Test
+    fun `the shipped resolver typed out by hand is still the shipped one`() {
+        assertTrue(SingBoxConfigFactory.isShippedResolver("https://1.1.1.1/dns-query", RoutingMode.Global))
+    }
+
+    /**
+     * Each mode ships its own, and they are not interchangeable: the remote one is DoH through the
+     * tunnel, the direct one is plain UDP outside it. Reading the wrong side would leave a chosen
+     * resolver unpoliced, or police one nobody chose.
+     */
+    @Test
+    fun `each routing mode has its own shipped resolver`() {
+        assertFalse(
+            SingBoxConfigFactory.isShippedResolver(
+                SingBoxConfigFactory.DEFAULT_DIRECT_DNS,
+                RoutingMode.Global,
+            ),
+        )
+        assertFalse(
+            SingBoxConfigFactory.isShippedResolver(
+                SingBoxConfigFactory.DEFAULT_REMOTE_DNS,
+                RoutingMode.Direct,
+            ),
+        )
+    }
+
+    /**
+     * A plain address is a different resolver from the DoH URL that names the same host: one is
+     * UDP on 53 in the clear, the other is HTTPS through the tunnel. Treating them as one would
+     * silently stop policing a resolver the user typed.
+     */
+    @Test
+    fun `the same host without doh is not the shipped resolver`() {
+        assertFalse(SingBoxConfigFactory.isShippedResolver("1.1.1.1", RoutingMode.Global))
     }
 
     @Test

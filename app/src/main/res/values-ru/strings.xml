@@ -274,7 +274,7 @@
     <string name="settings_direct_dns_hint">Для доменов, идущих мимо прокси</string>
     <string name="settings_dns_empty_error">Адрес не может быть пустым</string>
     <string name="settings_dns_fallback">Запасной DNS</string>
-    <string name="settings_dns_fallback_subtitle">Если выбранный DNS перестанет отвечать — перейти на 1.1.1.1 до следующего переподключения</string>
+    <string name="settings_dns_fallback_subtitle">Если ваш DNS перестанет отвечать — перейти на 1.1.1.1 до следующего переподключения. DNS по умолчанию не проверяется</string>
     <string name="settings_dns_resolvers">Добавленные резолверы</string>
     <string name="settings_dns_from_settings">Из настроек</string>
 

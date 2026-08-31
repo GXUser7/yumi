@@ -152,6 +152,20 @@ object FailoverPolicy {
      */
     const val CORE_URLTEST_BUDGET_MILLIS = 6_000L
 
+    /**
+     * How long the core's table has to stay unchanged before it counts as finished.
+     *
+     * The budget above is the ceiling; this is what usually ends the wait. Waiting for every
+     * candidate to appear would always reach the ceiling, because a server that fails the test is
+     * not reported at all — it has no delay to report — so a pool with one dead member never
+     * completes. Waiting for the *first* candidate to appear, which is what this used to do, ends
+     * the wait after one arrival and hands the choice a pool of one.
+     *
+     * Quiet is the honest middle: the core measures the group's members at once, so the answers
+     * arrive in a burst, and a gap this long after one means the rest are not coming.
+     */
+    const val CORE_URLTEST_QUIET_MILLIS = 1_500L
+
 
     /**
      * How long to wait before the next probe.

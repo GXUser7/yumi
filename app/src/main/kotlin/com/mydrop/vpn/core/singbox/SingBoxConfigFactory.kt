@@ -55,6 +55,25 @@ object SingBoxConfigFactory {
     const val DEFAULT_DIRECT_DNS = "8.8.8.8"
 
     /**
+     * Whether [resolver] is the one the app ships with, as opposed to one somebody chose.
+     *
+     * The distinction decides whether [FailoverWatchdog] polices the resolver at all. A resolver
+     * the user typed or picked is a statement about how they want names looked up, and a watchdog
+     * that quietly swaps it is undoing that statement — so those keep the check. The shipped
+     * default carries no such statement, and policing it turned out to cost more than it saved: a
+     * courier's journal has three full tunnel rebuilds in fifteen hours, each after 1.1.1.1 missed
+     * two DoH queries in a row on a moving LTE connection while the tunnel probe beside it passed.
+     * Two eight-second timeouts inside forty seconds on a bad signal is the signal, not a dead
+     * resolver, and the price was every open connection on the phone.
+     *
+     * Matched on the string the tunnel actually queries, so it holds whether the value arrived as
+     * the untouched default, as the same URL typed into the field by hand, or as a DNS profile
+     * that happens to name it.
+     */
+    fun isShippedResolver(resolver: String, mode: RoutingMode): Boolean =
+        resolver == if (mode == RoutingMode.Direct) DEFAULT_DIRECT_DNS else DEFAULT_REMOTE_DNS
+
+    /**
      * Where DNS goes when the chosen resolver stops answering, and why it is a constant.
      *
      * It has to be numeric, or the fallback would need the very thing that just failed in order to

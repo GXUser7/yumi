@@ -51,6 +51,56 @@ class NetworkEnvironmentTest {
         assertFalse(NetworkEnvironment.wantsMobileServer(NetworkTransport.Cellular, mobile, "m1"))
     }
 
+    /**
+     * The distinction the whole mobile feature turned out to rest on, and the one it was missing.
+     *
+     * "Nothing to move" is not "anywhere will do". A courier's journal has the tunnel on an
+     * Estonian mobile server over LTE, that server dying, and the failover — which asked only the
+     * moving question — drawing from the Wi-Fi spares and landing on France, then fifteen minutes
+     * later on Latvia. Both answers below describe the same phone in the same second.
+     */
+    @Test
+    fun `a server already on the list is still confined to it`() {
+        assertFalse(NetworkEnvironment.wantsMobileServer(NetworkTransport.Cellular, mobile, "m1"))
+        assertTrue(NetworkEnvironment.restrictsToMobileList(NetworkTransport.Cellular, mobile))
+    }
+
+    /** An empty list is the feature switched off, and constrains nothing. */
+    @Test
+    fun `an empty list confines nothing`() {
+        assertFalse(NetworkEnvironment.restrictsToMobileList(NetworkTransport.Cellular, emptySet()))
+    }
+
+    /**
+     * Only cellular. `Other` is the honest default of a controller that cannot tell what it is on
+     * — see TunnelController.transport — and confining the tunnel on the strength of a shrug would
+     * cut the spares down for a reason that does not exist.
+     */
+    @Test
+    fun `no other network confines the tunnel to the mobile list`() {
+        assertFalse(NetworkEnvironment.restrictsToMobileList(NetworkTransport.Wifi, mobile))
+        assertFalse(NetworkEnvironment.restrictsToMobileList(NetworkTransport.Other, mobile))
+        assertFalse(NetworkEnvironment.restrictsToMobileList(NetworkTransport.None, mobile))
+    }
+
+    /**
+     * Whenever the tunnel is told to move onto the list, it is also confined to it. The reverse
+     * does not hold, and that gap is exactly where the bug lived.
+     */
+    @Test
+    fun `moving onto the list implies being confined to it`() {
+        for (transport in NetworkTransport.entries) {
+            for (id in listOf<String?>("m1", "wifi-1", null)) {
+                if (NetworkEnvironment.wantsMobileServer(transport, mobile, id)) {
+                    assertTrue(
+                        "$transport / $id moves onto the list without being held to it",
+                        NetworkEnvironment.restrictsToMobileList(transport, mobile),
+                    )
+                }
+            }
+        }
+    }
+
     /** An empty list means the feature does not exist, on any network. */
     @Test
     fun `an empty list never moves anything`() {

@@ -279,7 +279,7 @@
     <string name="settings_dns_empty_error">The address cannot be empty</string>
     <string name="settings_dns_resolvers">Added resolvers</string>
     <string name="settings_dns_fallback">Fallback resolver</string>
-    <string name="settings_dns_fallback_subtitle">If the chosen resolver stops answering, switch to 1.1.1.1 until the next reconnection</string>
+    <string name="settings_dns_fallback_subtitle">If a resolver you chose stops answering, switch to 1.1.1.1 until the next reconnection. The built-in default is left alone</string>
     <string name="settings_dns_from_settings">From settings</string>
 
     <string name="settings_latency">Latency probe</string>

@@ -258,9 +258,42 @@ class FailoverWatchdog(
     private suspend fun coreMeasured(candidates: List<ProxyNode>): Map<String, LatencyResult> {
         if (!tunnel.requestUrlTest()) return emptyMap()
         val tags = candidates.associateBy { SingBoxConfigFactory.nodeTag(it.id) }
+
+        // Waited out, not grabbed.
+        //
+        // The core fills its table in as the answers come back and republishes the whole thing
+        // each time, so the first snapshot mentioning any candidate at all usually mentions
+        // exactly one. Ending the wait there — `first { keys.any { it in tags } }`, which is what
+        // this did — handed [FailoverChoice] a pool of one: the six candidates with no number are
+        // indistinguishable from six that failed, the median of one number is that number, and
+        // drawing at random from a list of length one is not drawing at all. The random draw
+        // exists so a subscription's worth of phones do not pile onto the same server when a
+        // popular one dies, and the order the core reports in is much the same on every phone, so
+        // they piled on anyway. A journal caught it twice inside fifteen minutes, both times as
+        // `core measured 1/7 candidates`.
+        //
+        // Waiting for the table to be *complete* would be the opposite mistake. A server that
+        // fails the test never appears — MyDropVpnService.writeGroups keeps only a positive delay,
+        // because a zero would mean "answered instantly" — so a pool with one dead member never
+        // completes and every failover would spend the whole budget. The wait ends on quiet
+        // instead: everything asked for, or nothing new for CORE_URLTEST_QUIET_MILLIS, or the
+        // budget, whichever comes first. Whatever has accumulated by then is the answer, and it
+        // is an answer about several servers rather than about the fastest one to reply.
         val delays = withTimeoutOrNull(FailoverPolicy.CORE_URLTEST_BUDGET_MILLIS) {
-            tunnel.coreDelays.first { reported -> reported.keys.any { it in tags } }
-        } ?: return emptyMap()
+            // The first answer gets the whole budget, and only then does the quiet clock start.
+            // The table is emptied before the test is asked for, so starting the clock on an
+            // empty one would be timing the core's round trip rather than the gap after it: in
+            // the journal the first answer over LTE took 1.0 s and 1.25 s, near enough to the
+            // quiet window that a slower evening would give up having measured nothing and fall
+            // back to the direct probe — the measurement this whole method exists to replace.
+            var seen = tunnel.coreDelays.first { it.isNotEmpty() }
+            while (!tags.keys.all { it in seen }) {
+                seen = withTimeoutOrNull(FailoverPolicy.CORE_URLTEST_QUIET_MILLIS) {
+                    tunnel.coreDelays.first { it != seen }
+                } ?: break
+            }
+            seen
+        } ?: tunnel.coreDelays.value
 
         val now = System.currentTimeMillis()
         val measured = delays.mapNotNull { (tag, millis) ->
@@ -545,7 +578,18 @@ class FailoverWatchdog(
                 // probes differ by one routing rule — see ProbeTargets — so a failure here with a
                 // pass above means the resolver, and nothing else, has stopped working. Asking it
                 // of a broken tunnel would blame DNS for somebody else's outage.
-                val resolving = if (alive) tunnelHealth.resolves(configs.probe.value) else null
+                //
+                // And asked only about a resolver somebody chose. The shipped default is not
+                // policed at all — see SingBoxConfigFactory.isShippedResolver for the three
+                // rebuilds that bought — so the query is not sent, not merely ignored: it is one
+                // DoH round trip every twenty seconds, on somebody's mobile data, to answer a
+                // question nothing is allowed to act on.
+                val policed = !SingBoxConfigFactory.isShippedResolver(
+                    currentResolver(),
+                    settings.value.routingMode,
+                )
+                val resolving =
+                    if (alive && policed) tunnelHealth.resolves(configs.probe.value) else null
                 when (resolving) {
                     true -> {
                         dnsFailures = 0
@@ -603,6 +647,9 @@ class FailoverWatchdog(
                         "failbacks=${failbacks[home?.id] ?: 0} " +
                         "sinceSwitch=${if (lastSwitchAtMillis == 0L) "never" else "${sinceSwitch / 1000}s"} " +
                         "dns=${resolving ?: "n/a"}/$dnsFailures " +
+                        // Told apart from the `n/a` a dead tunnel produces: same word, opposite
+                        // reason, and reading the journal afterwards depends on the difference.
+                        (if (!policed) "dns-unpoliced " else "") +
                         (if (configs.dnsFallback.value) "dns-fallback " else "") +
                         (if (movedTo != null) "handover=$movedTo " else "") +
                         "-> $decision",
@@ -663,6 +710,12 @@ class FailoverWatchdog(
                         forgetHome()
                         logs.info(R.string.log_failover_home_back, home.name)
                         lastSwitchAtMillis = SystemClock.elapsedRealtime()
+                        // Re-armed for the same reason as in swapAwayFrom: this is the other place
+                        // the tunnel moves without anybody choosing, and home is whatever server
+                        // the user was on before the outage — which on cellular need not be one
+                        // they nominated for it. Usually a no-op, because a watchdog on the mobile
+                        // list left a mobile server and comes back to one.
+                        confirmedTransport = NetworkTransport.None
                         launcher.switchTo(home)
                     }
 
@@ -716,20 +769,52 @@ class FailoverWatchdog(
         }
 
     private suspend fun swapAwayFrom(dead: ProxyNode) {
-        // The whole group first, then seven of it by lot. Drawing from the group and not from
-        // the raw list is what keeps the switch instant: the core can only be pointed at its own
-        // members, and everything in here is one.
-        val candidates = FailoverGroup.sample(
-            FailoverGroup.candidates(
-                nodes = profiles.nodes,
-                selected = dead,
-                latencies = profiles.state.value.latencies,
-                limit = FailoverGroup.roomFor(settings.value.mobileNodeIds.size),
-                chosen = settings.value.failoverNodeIds,
-            ),
-        )
+        val mobileIds = settings.value.mobileNodeIds
+        // Which list is allowed, before which member of it is best.
+        //
+        // This asked nothing about the network at all, and drew from the ordinary spares on every
+        // one of them. On Wi-Fi that is right by accident; on cellular it quietly undid the whole
+        // mobile list, because the only other place the list was consulted is applyTransport,
+        // which asks whether the tunnel needs *moving* onto it and says no once it is already
+        // there. So a mobile server dying under a phone on LTE fell straight through to the
+        // Wi-Fi spares — see NetworkEnvironment.restrictsToMobileList for the journal.
+        //
+        // The exclusion on the other branch is the same rule read backwards, and ordinaryPoolFor
+        // has always had it: servers the user nominated for cellular are not ordinary spares to
+        // be landed on at home.
+        val onMobileList = NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds)
+        val candidates = if (onMobileList) {
+            // The whole list rather than a sample of it. It is already the user's own short list,
+            // and it is in the core's group in full — see AppContainer.switchableGroup — so every
+            // member is a switch the core can make without a restart.
+            profiles.nodes.filter {
+                it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+            }
+        } else {
+            // The whole group first, then seven of it by lot. Drawing from the group and not from
+            // the raw list is what keeps the switch instant: the core can only be pointed at its own
+            // members, and everything in here is one.
+            FailoverGroup.sample(
+                FailoverGroup.candidates(
+                    nodes = profiles.nodes,
+                    selected = dead,
+                    latencies = profiles.state.value.latencies,
+                    limit = FailoverGroup.roomFor(mobileIds.size),
+                    chosen = settings.value.failoverNodeIds,
+                    exclude = mobileIds,
+                ),
+            )
+        }
         if (candidates.isEmpty()) {
-            logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
+            // Sitting on a dead server beats moving the user's exit country without being asked.
+            // An empty mobile list is an answer — these and no others may carry cellular traffic —
+            // rather than a gap to be filled from somewhere the user did not nominate. Same words
+            // applyTransport uses when it finds the list empty, because it is the same finding.
+            if (onMobileList) {
+                logs.warn(R.string.log_mobile_none_left)
+            } else {
+                logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
+            }
             alerts.serverStranded(dead.name)
             return
         }
@@ -779,6 +864,20 @@ class FailoverWatchdog(
         ) {
             homeNode = dead
         }
+        // Re-arm the network check against wherever the tunnel is about to land.
+        //
+        // A pointer swap leaves the tunnel Connected, so watchTransport's guard — "this transport
+        // is the one already arranged for" — stays satisfied and applyTransport never runs again.
+        // That is the second half of the journal above: having been put on France over LTE, the
+        // tunnel stayed there for eight minutes, and came back only because an unrelated config
+        // reload happened to restart the core and reset this by the disconnected path. The state
+        // flow does re-emit on a swap — selectOutbound notes the new node before returning — so
+        // clearing this is enough for the affinity to be asked again about the new server.
+        //
+        // Belt and braces now that the branch above cannot land wrong on its own. It still earns
+        // its place: transport can read Other for a moment, and this is the one place the tunnel
+        // moves without anybody having chosen to.
+        confirmedTransport = NetworkTransport.None
         noteSwitch(chosen)
         launcher.switchTo(chosen)
     }

@@ -127,6 +127,51 @@ class FailoverGroupTest {
         assertTrue(group.isEmpty())
     }
 
+    /**
+     * A server nominated for cellular is not an ordinary spare. Both callers that build an
+     * ordinary pool pass this — FailoverWatchdog.swapAwayFrom off cellular and its ordinaryPoolFor
+     * — because landing on one at home undoes the list from the other direction.
+     */
+    @Test
+    fun `a mobile server is not an ordinary spare`() {
+        val selected = node("a")
+        val nodes = listOf(selected, node("m1"), node("b"))
+
+        val group = FailoverGroup.candidates(
+            nodes,
+            selected,
+            emptyMap(),
+            limit = 8,
+            exclude = setOf("m1"),
+        )
+
+        assertEquals(listOf("b"), group.map { it.id })
+    }
+
+    /**
+     * Excluded before the cut, not after it.
+     *
+     * Here the two fastest servers are the mobile ones, so a limit of three filled with them and
+     * filtered afterwards hands back nothing — which is how coming back to Wi-Fi once found no
+     * ordinary server to come back to.
+     */
+    @Test
+    fun `the excluded do not eat the slots on their way out`() {
+        val selected = node("a")
+        val nodes = listOf(selected, node("m1"), node("m2"), node("slow"))
+        val latencies = mapOf(latency("m1", 10), latency("m2", 20), latency("slow", 900))
+
+        val group = FailoverGroup.candidates(
+            nodes,
+            selected,
+            latencies,
+            limit = 3,
+            exclude = setOf("m1", "m2"),
+        )
+
+        assertEquals(listOf("slow"), group.map { it.id })
+    }
+
     @Test
     fun `limit counts the selected server`() {
         val nodes = (1..10).map { node("n$it") }

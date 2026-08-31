@@ -44,6 +44,23 @@ object NetworkEnvironment {
         transport == NetworkTransport.Cellular || transport == NetworkTransport.Wifi
 
     /**
+     * Whether the mobile list is the only place cellular traffic may go, right now.
+     *
+     * [wantsMobileServer] answers a neighbouring question — whether the tunnel needs *moving*
+     * onto the list — and answers no the moment it is already there. That is right for a change
+     * of network and wrong for everything else, because it makes the list a one-off correction
+     * rather than a standing constraint: a mobile server dying under a phone already on the list
+     * left the failover free to draw from the ordinary spares. A field journal has a courier on
+     * LTE carried from an Estonian mobile server onto France, and fifteen minutes later onto
+     * Latvia, both from the Wi-Fi list, because nothing between the two questions was asking
+     * which list was allowed at all.
+     *
+     * So the constraint is stated separately from the correction, and both are read from here.
+     */
+    fun restrictsToMobileList(transport: NetworkTransport, mobileIds: Set<String>): Boolean =
+        transport == NetworkTransport.Cellular && mobileIds.isNotEmpty()
+
+    /**
      * Whether the tunnel should move onto the mobile list.
      *
      * @param currentId the server carrying traffic now. Already being on the list means there is
