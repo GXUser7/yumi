@@ -301,9 +301,11 @@ class SingBoxConfigFactoryTest {
         val remote = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-remote" }
         assertEquals("1.1.1.1", remote["server"]!!.jsonPrimitive.content)
 
+        // Not "local" — see SingBoxConfigFactory.DEFAULT_DIRECT_DNS. An emptied field is meant to
+        // fall back to a resolver that actually answers, and on this platform "local" does not.
         val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
-        assertEquals("local", direct["type"]!!.jsonPrimitive.content)
-        assertNull(direct["server"])
+        assertEquals("udp", direct["type"]!!.jsonPrimitive.content)
+        assertEquals("8.8.8.8", direct["server"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -607,9 +609,15 @@ class SingBoxConfigFactoryTest {
         val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
 
+        // Not "local" — see SingBoxConfigFactory.DEFAULT_DIRECT_DNS for why that type answers
+        // nothing on this platform. The bootstrap that resolves a *named* direct resolver needs
+        // somewhere real to ask, so it falls back to the numeric default instead.
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
-        assertNull(bootstrap["server"])
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            SingBoxConfigFactory.DEFAULT_DIRECT_DNS,
+            bootstrap["server"]!!.jsonPrimitive.content,
+        )
 
         // And the proxy's own hostname is resolved by the bootstrap too, for the same reason.
         assertEquals(
@@ -684,9 +692,15 @@ class SingBoxConfigFactoryTest {
         assertEquals("/dns-query", direct["path"]!!.jsonPrimitive.content)
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
 
+        // Not "local" — see SingBoxConfigFactory.DEFAULT_DIRECT_DNS for why that type answers
+        // nothing on this platform. The bootstrap that resolves a *named* direct resolver needs
+        // somewhere real to ask, so it falls back to the numeric default instead.
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
-        assertNull(bootstrap["server"])
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            SingBoxConfigFactory.DEFAULT_DIRECT_DNS,
+            bootstrap["server"]!!.jsonPrimitive.content,
+        )
 
         assertEquals(
             "dns-bootstrap",

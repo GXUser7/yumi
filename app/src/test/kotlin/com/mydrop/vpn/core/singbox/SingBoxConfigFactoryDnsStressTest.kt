@@ -49,8 +49,12 @@ class SingBoxConfigFactoryDnsStressTest {
     // =========================================================================
 
     @Test
-    fun `local direct dns variants produce clean local dns server without host or port`() {
-        val variations = listOf("local", "LOCAL", "Local", "local://", "", "   ", "\t\n  ")
+    fun `explicit local direct dns variants still produce a clean local dns server`() {
+        // Only the literal marker, typed by hand — not the values that ARRIVE at "clean up
+        // after an empty field", which is the next test and now asserts the opposite. See
+        // SingBoxConfigFactory.DEFAULT_DIRECT_DNS for why "local" is opt-in rather than a
+        // fallback: nothing implements the Android bridge it needs.
+        val variations = listOf("local", "LOCAL", "Local", "local://")
         for (v in variations) {
             val cfg = config(
                 "vless://uuid@de-01.vless.monster:443?security=reality&pbk=KEY&sid=1234#Monster",
@@ -65,6 +69,38 @@ class SingBoxConfigFactoryDnsStressTest {
             assertNull("Variation '$v' must not have domain_resolver field", direct["domain_resolver"])
 
             // Local needs no bootstrap server
+            assertTrue(
+                "Variation '$v' must not emit dns-bootstrap",
+                servers.none { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" },
+            )
+            assertEquals("Variation '$v' must use dns-direct as default_domain_resolver", "dns-direct", defaultDomainResolver(cfg))
+        }
+    }
+
+    /**
+     * An emptied or blank field must fall back to a resolver that actually answers on this
+     * platform, not to "local". Checked on a real device: nothing implements
+     * `PlatformInterface.localDNSTransport()` (it returns null), Android has no
+     * `/etc/resolv.conf`, and sing-box's own fallback for that is `127.0.0.1:53` — which nothing
+     * answers. Defaulting an emptied field to "local" would mean every fresh install with a
+     * domain-named proxy server fails to connect at all, silently.
+     */
+    @Test
+    fun `an emptied or blank direct dns field falls back to a working resolver, not local`() {
+        val variations = listOf("", "   ", "\t\n  ")
+        for (v in variations) {
+            val cfg = config(
+                "vless://uuid@de-01.vless.monster:443?security=reality&pbk=KEY&sid=1234#Monster",
+                AppSettings(directDns = v),
+            )
+            val servers = dnsServers(cfg)
+            val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+            assertEquals("Variation '$v' must emit type udp", "udp", direct["type"]!!.jsonPrimitive.content)
+            assertEquals(
+                "Variation '$v' must fall back to the numeric default",
+                SingBoxConfigFactory.DEFAULT_DIRECT_DNS,
+                direct["server"]!!.jsonPrimitive.content,
+            )
             assertTrue(
                 "Variation '$v' must not emit dns-bootstrap",
                 servers.none { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" },
@@ -108,9 +144,10 @@ class SingBoxConfigFactoryDnsStressTest {
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
         assertNull(direct["detour"])
 
+        // Not "local" — see DEFAULT_DIRECT_DNS. The bootstrap has to reach somewhere real.
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
-        assertNull(bootstrap["server"])
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, bootstrap["server"]!!.jsonPrimitive.content)
         assertNull(bootstrap["detour"])
 
         assertEquals("dns-bootstrap", defaultDomainResolver(cfg))
@@ -164,8 +201,10 @@ class SingBoxConfigFactoryDnsStressTest {
         assertEquals(853, direct["server_port"]!!.jsonPrimitive.int)
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
 
+        // Not "local" — see DEFAULT_DIRECT_DNS. The bootstrap has to reach somewhere real.
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, bootstrap["server"]!!.jsonPrimitive.content)
         assertEquals("dns-bootstrap", defaultDomainResolver(cfg))
     }
 

@@ -52,7 +52,44 @@ object SingBoxConfigFactory {
 
     /** Fallbacks for a DNS field the user has emptied; they match [AppSettings]' own defaults. */
     const val DEFAULT_REMOTE_DNS = "https://1.1.1.1/dns-query"
-    const val DEFAULT_DIRECT_DNS = "local"
+
+    /**
+     * Not `"local"`, and that is load-bearing rather than a style choice.
+     *
+     * `"local"` asks sing-box's `local` DNS transport to use whatever the platform already knows
+     * — and on this platform that means [MyDropVpnService][com.mydrop.vpn.vpn.MyDropVpnService]'s
+     * `localDNSTransport()`, which returns `null`. Nothing wires libbox's Android bridge, so the
+     * upstream Go implementation falls through to its own generic one, which reads
+     * `/etc/resolv.conf` for the servers to ask. Checked on a real device: that file does not
+     * exist. Its own fallback for that case is `127.0.0.1:53` and `[::1]:53` — nothing answers on
+     * either, because nothing runs a resolver on this device's loopback. So every `dns-direct`
+     * lookup fails outright, every time, on every install: not a leak, an outright dead resolver.
+     *
+     * The one query this default reaches from every routing mode is
+     * [route.default_domain_resolver][buildRoute] — the proxy server's own hostname, resolved
+     * before there is a tunnel to resolve it through. A subscription whose servers are named by
+     * IP never asks this question and never notices. One named by domain — common for
+     * CDN-fronted or REALITY endpoints — cannot connect at all on a fresh install, and the
+     * failure is silent: no exception a user would recognise, just a resolver that answers
+     * nothing.
+     *
+     * `"local"` stays reachable for anyone who types it by hand — see [isDirectLocal] — because on
+     * a platform where `localDNSTransport()` is implemented it is exactly the right answer. It
+     * must not be *offered* until this app is that platform.
+     */
+    const val DEFAULT_DIRECT_DNS = "8.8.8.8"
+
+    /**
+     * The literal value that means "resolve through the platform", independent of whatever
+     * [DEFAULT_DIRECT_DNS] happens to be.
+     *
+     * [isDirectLocal] used to test equality against [DEFAULT_DIRECT_DNS] itself, which was a
+     * shortcut that only worked while that default *was* the marker — the moment it stopped
+     * being one, the same comparison would have quietly treated an ordinary `8.8.8.8` as a
+     * request to route through the broken platform resolver. Named separately so the two can
+     * disagree, which is now the normal case.
+     */
+    private const val LOCAL_DNS_MARKER = "local"
 
     /**
      * Whether [resolver] is the one the app ships with, as opposed to one somebody chose.
@@ -288,10 +325,11 @@ object SingBoxConfigFactory {
      */
     private fun isDirectLocal(directDns: String): Boolean {
         val trimmed = directDns.trim()
-        return trimmed.isEmpty() ||
-            trimmed.equals("local", ignoreCase = true) ||
-            trimmed.equals("local://", ignoreCase = true) ||
-            trimmed.equals(DEFAULT_DIRECT_DNS, ignoreCase = true)
+        // Empty is deliberately not included. An emptied field means "use the default", and
+        // dnsServer/addressOf already resolve that to DEFAULT_DIRECT_DNS — which is numeric, not
+        // the platform marker — so counting it here would call a plain IP address "local".
+        return trimmed.equals(LOCAL_DNS_MARKER, ignoreCase = true) ||
+            trimmed.equals("$LOCAL_DNS_MARKER://", ignoreCase = true)
     }
 
     private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
@@ -345,8 +383,19 @@ object SingBoxConfigFactory {
             }
             if (directNamed) {
                 addJsonObject {
-                    put("type", "local")
+                    // Not "local" — see DEFAULT_DIRECT_DNS for why that type has no working
+                    // Android transport behind it right now. A user who names their own direct
+                    // resolver ("dns.adguard.com" with no scheme, say) is rare, but the one
+                    // lookup that bootstraps it still has to go somewhere real.
+                    put("type", "udp")
                     put("tag", DNS_BOOTSTRAP_TAG)
+                    // The user's own direct resolver when it is numeric, so the one lookup that
+                    // bootstraps the rest still goes where they pointed it.
+                    put(
+                        "server",
+                        addressOf(settings.directDns, DEFAULT_DIRECT_DNS)
+                            .takeIf(::isNumericAddress) ?: DEFAULT_DIRECT_DNS,
+                    )
                 }
             }
         }
@@ -398,7 +447,11 @@ object SingBoxConfigFactory {
         val trimmed = value.trim().ifEmpty {
             if (tag == DNS_REMOTE_TAG) DEFAULT_REMOTE_DNS else DEFAULT_DIRECT_DNS
         }
-        val isLocal = trimmed.equals("local", ignoreCase = true) || trimmed.startsWith("local://", ignoreCase = true)
+        // Opt-in only — see DEFAULT_DIRECT_DNS on why this type is not offered by default. A
+        // field left blank falls back to DEFAULT_REMOTE_DNS/DEFAULT_DIRECT_DNS above and never
+        // reaches this branch; only someone who typed the marker themselves does.
+        val isLocal = trimmed.equals(LOCAL_DNS_MARKER, ignoreCase = true) ||
+            trimmed.startsWith("$LOCAL_DNS_MARKER://", ignoreCase = true)
         if (isLocal) {
             return buildJsonObject {
                 put("type", "local")

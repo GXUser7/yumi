@@ -449,27 +449,30 @@ class AdversarialStressTest {
     // =========================================================================
 
     @Test
-    fun `domain named proxy node with blank directDns defaults to local and points default_domain_resolver to dns-direct`() {
+    fun `domain named proxy node with blank directDns falls back to a resolver that actually answers`() {
+        // This used to assert the opposite — that a blank field defaults to "local" and that no
+        // raw UDP 8.8.8.8 appears anywhere. Both were wrong on this platform, checked on a real
+        // device: nothing implements PlatformInterface.localDNSTransport() (it returns null in
+        // MyDropVpnService), /etc/resolv.conf does not exist on Android, and sing-box's own
+        // fallback for that case is 127.0.0.1:53 — which nothing answers. So "local" was not a
+        // more private resolver than 8.8.8.8, it was a dead one: default_domain_resolver would
+        // point at it for every proxy server named by domain, and none of them could ever
+        // resolve. See SingBoxConfigFactory.DEFAULT_DIRECT_DNS for the full account.
         val uri = "vless://uuid@my-proxy-node.vless.monster:443?security=reality&sni=learn.microsoft.com&pbk=KEY#Monster"
         val node = requireNotNull(ProxyUriParser.parse(uri))
         val cfg = config(node, AppSettings(directDns = ""))
 
         val servers = cfg["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
         val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
-        assertEquals("local", direct["type"]!!.jsonPrimitive.content)
-        assertNull(direct["server"])
-        assertNull(direct["server_port"])
+        assertEquals("udp", direct["type"]!!.jsonPrimitive.content)
+        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, direct["server"]!!.jsonPrimitive.content)
 
         val defaultDomainResolver = cfg["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content
         assertEquals("dns-direct", defaultDomainResolver)
-
-        // Ensure no UDP 53 foreign DNS server (e.g. 8.8.8.8) is present in dns servers list
-        val hasForeignUdp = servers.any { it["type"]?.jsonPrimitive?.content == "udp" && it["server"]?.jsonPrimitive?.content == "8.8.8.8" }
-        assertFalse("DPI-vulnerable raw UDP 8.8.8.8 must not be in default configuration", hasForeignUdp)
     }
 
     @Test
-    fun `custom doh direct dns properly bootstraps with local dns without raw udp 53`() {
+    fun `custom doh direct dns bootstraps with a working numeric resolver, not the dead local one`() {
         val uri = "vless://uuid@my-proxy-node.vless.monster:443?security=tls#Node"
         val node = requireNotNull(ProxyUriParser.parse(uri))
         val cfg = config(node, AppSettings(directDns = "https://my-doh.com/dns-query"))
@@ -480,9 +483,11 @@ class AdversarialStressTest {
         assertEquals("my-doh.com", direct["server"]!!.jsonPrimitive.content)
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
 
+        // Not "local" — see DEFAULT_DIRECT_DNS. The one lookup that bootstraps a named direct
+        // resolver has to go somewhere real, and on this platform "somewhere real" is numeric.
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
-        assertNull(bootstrap["server"])
+        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
+        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, bootstrap["server"]!!.jsonPrimitive.content)
 
         val defaultDomainResolver = cfg["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content
         assertEquals("dns-bootstrap", defaultDomainResolver)

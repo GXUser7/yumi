@@ -98,7 +98,10 @@ data class AppSettings(
 
     // DNS
     val remoteDns: String = "https://1.1.1.1/dns-query",
-    val directDns: String = "local",
+    // Matches SingBoxConfigFactory.DEFAULT_DIRECT_DNS — see the comment there for why "local" is
+    // not this default: nothing implements the Android bridge it needs, so every install would
+    // start with a direct resolver that answers nothing.
+    val directDns: String = "8.8.8.8",
     val hijackDns: Boolean = true,
     /**
      * Whether a resolver that stops answering is replaced with a known-good one.
