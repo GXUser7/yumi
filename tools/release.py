@@ -81,6 +81,12 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
+# Configure SSL certificate bundle on Windows if not set
+if os.name == "nt" and "SSL_CERT_FILE" not in os.environ:
+    git_ca = Path(r"C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt")
+    if git_ca.is_file():
+        os.environ["SSL_CERT_FILE"] = str(git_ca)
+
 
 def die(message: str) -> "NoReturn":  # type: ignore[name-defined]
     print(f"error: {message}", file=sys.stderr)
@@ -201,6 +207,7 @@ def api(url: str, token: str, method: str = "GET", payload: dict | None = None) 
     request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("User-Agent", "yumi-release-tool")
     if data:
         request.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(request, timeout=60) as response:
@@ -234,12 +241,27 @@ def upload_asset(release: dict, token: str, apk: Path) -> str:
 
     upload_url = release["upload_url"].split("{")[0]
     url = f"{upload_url}?{urllib.parse.urlencode({'name': apk.name})}"
-    request = urllib.request.Request(url, data=apk.read_bytes(), method="POST")
-    request.add_header("Authorization", f"Bearer {token}")
-    request.add_header("Content-Type", "application/vnd.android.package-archive")
     print(f"→ uploading {apk.name} ({apk.stat().st_size / 1048576:.1f} MB)…")
-    with urllib.request.urlopen(request, timeout=900) as response:
-        return json.loads(response.read())["browser_download_url"]
+    try:
+        request = urllib.request.Request(url, data=apk.read_bytes(), method="POST")
+        request.add_header("Authorization", f"Bearer {token}")
+        request.add_header("Content-Type", "application/vnd.android.package-archive")
+        request.add_header("User-Agent", "yumi-release-tool")
+        with urllib.request.urlopen(request, timeout=900) as response:
+            return json.loads(response.read())["browser_download_url"]
+    except Exception as ex:
+        print(f"urllib upload failed ({ex}), trying curl fallback…")
+        ca_args = ["--cacert", os.environ["SSL_CERT_FILE"]] if "SSL_CERT_FILE" in os.environ else []
+        cmd = [
+            "curl.exe", "-sS", *ca_args, "-X", "POST",
+            "-H", f"Authorization: Bearer {token}",
+            "-H", "Content-Type: application/vnd.android.package-archive",
+            "-H", "User-Agent: yumi-release-tool",
+            "--data-binary", f"@{apk.resolve()}",
+            url
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return json.loads(res.stdout)["browser_download_url"]
 
 
 def telegram(method: str, token: str, payload: dict) -> dict:
