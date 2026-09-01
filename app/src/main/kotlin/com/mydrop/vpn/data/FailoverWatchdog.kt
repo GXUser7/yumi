@@ -92,6 +92,15 @@ class FailoverWatchdog(
     private val failbacks = mutableMapOf<String, Int>()
 
     /**
+     * Consecutive [swapAwayFrom] escapes chosen with no core-confirmed candidate — see
+     * [FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD] for why this is capped at all. Reset to zero the
+     * moment the core confirms even one candidate, and on every fresh connection alongside
+     * [failbacks], for the same reason: this counts something about the current outage, not
+     * something about the server.
+     */
+    private var blindEscapes = 0
+
+    /**
      * The network the tunnel has been arranged for, as opposed to the one the callbacks are
      * shouting about this second. Only changes once a transport has held for its settling time.
      */
@@ -351,6 +360,7 @@ class FailoverWatchdog(
                         // still barred from being returned to at midnight, across every
                         // disconnect in between, until the process itself died.
                         failbacks.clear()
+                        blindEscapes = 0
                         // The fallback resolver lasts exactly as long as the connection that
                         // needed it. A resolver that was down twenty minutes ago is the likeliest
                         // thing in the world to be up again, and one that stayed swapped until
@@ -834,6 +844,19 @@ class FailoverWatchdog(
         //
         // The callback stays, but only for the side effect that is already safe.
         val throughCore = coreMeasured(candidates)
+
+        // The core's own silence outranks a handshake, past a point — see
+        // FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD for the field evidence. One or two blind
+        // guesses cover a core that just needed another moment to dial; a run past that is the
+        // core repeatedly finding nobody while raw TCP/TLS keeps saying yes, which twenty-five
+        // switches in ninety-three minutes showed to be the censor answering handshakes and
+        // nothing past them, not the next candidate being the one that works.
+        if (FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)) {
+            logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
+            alerts.serverStranded(dead.name)
+            return
+        }
+
         val fresh = throughCore.ifEmpty {
             latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
                 profiles.recordLatency(result)
@@ -846,6 +869,12 @@ class FailoverWatchdog(
             alerts.serverStranded(dead.name)
             return
         }
+
+        // Confirmed by the core: real evidence arrived, so whatever run of blind guesses came
+        // before it is over. Reset here rather than only on reconnect, because the run this
+        // counts is "since the core last agreed with the raw probe", not "since the tunnel came
+        // up" — a courier's ninety-three minutes was one connection throughout.
+        blindEscapes = if (throughCore.isEmpty()) blindEscapes + 1 else 0
 
         logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
         alerts.serverLeft(dead.name, chosen.name)

@@ -5,6 +5,7 @@ import com.mydrop.vpn.core.model.FailoverPolicy.FAILURES_BEFORE_SWAP
 import com.mydrop.vpn.core.model.FailoverPolicy.MAX_FAILBACKS
 import com.mydrop.vpn.core.model.FailoverPolicy.SWITCH_COOLDOWN_MILLIS
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -557,5 +558,50 @@ class FailoverPolicyTest {
                 back - away >= SWITCH_COOLDOWN_MILLIS,
             )
         }
+    }
+
+    /**
+     * A core that confirms even one candidate is not blind, whatever the run of guesses before it
+     * was — the fallback is not in play this round, so there is nothing to cap.
+     */
+    @Test
+    fun `a confirmed candidate is never a blind run`() {
+        assertFalse(FailoverPolicy.shouldHoldOnBlindRun(throughCoreEmpty = false, blindEscapesSoFar = 0))
+        assertFalse(FailoverPolicy.shouldHoldOnBlindRun(throughCoreEmpty = false, blindEscapesSoFar = 99))
+    }
+
+    /**
+     * The first blind guesses are allowed through — a core that needed one more moment to dial
+     * candidates is not the same thing as a network refusing to carry proxy traffic at all, and
+     * the difference should not cost the tunnel its only way home on a single slow round.
+     */
+    @Test
+    fun `a run under the limit still gets to guess`() {
+        for (soFar in 0 until FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD) {
+            assertFalse(
+                "escape $soFar should still be allowed",
+                FailoverPolicy.shouldHoldOnBlindRun(throughCoreEmpty = true, blindEscapesSoFar = soFar),
+            )
+        }
+    }
+
+    /**
+     * Past the limit, the watchdog holds instead of guessing again. This is the field case: a
+     * courier's phone ran the core to zero-of-eight twenty-one times in ninety-three minutes, and
+     * the bare TCP/TLS fallback found something to switch to every single time regardless —
+     * twenty-five hops through servers the core never once confirmed, roughly forty seconds apart.
+     * The cap is what stops that pattern from repeating past its first couple of guesses.
+     */
+    @Test
+    fun `a run past the limit holds instead of guessing again`() {
+        assertTrue(
+            FailoverPolicy.shouldHoldOnBlindRun(
+                throughCoreEmpty = true,
+                blindEscapesSoFar = FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD,
+            ),
+        )
+        assertTrue(
+            FailoverPolicy.shouldHoldOnBlindRun(throughCoreEmpty = true, blindEscapesSoFar = 21),
+        )
     }
 }

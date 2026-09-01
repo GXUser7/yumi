@@ -98,6 +98,44 @@ object FailoverPolicy {
      */
     const val ESCAPE_COOLDOWN_MILLIS = 30_000L
 
+    /**
+     * Consecutive escapes chosen with no core-confirmed candidate before the watchdog stops
+     * guessing and holds instead.
+     *
+     * [FailoverWatchdog.swapAwayFrom] measures candidates two ways: through the core, which pulls
+     * a page through each one's own outbound and is the only test that proves the proxy protocol
+     * actually carries traffic — and, only when the core found nobody at all, a bare TCP/TLS probe
+     * from the phone's own connection, which the tester's own docs call out as proving nothing
+     * about whether the credentials work. That fallback exists for a real case: the core needs a
+     * moment to dial each candidate, and a probe that returns before any of them finish is not
+     * evidence they are dead, just evidence the budget was tight.
+     *
+     * A courier's phone spent ninety-three minutes flatly disagreeing with that assumption.
+     * Twenty-one core measurements in a row came back naming zero of eight candidates, and every
+     * one of those twenty-one still produced a switch — TCP and TLS handshakes to the candidates'
+     * raw IPs kept succeeding, `pingMode=Tls` does not check certificates, and each switch clocked
+     * roughly three-quarters of a minute before the *new* server was also declared dead. Twenty-
+     * five hops through the same handful of names, none of them ever core-confirmed, is a censor
+     * letting handshakes through while blocking whatever comes after — not a run of bad luck the
+     * next candidate might fix.
+     *
+     * So the bare probe still gets used — a single stuck moment should not strand the tunnel — but
+     * only for this many hops in a row before the watchdog admits the core's own verdict outranks
+     * a handshake that proves nothing, and holds where it is rather than feeding the same pattern
+     * a twenty-second one.
+     */
+    const val BLIND_ESCAPES_BEFORE_HOLD = 2
+
+    /**
+     * Whether the watchdog should stop guessing and hold, rather than fall back to a bare probe
+     * for another escape.
+     *
+     * @param throughCoreEmpty the core confirmed nobody this round — the fallback would be used.
+     * @param blindEscapesSoFar consecutive escapes already spent on that fallback alone.
+     */
+    fun shouldHoldOnBlindRun(throughCoreEmpty: Boolean, blindEscapesSoFar: Int): Boolean =
+        throughCoreEmpty && blindEscapesSoFar >= BLIND_ESCAPES_BEFORE_HOLD
+
     /** Round trips to one server before it stops being treated as somewhere to go back to. */
     const val MAX_FAILBACKS = 2
 

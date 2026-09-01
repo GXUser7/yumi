@@ -416,6 +416,7 @@ Send it here: %2$s</string>
     <string name="log_mobile_none_left">On cellular, but not one server from the mobile list is left — staying put</string>
     <string name="log_failover_probing">“%1$s” is not answering — checking %2$d spares</string>
     <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>
+    <string name="log_failover_core_blind">“%1$s” is still gone, but the core has not confirmed a live spare %2$d times running — holding rather than trusting a bare handshake again</string>
     <string name="log_failover_switching">Switching to “%1$s” (%2$s ms)</string>
     <string name="log_failover_pruned_all">The spare servers vanished from the subscription (%1$d) — the choice is automatic again</string>
     <string name="log_mobile_pruned">Servers that no longer exist were removed from the mobile list: %1$d</string>
