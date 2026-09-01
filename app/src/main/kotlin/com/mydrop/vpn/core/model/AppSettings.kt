@@ -98,7 +98,7 @@ data class AppSettings(
 
     // DNS
     val remoteDns: String = "https://1.1.1.1/dns-query",
-    val directDns: String = "8.8.8.8",
+    val directDns: String = "local",
     val hijackDns: Boolean = true,
     /**
      * Whether a resolver that stops answering is replaced with a known-good one.

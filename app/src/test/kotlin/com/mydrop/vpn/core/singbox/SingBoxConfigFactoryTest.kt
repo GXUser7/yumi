@@ -298,16 +298,12 @@ class SingBoxConfigFactoryTest {
             AppSettings(remoteDns = "", directDns = "   "),
         )["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
 
-        servers.forEach { server ->
-            val address = server["server"]!!.jsonPrimitive.content
-            assertTrue("empty address for ${server["tag"]}", address.isNotBlank())
-        }
-
         val remote = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-remote" }
         assertEquals("1.1.1.1", remote["server"]!!.jsonPrimitive.content)
-        assertEquals("8.8.8.8", servers.first {
-            it["tag"]!!.jsonPrimitive.content == "dns-direct"
-        }["server"]!!.jsonPrimitive.content)
+
+        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+        assertEquals("local", direct["type"]!!.jsonPrimitive.content)
+        assertNull(direct["server"])
     }
 
     @Test
@@ -612,8 +608,8 @@ class SingBoxConfigFactoryTest {
         assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
 
         val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
-        assertTrue(bootstrap["server"]!!.jsonPrimitive.content.first().isDigit())
+        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
+        assertNull(bootstrap["server"])
 
         // And the proxy's own hostname is resolved by the bootstrap too, for the same reason.
         assertEquals(
@@ -629,6 +625,88 @@ class SingBoxConfigFactoryTest {
 
         assertEquals(2, servers.size)
         assertTrue(servers.none { it["domain_resolver"] != null })
+        assertEquals(
+            "dns-direct",
+            config["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `direct dns configured as local emits local dns server without server address or port`() {
+        val config = config(
+            "vless://u@a.example.com:443?security=tls#N",
+            AppSettings(directDns = "local"),
+        )
+        val servers = config["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+
+        assertEquals("local", direct["type"]!!.jsonPrimitive.content)
+        assertNull(direct["server"])
+        assertNull(direct["server_port"])
+        assertNull(direct["domain_resolver"])
+        assertEquals(
+            "dns-direct",
+            config["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `domain named proxy node configures default domain resolver to dns-direct with local dns`() {
+        val config = config(
+            "vless://uuid-123@de-01.vless.monster:443?security=reality&sni=learn.microsoft.com&pbk=PUBKEY&sid=12#MonsterNode",
+            AppSettings(directDns = "local"),
+        )
+        val servers = config["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+
+        assertEquals("local", direct["type"]!!.jsonPrimitive.content)
+        assertNull(direct["server"])
+
+        assertEquals(
+            "dns-direct",
+            config["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content,
+        )
+        val proxy = config.proxy
+        assertEquals("de-01.vless.monster", proxy["server"]!!.jsonPrimitive.content)
+        assertEquals("learn.microsoft.com", proxy["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `custom direct named dns resolver bootstraps with local dns without raw foreign udp 53`() {
+        val config = config(
+            "vless://u@de-01.vless.monster:443?security=tls#N",
+            AppSettings(directDns = "https://custom-dns.com/dns-query"),
+        )
+        val servers = config["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+        assertEquals("https", direct["type"]!!.jsonPrimitive.content)
+        assertEquals("custom-dns.com", direct["server"]!!.jsonPrimitive.content)
+        assertEquals("/dns-query", direct["path"]!!.jsonPrimitive.content)
+        assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
+
+        val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
+        assertEquals("local", bootstrap["type"]!!.jsonPrimitive.content)
+        assertNull(bootstrap["server"])
+
+        assertEquals(
+            "dns-bootstrap",
+            config["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `explicit numeric direct dns emits typed server and uses dns-direct resolver`() {
+        val config = config(
+            "vless://u@de-01.vless.monster:443?security=tls#N",
+            AppSettings(directDns = "8.8.8.8"),
+        )
+        val servers = config["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
+        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
+        assertEquals("udp", direct["type"]!!.jsonPrimitive.content)
+        assertEquals("8.8.8.8", direct["server"]!!.jsonPrimitive.content)
+        assertNull(direct["domain_resolver"])
+        assertTrue(servers.none { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" })
+
         assertEquals(
             "dns-direct",
             config["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content,

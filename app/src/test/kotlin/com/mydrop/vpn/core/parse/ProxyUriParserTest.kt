@@ -261,4 +261,129 @@ class ProxyUriParserTest {
         assertNull(ProxyUriParser.parse("anytls://@example.com:443"))
         assertNull(ProxyUriParser.parse("tuic://@example.com:443"))
     }
+
+    @Test
+    fun `vless reality with server_name extracts decoy sni and preserves node server`() {
+        val node = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://11111111-2222-3333-4444-555555555555@node.vless.monster:443" +
+                    "?security=reality&server_name=decoy.com&pbk=PUBLICKEY123&sid=a1b2c3d4" +
+                    "&spx=%2F&type=tcp&flow=xtls-rprx-vision#Node1",
+            ),
+        )
+
+        assertEquals(Protocol.VLESS, node.protocol)
+        assertEquals("node.vless.monster", node.server)
+        assertEquals(443, node.port)
+        assertEquals("Node1", node.name)
+
+        val tls = requireNotNull(node.tls)
+        assertEquals("decoy.com", tls.serverName)
+        assertEquals("PUBLICKEY123", tls.reality?.publicKey)
+        assertEquals("a1b2c3d4", tls.reality?.shortId)
+        assertEquals("/", tls.reality?.spiderX)
+        assertTrue(tls.isReality)
+    }
+
+    @Test
+    fun `vless reality with snake_case aliases parses all reality parameters correctly`() {
+        val node = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://uuid-val@proxy.example.com:443" +
+                    "?security=reality&server_name=target.decoy.org&public_key=PUB111" +
+                    "&short_id=sid222&spider_x=%2Fcustom&client_fingerprint=firefox" +
+                    "&packet_encoding=packetaddr#SnakeReality",
+            ),
+        )
+
+        assertEquals("proxy.example.com", node.server)
+        assertEquals(443, node.port)
+
+        val settings = node.settings as ProxySettings.Vless
+        assertEquals("uuid-val", settings.uuid)
+        assertEquals("packetaddr", settings.packetEncoding)
+
+        val tls = requireNotNull(node.tls)
+        assertEquals("target.decoy.org", tls.serverName)
+        assertEquals("firefox", tls.fingerprint)
+        val reality = requireNotNull(tls.reality)
+        assertEquals("PUB111", reality.publicKey)
+        assertEquals("sid222", reality.shortId)
+        assertEquals("/custom", reality.spiderX)
+    }
+
+    @Test
+    fun `standard non-reality tls node falls back to host if sni omitted`() {
+        val node = requireNotNull(
+            ProxyUriParser.parse("vless://uuid-val@myproxy.org:443?security=tls#StandardTLS"),
+        )
+
+        assertEquals("myproxy.org", node.server)
+        assertEquals(443, node.port)
+
+        val tls = requireNotNull(node.tls)
+        assertEquals("myproxy.org", tls.serverName)
+        assertNull(tls.reality)
+        assertFalse(tls.isReality)
+    }
+
+    @Test
+    fun `vless reality with pubkey and key aliases parses successfully`() {
+        val nodePubkey = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://uuid-val@pub.example.com:443?security=reality&pubkey=ALTKEY&servername=decoy.pubkey.com",
+            ),
+        )
+        assertEquals("decoy.pubkey.com", nodePubkey.tls?.serverName)
+        assertEquals("ALTKEY", nodePubkey.tls?.reality?.publicKey)
+        assertEquals("", nodePubkey.tls?.reality?.shortId)
+
+        val nodeKey = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://uuid-val@key.example.com:443?security=reality&key=KEYONLY&peer=peer.decoy.com",
+            ),
+        )
+        assertEquals("peer.decoy.com", nodeKey.tls?.serverName)
+        assertEquals("KEYONLY", nodeKey.tls?.reality?.publicKey)
+    }
+
+    @Test
+    fun `trojan reality with snake_case parameters parses correctly`() {
+        val node = requireNotNull(
+            ProxyUriParser.parse(
+                "trojan://secret@tr.example.com:443" +
+                    "?security=reality&server_name=decoy.trojan.com&public_key=TRPUB" +
+                    "&short_id=trsid&spider_x=%2Fpath&client_fingerprint=safari#TrojanReality",
+            ),
+        )
+
+        assertEquals("tr.example.com", node.server)
+        val settings = node.settings as ProxySettings.Trojan
+        assertEquals("secret", settings.password)
+
+        val tls = requireNotNull(node.tls)
+        assertEquals("decoy.trojan.com", tls.serverName)
+        assertEquals("safari", tls.fingerprint)
+        val reality = requireNotNull(tls.reality)
+        assertEquals("TRPUB", reality.publicKey)
+        assertEquals("trsid", reality.shortId)
+        assertEquals("/path", reality.spiderX)
+    }
+
+    @Test
+    fun `vless reality with websocket host fallback and explicit server_name override`() {
+        val fallbackNode = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://uuid-val@ws.example.com:443?security=reality&type=ws&host=ws.host.com&pbk=WSKEY",
+            ),
+        )
+        assertEquals("ws.host.com", fallbackNode.tls?.serverName)
+
+        val explicitNode = requireNotNull(
+            ProxyUriParser.parse(
+                "vless://uuid-val@ws.example.com:443?security=reality&type=ws&host=ws.host.com&server_name=decoy.com&pbk=WSKEY",
+            ),
+        )
+        assertEquals("decoy.com", explicitNode.tls?.serverName)
+    }
 }

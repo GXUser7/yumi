@@ -83,7 +83,7 @@ object ProxyUriParser {
         val settings = ProxySettings.Vless(
             uuid = uuid,
             flow = p.q("flow").orEmpty(),
-            packetEncoding = p.q("packetencoding") ?: "xudp",
+            packetEncoding = p.q("packetencoding", "packet-encoding", "packet_encoding") ?: "xudp",
         )
         return node(p, settings, subId, uri)
     }
@@ -127,7 +127,8 @@ object ProxyUriParser {
                 serverName = o.str("sni")?.ifEmpty { null } ?: headerHost.ifEmpty { null } ?: host,
                 alpn = splitCsv(o.str("alpn")),
                 fingerprint = o.str("fp")?.ifEmpty { null },
-                insecure = o.str("allowinsecure") == "1" || o.str("skip-cert-verify") == "true",
+                insecure = o.str("allowinsecure", "allow_insecure", "insecure", "skip-cert-verify")
+                    ?.let { it == "1" || it.equals("true", ignoreCase = true) } ?: false,
             )
         } else {
             null
@@ -229,10 +230,10 @@ object ProxyUriParser {
         val password = urlDecode(p.userInfo).takeIf { it.isNotEmpty() } ?: return null
         val settings = ProxySettings.Hysteria2(
             password = password,
-            obfsType = p.q("obfs").orEmpty(),
-            obfsPassword = p.q("obfs-password", "obfspassword").orEmpty(),
-            upMbps = p.qInt("upmbps", "up") ?: 0,
-            downMbps = p.qInt("downmbps", "down") ?: 0,
+            obfsType = p.q("obfs", "obfs-type", "obfs_type").orEmpty(),
+            obfsPassword = p.q("obfs-password", "obfspassword", "obfs_password").orEmpty(),
+            upMbps = p.qInt("upmbps", "up", "up_mbps", "up-mbps") ?: 0,
+            downMbps = p.qInt("downmbps", "down", "down_mbps", "down-mbps") ?: 0,
         )
         return node(p, settings, subId, uri, tlsDefaultOn = true)
     }
@@ -241,9 +242,9 @@ object ProxyUriParser {
         val p = splitUri(uri) ?: return null
         val settings = ProxySettings.Hysteria(
             auth = p.q("auth", "auth_str", "authstr") ?: urlDecode(p.userInfo),
-            obfs = p.q("obfs").orEmpty(),
-            upMbps = p.qInt("upmbps", "up") ?: 0,
-            downMbps = p.qInt("downmbps", "down") ?: 0,
+            obfs = p.q("obfs", "obfs-type", "obfs_type").orEmpty(),
+            upMbps = p.qInt("upmbps", "up", "up_mbps", "up-mbps") ?: 0,
+            downMbps = p.qInt("downmbps", "down", "down_mbps", "down-mbps") ?: 0,
         )
         return node(p, settings, subId, uri, tlsDefaultOn = true)
     }
@@ -258,9 +259,9 @@ object ProxyUriParser {
         val settings = ProxySettings.Tuic(
             uuid = creds[0],
             password = creds.getOrElse(1) { "" },
-            congestionControl = p.q("congestion_control", "congestioncontrol") ?: "bbr",
-            udpRelayMode = p.q("udp_relay_mode", "udprelaymode") ?: "native",
-            zeroRttHandshake = p.qBool("zero_rtt_handshake", "reduce_rtt"),
+            congestionControl = p.q("congestion_control", "congestioncontrol", "congestion-control") ?: "bbr",
+            udpRelayMode = p.q("udp_relay_mode", "udprelaymode", "udp-relay-mode") ?: "native",
+            zeroRttHandshake = p.qBool("zero_rtt_handshake", "reduce_rtt", "zero-rtt-handshake", "reduce-rtt"),
         )
         return node(p, settings, subId, uri, tlsDefaultOn = true)
     }
@@ -397,11 +398,11 @@ object ProxyUriParser {
             "ws", "websocket" -> TransportOptions.WebSocket(
                 path = path,
                 headers = if (hostHeader.isNotEmpty()) mapOf("Host" to hostHeader) else emptyMap(),
-                maxEarlyData = qInt("eds", "max_early_data") ?: 0,
-                earlyDataHeaderName = q("ed", "early_data_header_name"),
+                maxEarlyData = qInt("eds", "max_early_data", "max-early-data") ?: 0,
+                earlyDataHeaderName = q("ed", "early_data_header_name", "early-data-header-name"),
             )
             "grpc" -> TransportOptions.Grpc(
-                serviceName = q("servicename", "service_name", "path").orEmpty(),
+                serviceName = q("servicename", "service_name", "service-name", "path").orEmpty(),
             )
             "http", "h2" -> TransportOptions.Http(host = splitCsv(hostHeader), path = path)
             "httpupgrade" -> TransportOptions.HttpUpgrade(host = hostHeader, path = path)
@@ -412,7 +413,7 @@ object ProxyUriParser {
 
     private fun ParsedUri.tls(defaultOn: Boolean, transport: TransportOptions?): TlsOptions? {
         val security = q("security")?.lowercase()
-        val realityKey = q("pbk", "public-key", "publickey")
+        val realityKey = q("pbk", "public-key", "publickey", "public_key", "pubkey", "key")
 
         val enabled = when {
             security == "reality" || realityKey != null -> true
@@ -429,15 +430,15 @@ object ProxyUriParser {
 
         return TlsOptions(
             enabled = true,
-            serverName = q("sni", "peer", "servername") ?: sniFallback,
-            insecure = qBool("insecure", "allowinsecure", "allow_insecure", "skip-cert-verify"),
+            serverName = q("sni", "peer", "servername", "server_name") ?: sniFallback,
+            insecure = qBool("insecure", "allowinsecure", "allow_insecure", "skip-cert-verify", "skip_cert_verify"),
             alpn = splitCsv(q("alpn")),
-            fingerprint = q("fp", "fingerprint"),
+            fingerprint = q("fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
             reality = realityKey?.let {
                 RealityOptions(
                     publicKey = it,
-                    shortId = q("sid", "short-id", "shortid").orEmpty(),
-                    spiderX = q("spx", "spider-x", "spiderx") ?: "/",
+                    shortId = q("sid", "short-id", "shortid", "short_id").orEmpty(),
+                    spiderX = q("spx", "spider-x", "spiderx", "spider_x", "path") ?: "/",
                 )
             },
         )
@@ -447,8 +448,8 @@ object ProxyUriParser {
         if (!qBool("mux", "multiplex")) return null
         return MultiplexOptions(
             enabled = true,
-            protocol = q("mux-protocol") ?: "h2mux",
-            maxConnections = qInt("mux-max-connections") ?: 4,
+            protocol = q("mux-protocol", "mux_protocol") ?: "h2mux",
+            maxConnections = qInt("mux-max-connections", "mux_max_connections") ?: 4,
         )
     }
 
@@ -465,6 +466,17 @@ object ProxyUriParser {
     }
 
     /** vmess JSON mixes strings and numbers for the same field depending on the panel. */
-    private fun JsonObject.str(key: String): String? =
-        (this[key] as? JsonPrimitive)?.let { if (it.isString) it.content else it.jsonPrimitive.content }
+    private fun JsonObject.str(vararg keys: String): String? {
+        for (key in keys) {
+            val v = (this[key] as? JsonPrimitive)?.let { if (it.isString) it.content else it.jsonPrimitive.content }
+            if (v != null) return v
+        }
+        val lowerKeys = keys.map { it.lowercase() }.toSet()
+        for ((k, v) in this) {
+            if (k.lowercase() in lowerKeys) {
+                return (v as? JsonPrimitive)?.let { if (it.isString) it.content else it.jsonPrimitive.content }
+            }
+        }
+        return null
+    }
 }

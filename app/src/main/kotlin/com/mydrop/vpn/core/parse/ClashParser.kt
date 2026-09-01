@@ -83,43 +83,51 @@ object ClashParser {
 
         val settings = when (fields["type"]?.lowercase()) {
             "vless" -> ProxySettings.Vless(
-                uuid = fields["uuid"] ?: return null,
-                flow = fields["flow"].orEmpty(),
+                uuid = fields.getAny("uuid") ?: return null,
+                flow = fields.getAny("flow").orEmpty(),
+                packetEncoding = fields.getAny("packet-encoding", "packet_encoding", "packetencoding") ?: "xudp",
             )
 
             "vmess" -> ProxySettings.Vmess(
-                uuid = fields["uuid"] ?: return null,
-                alterId = fields["alterId"]?.toIntOrNull() ?: fields["alterid"]?.toIntOrNull() ?: 0,
-                security = fields["cipher"] ?: "auto",
+                uuid = fields.getAny("uuid") ?: return null,
+                alterId = fields.getAny("alterId", "alterid", "alter_id", "aid")?.toIntOrNull() ?: 0,
+                security = fields.getAny("cipher", "security", "scy") ?: "auto",
             )
 
-            "trojan" -> ProxySettings.Trojan(password = fields["password"] ?: return null)
+            "trojan" -> ProxySettings.Trojan(password = fields.getAny("password") ?: return null)
 
             "ss" -> ProxySettings.Shadowsocks(
-                method = fields["cipher"] ?: return null,
-                password = fields["password"] ?: return null,
-                plugin = fields["plugin"].orEmpty(),
+                method = fields.getAny("cipher") ?: return null,
+                password = fields.getAny("password") ?: return null,
+                plugin = fields.getAny("plugin").orEmpty(),
             )
 
             "hysteria2", "hy2" -> ProxySettings.Hysteria2(
-                password = fields["password"] ?: fields["auth"] ?: return null,
+                password = fields.getAny("password", "auth") ?: return null,
+                obfsType = fields.getAny("obfs", "obfs-type", "obfs_type").orEmpty(),
+                obfsPassword = fields.getAny("obfs-password", "obfspassword", "obfs_password").orEmpty(),
+                upMbps = fields.getAny("up", "up-mbps", "up_mbps", "upmbps")?.toIntOrNull() ?: 0,
+                downMbps = fields.getAny("down", "down-mbps", "down_mbps", "downmbps")?.toIntOrNull() ?: 0,
             )
 
             "tuic" -> ProxySettings.Tuic(
-                uuid = fields["uuid"] ?: return null,
-                password = fields["password"].orEmpty(),
+                uuid = fields.getAny("uuid") ?: return null,
+                password = fields.getAny("password").orEmpty(),
+                congestionControl = fields.getAny("congestion-controller", "congestion_controller", "congestion-control", "congestion_control", "congestioncontrol") ?: "bbr",
+                udpRelayMode = fields.getAny("udp-relay-mode", "udp_relay_mode", "udprelaymode") ?: "native",
+                zeroRttHandshake = fields.getAnyBool("reduce-rtt", "reduce_rtt", "zero-rtt-handshake", "zero_rtt_handshake"),
             )
 
-            "anytls" -> ProxySettings.AnyTls(password = fields["password"] ?: return null)
+            "anytls" -> ProxySettings.AnyTls(password = fields.getAny("password") ?: return null)
 
             "socks5" -> ProxySettings.Socks(
-                username = fields["username"].orEmpty(),
-                password = fields["password"].orEmpty(),
+                username = fields.getAny("username").orEmpty(),
+                password = fields.getAny("password").orEmpty(),
             )
 
             "http" -> ProxySettings.Http(
-                username = fields["username"].orEmpty(),
-                password = fields["password"].orEmpty(),
+                username = fields.getAny("username").orEmpty(),
+                password = fields.getAny("password").orEmpty(),
             )
 
             else -> return null
@@ -138,20 +146,24 @@ object ClashParser {
     }
 
     private fun tls(fields: Map<String, String>, settings: ProxySettings): TlsOptions? {
-        val explicit = fields["tls"]?.toBooleanStrictOrNull() ?: false
-        val reality = fields["public-key"]?.takeIf { it.isNotBlank() }
+        val explicit = fields.getAnyBool("tls")
+        val realityKey = fields.getAny("public-key", "public_key", "publicKey", "pbk", "pubkey", "key")
         // QUIC protocols are always encrypted; Clash omits `tls: true` for them because there is
         // nothing to switch off.
         val implied = settings.protocol.isQuicBased || settings.protocol.name == "ANYTLS"
-        if (!explicit && reality == null && !implied) return null
+        if (!explicit && realityKey == null && !implied) return null
 
         return TlsOptions(
-            serverName = fields["servername"] ?: fields["sni"] ?: fields["peer"],
-            insecure = fields["skip-cert-verify"]?.toBooleanStrictOrNull() ?: false,
-            alpn = fields["alpn"]?.let(::inlineList).orEmpty(),
-            fingerprint = fields["client-fingerprint"],
-            reality = reality?.let {
-                RealityOptions(publicKey = it, shortId = fields["short-id"].orEmpty())
+            serverName = fields.getAny("servername", "server-name", "server_name", "serverName", "sni", "peer"),
+            insecure = fields.getAnyBool("skip-cert-verify", "skip_cert_verify", "insecure", "allow-insecure", "allow_insecure"),
+            alpn = fields.getAny("alpn")?.let(::inlineList).orEmpty(),
+            fingerprint = fields.getAny("client-fingerprint", "client_fingerprint", "clientFingerprint", "fingerprint", "fp"),
+            reality = realityKey?.let {
+                RealityOptions(
+                    publicKey = it,
+                    shortId = fields.getAny("short-id", "short_id", "shortId", "sid").orEmpty(),
+                    spiderX = fields.getAny("spider-x", "spider_x", "spiderX", "spx", "path") ?: "/",
+                )
             },
         )
     }
@@ -161,27 +173,42 @@ object ClashParser {
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun transport(fields: Map<String, String>): TransportOptions? =
-        when (fields["network"]?.lowercase()) {
+        when (fields.getAny("network", "type")?.lowercase()) {
             "ws" -> TransportOptions.WebSocket(
-                path = fields["path"] ?: "/",
-                headers = fields["Host"]?.let { mapOf("Host" to it) }
-                    ?: fields["host"]?.let { mapOf("Host" to it) }.orEmpty(),
+                path = fields.getAny("path") ?: "/",
+                headers = fields.getAny("Host", "host")?.let { mapOf("Host" to it) }.orEmpty(),
+                maxEarlyData = fields.getAny("max-early-data", "max_early_data", "early-data-length")?.toIntOrNull() ?: 0,
+                earlyDataHeaderName = fields.getAny("early-data-header-name", "early_data_header_name"),
             )
 
-            "grpc" -> TransportOptions.Grpc(serviceName = fields["grpc-service-name"].orEmpty())
+            "grpc" -> TransportOptions.Grpc(
+                serviceName = fields.getAny("grpc-service-name", "grpc_service_name", "serviceName", "service_name", "path").orEmpty(),
+            )
 
-            "http" -> TransportOptions.Http(
-                host = fields["host"]?.let(::listOf).orEmpty(),
-                path = fields["path"] ?: "/",
+            "http", "h2" -> TransportOptions.Http(
+                host = fields.getAny("host")?.let(::listOf).orEmpty(),
+                path = fields.getAny("path") ?: "/",
             )
 
             "httpupgrade" -> TransportOptions.HttpUpgrade(
-                host = fields["host"].orEmpty(),
-                path = fields["path"] ?: "/",
+                host = fields.getAny("host").orEmpty(),
+                path = fields.getAny("path") ?: "/",
             )
 
             else -> null
         }
+
+    private fun Map<String, String>.getAny(vararg keys: String): String? =
+        keys.firstNotNullOfOrNull { key ->
+            this[key]?.takeIf(String::isNotBlank)
+        }
+
+    private fun Map<String, String>.getAnyBool(vararg keys: String): Boolean =
+        keys.firstNotNullOfOrNull { key ->
+            this[key]?.let { v ->
+                v.equals("true", ignoreCase = true) || v == "1"
+            }
+        } ?: false
 
     // ------------------------------------------------------------- Helpers
 

@@ -52,12 +52,13 @@ class JsonStoreTest {
     private fun awaitFile(file: File, predicate: (String) -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000
         while (System.currentTimeMillis() < deadline) {
-            if (file.exists() && predicate(file.readText())) return
+            val content = runCatching { if (file.exists()) file.readText() else null }.getOrNull()
+            if (content != null && predicate(content)) return
             Thread.sleep(20)
         }
+        val lastContent = runCatching { if (file.exists()) file.readText() else "(missing)" }.getOrDefault("(unreadable)")
         throw AssertionError(
-            "file never reached the expected state; last content: " +
-                if (file.exists()) file.readText() else "(missing)",
+            "file never reached the expected state; last content: $lastContent",
         )
     }
 

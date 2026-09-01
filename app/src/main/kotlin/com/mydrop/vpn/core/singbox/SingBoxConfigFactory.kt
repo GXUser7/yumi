@@ -52,7 +52,7 @@ object SingBoxConfigFactory {
 
     /** Fallbacks for a DNS field the user has emptied; they match [AppSettings]' own defaults. */
     const val DEFAULT_REMOTE_DNS = "https://1.1.1.1/dns-query"
-    const val DEFAULT_DIRECT_DNS = "8.8.8.8"
+    const val DEFAULT_DIRECT_DNS = "local"
 
     /**
      * Whether [resolver] is the one the app ships with, as opposed to one somebody chose.
@@ -286,9 +286,18 @@ object SingBoxConfigFactory {
      * Nothing needed it while both addresses were IPs, which is why the default configuration
      * never hit it — and why choosing a resolver by name did, immediately.
      */
+    private fun isDirectLocal(directDns: String): Boolean {
+        val trimmed = directDns.trim()
+        return trimmed.isEmpty() ||
+            trimmed.equals("local", ignoreCase = true) ||
+            trimmed.equals("local://", ignoreCase = true) ||
+            trimmed.equals(DEFAULT_DIRECT_DNS, ignoreCase = true)
+    }
+
     private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
         val remoteNamed = !isNumericAddress(addressOf(settings.remoteDns, DEFAULT_REMOTE_DNS))
-        val directNamed = !isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))
+        val directLocal = isDirectLocal(settings.directDns)
+        val directNamed = !directLocal && !isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))
 
         putJsonArray("servers") {
             add(
@@ -336,15 +345,8 @@ object SingBoxConfigFactory {
             }
             if (directNamed) {
                 addJsonObject {
-                    put("type", "udp")
+                    put("type", "local")
                     put("tag", DNS_BOOTSTRAP_TAG)
-                    // The user's own direct resolver when it is numeric, so the one lookup that
-                    // bootstraps the rest still goes where they pointed it.
-                    put(
-                        "server",
-                        addressOf(settings.directDns, DEFAULT_DIRECT_DNS)
-                            .takeIf(::isNumericAddress) ?: DEFAULT_DIRECT_DNS,
-                    )
                 }
             }
         }
@@ -396,6 +398,13 @@ object SingBoxConfigFactory {
         val trimmed = value.trim().ifEmpty {
             if (tag == DNS_REMOTE_TAG) DEFAULT_REMOTE_DNS else DEFAULT_DIRECT_DNS
         }
+        val isLocal = trimmed.equals("local", ignoreCase = true) || trimmed.startsWith("local://", ignoreCase = true)
+        if (isLocal) {
+            return buildJsonObject {
+                put("type", "local")
+                put("tag", tag)
+            }
+        }
         val scheme = trimmed.substringBefore("://", missingDelimiterValue = "").lowercase()
         val rest = if (scheme.isEmpty()) trimmed else trimmed.substringAfter("://")
         val hostPart = rest.substringBefore('/')
@@ -418,20 +427,17 @@ object SingBoxConfigFactory {
                     "quic" -> "quic"
                     "h3" -> "h3"
                     "tcp" -> "tcp"
-                    "local" -> "local"
                     else -> "udp"
                 },
             )
             put("tag", tag)
-            if (scheme != "local") {
-                put("server", host)
-                port?.let { put("server_port", it) }
-                if (path.isNotEmpty() && (scheme == "https" || scheme == "h3")) put("path", path)
-                detour?.let { put("detour", it) }
-                // Only when the address is a name. On a numeric one the field is meaningless, and
-                // the core is strict about fields that cannot apply.
-                domainResolver?.let { put("domain_resolver", it) }
-            }
+            put("server", host)
+            port?.let { put("server_port", it) }
+            if (path.isNotEmpty() && (scheme == "https" || scheme == "h3")) put("path", path)
+            detour?.let { put("detour", it) }
+            // Only when the address is a name. On a numeric one the field is meaningless, and
+            // the core is strict about fields that cannot apply.
+            domainResolver?.let { put("domain_resolver", it) }
         }
     }
 
@@ -639,9 +645,10 @@ object SingBoxConfigFactory {
         // through the tunnel they are needed to establish would be circular. When the direct
         // resolver is itself named rather than numbered, the bootstrap takes this over: a
         // resolver that needs resolving cannot be the thing that resolves.
+        val directLocal = isDirectLocal(settings.directDns)
         put(
             "default_domain_resolver",
-            if (isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))) {
+            if (directLocal || isNumericAddress(addressOf(settings.directDns, DEFAULT_DIRECT_DNS))) {
                 DNS_DIRECT_TAG
             } else {
                 DNS_BOOTSTRAP_TAG

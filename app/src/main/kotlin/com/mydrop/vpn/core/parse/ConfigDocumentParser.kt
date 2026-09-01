@@ -124,20 +124,24 @@ object ConfigDocumentParser {
 
         val proxySettings = when (protocol) {
             "vless" -> ProxySettings.Vless(
-                uuid = user?.str("id") ?: return null,
+                uuid = user?.str("id", "uuid") ?: return null,
                 flow = user.str("flow").orEmpty(),
+                packetEncoding = user.str("packetEncoding", "packet_encoding", "packetencoding") ?: "xudp",
             )
 
             "vmess" -> ProxySettings.Vmess(
-                uuid = user?.str("id") ?: return null,
-                alterId = user["alterId"]?.jsonPrimitive?.intOrNull ?: 0,
-                security = user.str("security") ?: "auto",
+                uuid = user?.str("id", "uuid") ?: return null,
+                alterId = user["alterId"]?.jsonPrimitive?.intOrNull
+                    ?: user["alter_id"]?.jsonPrimitive?.intOrNull
+                    ?: user["aid"]?.jsonPrimitive?.intOrNull
+                    ?: 0,
+                security = user.str("security", "scy", "encryption") ?: "auto",
             )
 
             "trojan" -> ProxySettings.Trojan(password = endpoint.str("password") ?: return null)
 
             "shadowsocks" -> ProxySettings.Shadowsocks(
-                method = endpoint.str("method") ?: return null,
+                method = endpoint.str("method", "cipher") ?: return null,
                 password = endpoint.str("password") ?: return null,
             )
 
@@ -146,11 +150,11 @@ object ConfigDocumentParser {
             else -> return null
         }
 
-        val stream = outbound["streamSettings"]?.jsonObject
+        val stream = outbound["streamSettings"]?.jsonObject ?: outbound["stream_settings"]?.jsonObject
         // An Xray document can name a transport sing-box has no implementation of — xhttp and
         // splithttp are the common ones. Translating everything but the transport would produce a
         // server that dials and carries nothing.
-        stream?.str("network")?.lowercase()?.let { declared ->
+        stream?.str("network", "net")?.lowercase()?.let { declared ->
             if (declared !in KNOWN_NETWORKS && declared !in PLAIN_NETWORKS) return null
         }
         return ProxyNode(
@@ -174,43 +178,56 @@ object ConfigDocumentParser {
         if (security.isNullOrEmpty() || security == "none") return null
 
         val tlsSettings = stream["tlsSettings"]?.jsonObject
+            ?: stream["tls_settings"]?.jsonObject
+            ?: stream["tls-settings"]?.jsonObject
         val realitySettings = stream["realitySettings"]?.jsonObject
+            ?: stream["reality_settings"]?.jsonObject
+            ?: stream["reality-settings"]?.jsonObject
         val active = realitySettings ?: tlsSettings
 
         return TlsOptions(
-            serverName = active?.str("serverName") ?: active?.str("servername"),
-            insecure = tlsSettings?.get("allowInsecure")?.jsonPrimitive?.booleanOrNull ?: false,
-            alpn = (tlsSettings?.get("alpn") as? JsonArray)
+            serverName = active?.str("serverName", "server_name", "server-name", "servername", "sni", "peer"),
+            insecure = tlsSettings?.bool("allowInsecure", "allow_insecure", "allowinsecure", "skip-cert-verify", "skip_cert_verify", "insecure") ?: false,
+            alpn = ((tlsSettings?.get("alpn") ?: tlsSettings?.get("alpn_list")) as? JsonArray)
                 ?.mapNotNull { it.jsonPrimitive.contentOrNullSafe() }
                 .orEmpty(),
-            fingerprint = active?.str("fingerprint"),
-            reality = realitySettings?.str("publicKey")?.let { key ->
+            fingerprint = active?.str("fingerprint", "client_fingerprint", "client-fingerprint", "fp"),
+            reality = (realitySettings?.str("publicKey", "public_key", "public-key", "pbk", "publickey", "pubkey", "key"))?.let { key ->
                 RealityOptions(
                     publicKey = key,
-                    shortId = realitySettings.str("shortId").orEmpty(),
-                    spiderX = realitySettings.str("spiderX") ?: "/",
+                    shortId = realitySettings.str("shortId", "short_id", "short-id", "shortid", "sid").orEmpty(),
+                    spiderX = realitySettings.str("spiderX", "spider_x", "spider-x", "spiderx", "spx", "path") ?: "/",
                 )
             },
         )
     }
 
     private fun xrayTransport(stream: JsonObject): TransportOptions? =
-        when (stream.str("network")?.lowercase()) {
+        when (stream.str("network", "net")?.lowercase()) {
             "ws" -> {
                 val ws = stream["wsSettings"]?.jsonObject
-                val host = ws?.get("headers")?.jsonObject?.str("Host")
+                    ?: stream["ws_settings"]?.jsonObject
+                    ?: stream["ws-settings"]?.jsonObject
+                val host = ws?.get("headers")?.jsonObject?.str("Host", "host")
                 TransportOptions.WebSocket(
                     path = ws?.str("path") ?: "/",
                     headers = host?.let { mapOf("Host" to it) }.orEmpty(),
                 )
             }
 
-            "grpc" -> TransportOptions.Grpc(
-                serviceName = stream["grpcSettings"]?.jsonObject?.str("serviceName").orEmpty(),
-            )
+            "grpc" -> {
+                val grpc = stream["grpcSettings"]?.jsonObject
+                    ?: stream["grpc_settings"]?.jsonObject
+                    ?: stream["grpc-settings"]?.jsonObject
+                TransportOptions.Grpc(
+                    serviceName = grpc?.str("serviceName", "service_name", "service-name").orEmpty(),
+                )
+            }
 
             "httpupgrade" -> {
                 val upgrade = stream["httpupgradeSettings"]?.jsonObject
+                    ?: stream["httpupgrade_settings"]?.jsonObject
+                    ?: stream["httpupgrade-settings"]?.jsonObject
                 TransportOptions.HttpUpgrade(
                     host = upgrade?.str("host").orEmpty(),
                     path = upgrade?.str("path") ?: "/",
@@ -244,8 +261,16 @@ object ConfigDocumentParser {
 
     // ------------------------------------------------------------- Helpers
 
-    private fun JsonObject.str(key: String): String? =
-        (this[key] as? JsonPrimitive)?.contentOrNullSafe()
+    private fun JsonObject.str(vararg keys: String): String? =
+        keys.firstNotNullOfOrNull { key ->
+            (this[key] as? JsonPrimitive)?.contentOrNullSafe()
+        }
+
+    private fun JsonObject.bool(vararg keys: String): Boolean =
+        keys.firstNotNullOfOrNull { key ->
+            val prim = this[key] as? JsonPrimitive ?: return@firstNotNullOfOrNull null
+            prim.booleanOrNull ?: (prim.contentOrNullSafe()?.let { it == "1" || it.equals("true", ignoreCase = true) })
+        } ?: false
 
     /** Null for JSON nulls and for numbers-as-strings that are empty, without throwing. */
     private fun JsonPrimitive.contentOrNullSafe(): String? =

@@ -6,6 +6,7 @@ local.properties
 .kotlin/
 .cxx/
 captures/
+logs/
 *.apk
 *.aab
 *.keystore
