@@ -36,6 +36,18 @@ enum class AppLanguage(val tag: String?, @StringRes val labelRes: Int) {
     English("en", R.string.language_english),
 }
 
+/**
+ * What fills the figure on the connect screen while the tunnel is up.
+ *
+ * A choice rather than a replacement, because the two answer different questions: the waves say
+ * how much is moving, the planet says where it is going. Neither is the better one.
+ */
+@Serializable
+enum class Visualizer(@StringRes val labelRes: Int) {
+    Waves(R.string.visualizer_waves),
+    Planet(R.string.visualizer_planet),
+}
+
 @Serializable
 enum class RoutingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
     Global(R.string.routing_global, R.string.routing_global_description),
@@ -68,6 +80,7 @@ enum class PingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes:
 data class AppSettings(
     // Appearance
     val themeMode: ThemeMode = ThemeMode.System,
+    val visualizer: Visualizer = Visualizer.Waves,
     // Off by default: wallpaper colours replace the ice accent, and the tunnel screen leans on
     // that accent meaning "protected". Still a switch — the choice belongs to the user.
     val dynamicColor: Boolean = false,

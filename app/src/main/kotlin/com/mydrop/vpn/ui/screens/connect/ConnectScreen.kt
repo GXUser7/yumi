@@ -58,6 +58,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,7 +73,10 @@ import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.model.Visualizer
+import com.mydrop.vpn.core.model.WorldMap
 import com.mydrop.vpn.ui.MainUiState
+import com.mydrop.vpn.ui.components.PixelPlanet
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.components.TrafficSparkline
@@ -399,13 +403,51 @@ private fun FlowFigure(
                 else Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, FigureShape)
             ),
     ) {
-        TrafficWaves(
-            downloadBytesPerSecond = state.traffic.downloadBytesPerSecond,
-            uploadBytesPerSecond = state.traffic.uploadBytesPerSecond,
-            downloadColor = semantic.download,
-            uploadColor = semantic.upload,
-            warming = warming,
-        )
+        when (state.settings.visualizer) {
+            Visualizer.Waves -> TrafficWaves(
+                downloadBytesPerSecond = state.traffic.downloadBytesPerSecond,
+                uploadBytesPerSecond = state.traffic.uploadBytesPerSecond,
+                downloadColor = semantic.download,
+                uploadColor = semantic.upload,
+                warming = warming,
+            )
+
+            Visualizer.Planet -> {
+                val context = LocalContext.current
+                // Two kilobytes read once per connect screen. A missing or truncated asset leaves
+                // an empty array, which the mask reads as "all sea" — a blank planet rather than a
+                // crash, because a decorative figure must never be able to take the screen down.
+                val mask = remember(context) {
+                    runCatching {
+                        context.resources.openRawResource(R.raw.world_land).use { it.readBytes() }
+                    }.getOrElse { ByteArray(0) }
+                }
+                // The flag in the server's own name is its country code — see WorldMap. Nothing is
+                // asked of the network to find out where a server is.
+                val place = remember(state.selectedNode?.name) {
+                    state.selectedNode?.name
+                        ?.let { WorldMap.countryCodeOf(it) }
+                        ?.let { WorldMap.centroidOf(it) }
+                }
+                // Land takes `primary` and sea `primaryContainer`, and the pair is left to flip
+                // with the theme rather than being pinned by brightness. In the dark theme that is
+                // pale land on deep water; in the light theme the same two roles swap places and
+                // the map inverts with the rest of the screen, which is the point — a figure that
+                // kept pale land on a light background would be the one thing not obeying the
+                // theme it sits in.
+                PixelPlanet(
+                    mask = mask,
+                    latitude = place?.get(0),
+                    longitude = place?.get(1),
+                    connected = running,
+                    warming = warming,
+                    seaColor = MaterialTheme.colorScheme.primaryContainer,
+                    landColor = MaterialTheme.colorScheme.primary,
+                    gapColor = container,
+                    markerColor = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
 
         LatencyBadge(
             latency = latency,

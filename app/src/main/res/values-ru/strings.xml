@@ -241,6 +241,9 @@
     <string name="settings_title">Настройки</string>
 
     <string name="settings_appearance">Внешний вид</string>
+    <string name="settings_visualizer">Фигура при подключении</string>
+    <string name="visualizer_waves">Волны</string>
+    <string name="visualizer_planet">Планета</string>
     <string name="settings_theme">Тема</string>
     <string name="settings_language">Язык</string>
     <string name="settings_dynamic_color">Динамические цвета</string>

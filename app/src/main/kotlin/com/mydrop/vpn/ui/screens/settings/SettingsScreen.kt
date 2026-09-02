@@ -80,6 +80,7 @@ import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
@@ -209,6 +210,30 @@ fun SettingsScreen(
                             // looking for their language recognises "Русский", not "Russian".
                             Text(
                                 stringResource(language.labelRes),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = stringResource(R.string.settings_visualizer),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Visualizer.entries.forEach { visualizer ->
+                        ToggleButton(
+                            checked = settings.visualizer == visualizer,
+                            onCheckedChange = { onUpdate { it.copy(visualizer = visualizer) } },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                stringResource(visualizer.labelRes),
                                 style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                             )
