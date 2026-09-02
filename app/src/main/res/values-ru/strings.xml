@@ -412,6 +412,7 @@
     <string name="log_mobile_none_left">Мобильная сеть, но ни одного сервера из мобильного списка не осталось — остаюсь</string>
     <string name="log_failover_probing">«%1$s» не отвечает — проверяю %2$d запасных</string>
     <string name="log_failover_all_dead">Ни один запасной сервер не ответил — остаюсь на «%1$s»</string>
+    <string name="log_cores_alive">Одновременно работает ядер: %1$d, старшему %2$d мин. Они рвут соединения друг у друга — пришлите, пожалуйста, журнал</string>
     <string name="log_failover_core_blind">«%1$s» всё ещё мёртв, но ядро уже %2$d раз подряд не подтвердило живого запасного — остаюсь, а не верю голой пробе снова</string>
     <string name="log_failover_switching">Переключаюсь на «%1$s» (%2$s мс)</string>
     <string name="log_failover_pruned_all">Запасные серверы исчезли из подписки (%1$d) — выбор снова автоматический</string>

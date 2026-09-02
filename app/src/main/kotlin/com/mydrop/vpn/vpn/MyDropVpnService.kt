@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants
 import androidx.core.app.NotificationCompat
@@ -29,6 +30,7 @@ import androidx.core.content.ContextCompat
 import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.CoreGenerations
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
@@ -262,6 +264,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * which server the UI claimed to be on.
      */
     private val tunnelLock = Mutex()
+
+    /**
+     * Counts the cores that are actually writing, which is not the same as the cores this service
+     * thinks it started. See [CoreGenerations] — the app believes there is one, and a journal has
+     * shown five.
+     */
+    private val coreGenerations = CoreGenerations()
 
     private var commandServer: CommandServer? = null
     private var commandClient: CommandClient? = null
@@ -512,8 +521,17 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         )
                     }
 
-                    // Blocks until the core is up; openTun() is called back from inside it.
+                    // Blocks until the core is up; openTun() is called back from inside it, and
+                    // the previous instance is closed inside it too — in theory. How long that
+                    // takes is worth knowing: a close that hangs is the shape a leaked core would
+                    // have, and the core only reports its own slow teardown at trace level.
+                    val reloadStartedAt = SystemClock.elapsedRealtime()
                     server.startOrReloadService(config, OverrideOptions())
+                    logs.trace(
+                        NATIVE_TAG,
+                        "startOrReloadService took ${SystemClock.elapsedRealtime() - reloadStartedAt}ms " +
+                            "(${if (reloading) "reload" else "first start"})",
+                    )
 
                     _state.value = VpnState.Connecting(nodeId, VpnState.Connecting.Phase.Testing)
                     subscribeToStatus()
@@ -603,6 +621,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         stopDefaultInterfaceMonitor()
         stopWakeMonitor()
+        coreGenerations.reset()
 
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
@@ -740,6 +759,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 val entry = messageList.next()
                 val level = entry.level.toLogLevel()
                 logs.log(level, entry.message)
+                noteCoreGeneration(entry.message)
                 // Mirrored to logcat as well as the in-app journal. The journal is an in-memory
                 // ring buffer that dies with the process, so when the core misbehaves there is
                 // otherwise nothing to read from a development machine.
@@ -1268,6 +1288,33 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             // never notices anything while the screen is off.
             logs.trace(NATIVE_TAG, "wake monitor unavailable: ${it.message}")
         }
+    }
+
+    /**
+     * Feeds one line from the core to the generation counter, and says so when there is more than
+     * one core writing.
+     *
+     * Called for every line the core emits, so it does as little as possible: the parse gives up
+     * on the first character that is not part of an age prefix, and the warning is rate-limited
+     * inside [CoreGenerations] rather than here.
+     *
+     * The message goes to the journal at warning level because it is not diagnostic trivia — while
+     * it is true, several cores are fighting over one TUN and cutting each other's connections,
+     * and the person holding the phone is experiencing that as the app being broken.
+     */
+    private fun noteCoreGeneration(message: String) {
+        val now = System.currentTimeMillis()
+        coreGenerations.observe(message, now)
+        val report = coreGenerations.dueReport(now) ?: return
+        logs.warn(
+            R.string.log_cores_alive,
+            report.liveCores,
+            report.oldestAgeMillis / 60_000,
+        )
+        android.util.Log.w(
+            NATIVE_TAG,
+            "core leak: ${report.liveCores} instances alive, oldest ${report.oldestAgeMillis}ms",
+        )
     }
 
     private fun stopWakeMonitor() {
