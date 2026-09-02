@@ -421,6 +421,7 @@
     <string name="log_failover_pruned_all">Запасные серверы исчезли из подписки (%1$d) — выбор снова автоматический</string>
     <string name="log_mobile_pruned">Из мобильного списка убрано серверов, которых больше нет: %1$d</string>
     <string name="log_mobile_pruned_all">Мобильные серверы исчезли из подписки (%1$d) — список снова пуст</string>
+    <string name="log_selection_followed">Выбранных серверов сменили адрес: %1$d — переназначил автоматически</string>
     <string name="log_failover_pruned">Из списка запасных убрано серверов, которых больше нет: %1$d</string>
 
     <string name="log_dns_switching">DNS «%1$s» перестал отвечать — перехожу на %2$s</string>

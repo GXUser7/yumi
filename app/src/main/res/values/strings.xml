@@ -425,6 +425,7 @@ Send it here: %2$s</string>
     <string name="log_failover_pruned_all">The spare servers vanished from the subscription (%1$d) — the choice is automatic again</string>
     <string name="log_mobile_pruned">Servers that no longer exist were removed from the mobile list: %1$d</string>
     <string name="log_mobile_pruned_all">The mobile servers vanished from the subscription (%1$d) — the mobile list is empty again</string>
+    <string name="log_selection_followed">%1$d chosen servers moved to new addresses — followed them</string>
     <string name="log_failover_pruned">Servers that no longer exist were removed from the spares list: %1$d</string>
 
     <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>
