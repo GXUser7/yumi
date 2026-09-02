@@ -266,6 +266,21 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private val tunnelLock = Mutex()
 
     /**
+     * Which connect request is the current one. Every call to [startTunnel] takes the next number
+     * and keeps it; a queued call whose number is no longer the latest has been superseded and
+     * gives up its turn.
+     *
+     * The lock alone was not enough. It serialises the requests, which is what stops two of them
+     * corrupting each other's fields — but serialising a hundred taps means performing a hundred
+     * switches. A monkey test settled it: taps stopped at 17:57:53 and the tunnel went on moving
+     * between servers by itself until 17:58:01, eight seconds of the screen naming countries
+     * nobody was choosing any more, and thirty more cores raised and torn down for nothing.
+     *
+     * Only the newest request describes what the user wants. The rest are history.
+     */
+    private val connectRequests = java.util.concurrent.atomic.AtomicLong(0)
+
+    /**
      * Counts the cores that are actually writing, which is not the same as the cores this service
      * thinks it started. See [CoreGenerations] — the app believes there is one, and a journal has
      * shown five.
@@ -471,8 +486,22 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * made the session counters flicker between two sets of numbers.
      */
     private fun startTunnel(config: String, requestedNodeId: String, requestedNodeName: String) {
+        val request = connectRequests.incrementAndGet()
         scope.launch {
             tunnelLock.withLock {
+                // Checked inside the lock, not before it: what matters is whether anything newer
+                // arrived while this one was waiting its turn, and that is only knowable here.
+                //
+                // Nothing is undone by skipping, because nothing has been done — the fields below
+                // and the state are still whatever the request in front left them. The newest
+                // request is guaranteed to run, since no later number exists to displace it.
+                if (request != connectRequests.get()) {
+                    logs.trace(
+                        NATIVE_TAG,
+                        "connect request $request superseded by ${connectRequests.get()}, skipping",
+                    )
+                    return@withLock
+                }
                 val reloading = commandServer != null
                 try {
                     nodeId = requestedNodeId
@@ -623,6 +652,10 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      */
     private fun stopTunnelWhenIdle(reason: String) {
         logs.trace(NATIVE_TAG, "stop requested: $reason")
+        // Retires every connect still waiting for the lock. Without this, tapping through a few
+        // servers and then tapping off would stop the tunnel and immediately watch the last queued
+        // connect raise it again — the one instruction the user gave last would be the one ignored.
+        connectRequests.incrementAndGet()
         if (_state.value.isActive) _state.value = VpnState.Disconnecting
         scope.launch { tunnelLock.withLock { stopTunnel() } }
     }
