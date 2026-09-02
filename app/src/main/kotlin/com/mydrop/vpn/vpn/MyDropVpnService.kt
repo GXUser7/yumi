@@ -521,10 +521,38 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         )
                     }
 
-                    // Blocks until the core is up; openTun() is called back from inside it, and
-                    // the previous instance is closed inside it too — in theory. How long that
-                    // takes is worth knowing: a close that hangs is the shape a leaked core would
-                    // have, and the core only reports its own slow teardown at trace level.
+                    // The old core is closed here rather than left to the reload, and the reason is
+                    // a field journal with five of them running at once.
+                    //
+                    // `startOrReloadService` does close the previous instance — and then discards
+                    // whatever that close returned. So when it fails there is no error anywhere,
+                    // the new core starts on top, and the old one keeps its TUN, its outbounds and
+                    // its dialer. Asking for the close separately is the same machinery with the
+                    // answer kept: a failure now has somewhere to be read, and a close that hangs
+                    // shows up as a number instead of as a mystery.
+                    //
+                    // It is not a hard stop. If the close fails the start still goes ahead — a
+                    // tunnel that refuses to move to a working server because the dead one would
+                    // not tidy itself away is worse than the leak this is chasing.
+                    if (reloading) {
+                        val closeStartedAt = SystemClock.elapsedRealtime()
+                        runCatching { server.closeService() }
+                            .onSuccess {
+                                logs.trace(
+                                    NATIVE_TAG,
+                                    "old core closed in ${SystemClock.elapsedRealtime() - closeStartedAt}ms",
+                                )
+                            }
+                            .onFailure { failure ->
+                                logs.trace(
+                                    NATIVE_TAG,
+                                    "old core refused to close after " +
+                                        "${SystemClock.elapsedRealtime() - closeStartedAt}ms: ${failure.message}",
+                                )
+                            }
+                    }
+
+                    // Blocks until the core is up; openTun() is called back from inside it.
                     val reloadStartedAt = SystemClock.elapsedRealtime()
                     server.startOrReloadService(config, OverrideOptions())
                     logs.trace(

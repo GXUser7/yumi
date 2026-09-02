@@ -39,6 +39,8 @@ class TunnelConfigBuilder(
 
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
 
+    private val _switchable = MutableStateFlow<Set<String>>(emptySet())
+
     private val _dnsFallback = MutableStateFlow(false)
 
     /**
@@ -63,6 +65,9 @@ class TunnelConfigBuilder(
      */
     fun forgetProbe() {
         _probe.value = null
+        // The group belongs to the same dead tunnel as the inbound. A stale one would let the
+        // watchdog keep choosing from servers the next core has never been told about.
+        _switchable.value = emptySet()
     }
 
     fun useDnsFallback(active: Boolean) {
@@ -75,6 +80,15 @@ class TunnelConfigBuilder(
      * that case drops the inbound rather than the connection.
      */
     val probe: StateFlow<ProbeEndpoint?> = _probe.asStateFlow()
+
+    /**
+     * Ids of every server written into the running core's selector group.
+     *
+     * Recorded because deriving the same list twice does not reliably produce the same answer —
+     * see [FailoverGroup.preferSwitchable] for how the two drifted apart and what it cost. This is
+     * what the core was actually handed, so it is the list worth trusting.
+     */
+    val switchable: StateFlow<Set<String>> = _switchable.asStateFlow()
 
     /** Null when the configuration could not be built; the reason is already in the log. */
     fun build(node: ProxyNode): String? {
@@ -94,6 +108,7 @@ class TunnelConfigBuilder(
         }
 
         val probe = newProbeEndpoint()
+        val group = switchableGroup(node)
 
         return runCatching {
             SingBoxConfigFactory.build(
@@ -103,12 +118,16 @@ class TunnelConfigBuilder(
                 probe = probe,
                 dnsOverride = selectedDns(),
                 dnsFallback = _dnsFallback.value,
-                group = switchableGroup(node),
+                group = group,
             )
         }.onSuccess {
             // Only once the document exists: publishing an endpoint for a configuration that was
             // never handed to the core would point the speed test at a port nothing listens on.
             _probe.value = probe
+            // Only what the core is about to be given, and only once the document it goes into
+            // exists. A group published for a configuration that was never built would send the
+            // watchdog at servers no core holds.
+            _switchable.value = group.mapTo(mutableSetOf()) { it.id }
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
             // when reading a log off the device.

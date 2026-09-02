@@ -172,6 +172,55 @@ class FailoverGroupTest {
         assertEquals(listOf("slow"), group.map { it.id })
     }
 
+    /**
+     * The list the core was given wins over the list derived a second time.
+     *
+     * Both come from [FailoverGroup.candidates], which orders by last measured latency before
+     * truncating — and those measurements move while the tunnel runs. A journal caught the result:
+     * `selectOutbound refused: outbound not found in selector`, and a full restart of the core
+     * where a pointer swap was intended.
+     */
+    @Test
+    fun `a candidate the core was never given is passed over`() {
+        val inside = node("in")
+        val outside = node("out")
+
+        val kept = FailoverGroup.preferSwitchable(listOf(outside, inside), setOf("in"))
+
+        assertEquals(listOf("in"), kept.map { it.id })
+    }
+
+    /** Nothing known about the group is not a reason to start refusing candidates. */
+    @Test
+    fun `an unknown group leaves the list alone`() {
+        val nodes = listOf(node("a"), node("b"))
+
+        assertEquals(nodes, FailoverGroup.preferSwitchable(nodes, emptySet()))
+    }
+
+    /**
+     * A reconnect is worse than a pointer swap and better than staying on a dead server, so when
+     * the filter would empty the list it does not apply.
+     */
+    @Test
+    fun `a list with nothing inside the group survives whole`() {
+        val nodes = listOf(node("a"), node("b"))
+
+        val kept = FailoverGroup.preferSwitchable(nodes, setOf("somebody-else"))
+
+        assertEquals(nodes, kept)
+    }
+
+    /** Order is the caller's business — the lot was already drawn by [sample] before this runs. */
+    @Test
+    fun `filtering keeps the order it was handed`() {
+        val nodes = listOf(node("c"), node("a"), node("b"))
+
+        val kept = FailoverGroup.preferSwitchable(nodes, setOf("a", "b", "c"))
+
+        assertEquals(listOf("c", "a", "b"), kept.map { it.id })
+    }
+
     @Test
     fun `limit counts the selected server`() {
         val nodes = (1..10).map { node("n$it") }

@@ -99,6 +99,32 @@ object FailoverGroup {
     }
 
     /**
+     * Narrows a candidate list to the servers the running core was actually given.
+     *
+     * The two lists are supposed to be the same list. [candidates] is called once to build the
+     * core's selector group and again, later, when something has to be swapped — and it orders by
+     * last measured latency before truncating to `limit`. Those measurements move while the tunnel
+     * runs, and the watchdog itself is what moves them, so by the time it draws a replacement the
+     * ordering can differ from the one that decided the group. The tail of the list changes, the
+     * lot falls on a server the core was never told about, and `selectOutbound` answers
+     * "outbound not found in selector" — which a journal caught, and which costs a full restart of
+     * the core instead of a pointer swap.
+     *
+     * That restart is not merely slow. Until the leak in the reload path is found, every extra one
+     * is another chance for a core to be left running; see [CoreGenerations].
+     *
+     * An empty [switchable] means nothing is known about the group — the tunnel is not up, or the
+     * builder has forgotten it — and then this is not the place to start refusing candidates.
+     * Likewise when nothing survives the filter: a reconnect is worse than a pointer swap and
+     * better than being stranded on a dead server.
+     */
+    fun preferSwitchable(candidates: List<ProxyNode>, switchable: Set<String>): List<ProxyNode> {
+        if (switchable.isEmpty()) return candidates
+        val inside = candidates.filter { it.id in switchable }
+        return inside.ifEmpty { candidates }
+    }
+
+    /**
      * [count] of them minus the current server, drawn by lot.
      *
      * The ordering [candidates] applies is right for deciding who belongs in the group at all,

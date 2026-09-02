@@ -164,7 +164,10 @@ class FailoverWatchdog(
 
         when {
             NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
-                val pool = profiles.nodes.filter { it.id in current.mobileNodeIds }
+                val pool = FailoverGroup.preferSwitchable(
+                    profiles.nodes.filter { it.id in current.mobileNodeIds },
+                    configs.switchable.value,
+                )
                 val chosen = measureAndPick(pool)
                 if (chosen == null) {
                     // Either the named servers have gone from the subscription, or none of them
@@ -201,7 +204,10 @@ class FailoverWatchdog(
                     launcher.switchTo(remembered)
                     return
                 }
-                val pool = ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds)
+                val pool = FailoverGroup.preferSwitchable(
+                    ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds),
+                    configs.switchable.value,
+                )
                 val chosen = measureAndPick(pool) ?: return
                 savedOrdinaryNodeId = null
                 logs.info(R.string.log_mobile_back, chosen.node.name, chosen.millis.toString())
@@ -793,7 +799,7 @@ class FailoverWatchdog(
         // has always had it: servers the user nominated for cellular are not ordinary spares to
         // be landed on at home.
         val onMobileList = NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds)
-        val candidates = if (onMobileList) {
+        val drawn = if (onMobileList) {
             // The whole list rather than a sample of it. It is already the user's own short list,
             // and it is in the core's group in full — see AppContainer.switchableGroup — so every
             // member is a switch the core can make without a restart.
@@ -815,6 +821,10 @@ class FailoverWatchdog(
                 ),
             )
         }
+        // Narrowed to what the running core actually holds, so the switch stays a pointer swap.
+        // Drawing a server the core was never given costs a full restart — and until the reload
+        // path stops leaking instances, every restart is another chance to leave one running.
+        val candidates = FailoverGroup.preferSwitchable(drawn, configs.switchable.value)
         if (candidates.isEmpty()) {
             // Sitting on a dead server beats moving the user's exit country without being asked.
             // An empty mobile list is an answer — these and no others may carry cellular traffic —
