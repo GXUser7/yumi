@@ -197,7 +197,10 @@ class FailoverWatchdog(
         val carrying = profiles.selectedNode() ?: return true
 
         when {
-            NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
+            // Skipped entirely when the ordinary servers go first: the move onto the list is then
+            // the watchdog's to make, and only after they have stopped answering.
+            !current.preferOrdinaryOnCellular &&
+                NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
                 val pool = FailoverGroup.preferSwitchable(
                     profiles.nodes.filter { it.id in current.mobileNodeIds },
                     configs.switchable.value,
@@ -838,7 +841,17 @@ class FailoverWatchdog(
         // The exclusion on the other branch is the same rule read backwards, and ordinaryPoolFor
         // has always had it: servers the user nominated for cellular are not ordinary spares to
         // be landed on at home.
-        val onMobileList = NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds)
+        // Ordinary first, when asked for. The mobile list then stops being the pool and becomes
+        // the fallback: it is reached below, once the ordinary servers have been measured in full
+        // and none of them answered. See AppSettings.preferOrdinaryOnCellular.
+        val ordinaryFirst = NetworkEnvironment.triesOrdinaryFirst(
+            tunnel.transport.value,
+            mobileIds,
+            settings.value.preferOrdinaryOnCellular,
+        )
+        val onMobileList =
+            NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds) &&
+                !ordinaryFirst
         val drawn = if (onMobileList) {
             // The whole list rather than a sample of it. It is already the user's own short list,
             // and it is in the core's group in full — see AppContainer.switchableGroup — so every
@@ -850,21 +863,28 @@ class FailoverWatchdog(
             // The whole group first, then seven of it by lot. Drawing from the group and not from
             // the raw list is what keeps the switch instant: the core can only be pointed at its own
             // members, and everything in here is one.
-            FailoverGroup.sample(
-                FailoverGroup.candidates(
-                    nodes = profiles.nodes,
-                    selected = dead,
-                    latencies = profiles.state.value.latencies,
-                    limit = FailoverGroup.roomFor(mobileIds.size),
-                    chosen = settings.value.failoverNodeIds,
-                    exclude = mobileIds,
-                ),
+            val eligible = FailoverGroup.candidates(
+                nodes = profiles.nodes,
+                selected = dead,
+                latencies = profiles.state.value.latencies,
+                // Everything, when the answer decides whether to abandon the ordinary servers
+                // altogether; seven by lot when it only decides where to go next.
+                limit = if (ordinaryFirst) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
+                chosen = settings.value.failoverNodeIds,
+                exclude = mobileIds,
             )
+            if (ordinaryFirst) eligible else FailoverGroup.sample(eligible)
         }
         // Narrowed to what the running core actually holds, so the switch stays a pointer swap.
         // Drawing a server the core was never given costs a full restart — and until the reload
         // path stops leaking instances, every restart is another chance to leave one running.
-        val candidates = FailoverGroup.preferSwitchable(drawn, configs.switchable.value)
+        // Narrowing to the core's group before measuring would undo the point of measuring
+        // everything: the group holds a dozen ordinary servers and the user's list can hold two
+        // dozen, so the twelve that fit would decide the fate of all of them. On this path the
+        // preference is applied to the survivors instead, further down — a reconnect to a server
+        // that answers beats a pointer swap to nothing.
+        val candidates =
+            if (ordinaryFirst) drawn else FailoverGroup.preferSwitchable(drawn, configs.switchable.value)
         if (candidates.isEmpty()) {
             // Sitting on a dead server beats moving the user's exit country without being asked.
             // An empty mobile list is an answer — these and no others may carry cellular traffic —
@@ -907,13 +927,48 @@ class FailoverWatchdog(
             return
         }
 
-        val fresh = throughCore.ifEmpty {
+        var fresh = throughCore.ifEmpty {
             latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
                 profiles.recordLatency(result)
             }.associateBy { it.nodeId }
         }
 
-        val chosen = FailoverChoice.pick(candidates, fresh)
+        var chosen = FailoverChoice.pick(
+            // Group members preferred among the servers that actually answered, rather than among
+            // the ones that were going to be asked.
+            if (ordinaryFirst) {
+                FailoverGroup.preferSwitchable(
+                    candidates.filter { fresh[it.id]?.failed == false },
+                    configs.switchable.value,
+                ).ifEmpty { candidates }
+            } else {
+                candidates
+            },
+            fresh,
+        )
+
+        // The ordinary servers were measured in full and none of them answered, which is the whole
+        // condition the mobile list was named for. Nothing here is a guess about which network the
+        // phone is on: ordinaryFirst is already that question answered.
+        if (chosen == null && ordinaryFirst) {
+            val fallback = FailoverGroup.preferSwitchable(
+                profiles.nodes.filter {
+                    it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+                },
+                configs.switchable.value,
+            )
+            if (fallback.isNotEmpty()) {
+                logs.info(R.string.log_cellular_ordinary_dead, fallback.size)
+                val second = coreMeasured(fallback)
+                fresh = second.ifEmpty {
+                    latencyTester.measureAll(fallback, settings.value.pingMode) { result ->
+                        profiles.recordLatency(result)
+                    }.associateBy { it.nodeId }
+                }
+                chosen = FailoverChoice.pick(fallback, fresh)
+            }
+        }
+
         if (chosen == null) {
             logs.warn(R.string.log_failover_all_dead, dead.name)
             alerts.serverStranded(dead.name)

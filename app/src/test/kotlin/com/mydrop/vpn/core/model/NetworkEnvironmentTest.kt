@@ -182,4 +182,48 @@ class NetworkEnvironmentTest {
             NetworkEnvironment.transportRetryMillis(4),
         )
     }
+
+    /**
+     * The mobile list as a fallback rather than a pool: for somebody whose mobile servers are
+     * slower, cost more, or are simply held in reserve.
+     */
+    @Test
+    fun `ordinary servers go first only when asked, on cellular, with somewhere to fall back to`() {
+        val mobile = setOf("m1")
+
+        assertTrue(
+            NetworkEnvironment.triesOrdinaryFirst(NetworkTransport.Cellular, mobile, true),
+        )
+        assertFalse(
+            "off by default, and the list stays the pool",
+            NetworkEnvironment.triesOrdinaryFirst(NetworkTransport.Cellular, mobile, false),
+        )
+        assertFalse(
+            "Wi-Fi was already going to use the ordinary servers",
+            NetworkEnvironment.triesOrdinaryFirst(NetworkTransport.Wifi, mobile, true),
+        )
+        assertFalse(
+            "an empty list is nothing to fall back to",
+            NetworkEnvironment.triesOrdinaryFirst(NetworkTransport.Cellular, emptySet(), true),
+        )
+    }
+
+    /** The two questions are mirrors: whichever list is the pool, the other one is not. */
+    @Test
+    fun `the mobile list is either the pool or the fallback, never both`() {
+        for (transport in NetworkTransport.entries) {
+            for (mobile in listOf(emptySet(), setOf("m1"))) {
+                for (prefer in listOf(false, true)) {
+                    val restricts =
+                        NetworkEnvironment.restrictsToMobileList(transport, mobile) && !prefer
+                    val ordinaryFirst =
+                        NetworkEnvironment.triesOrdinaryFirst(transport, mobile, prefer)
+                    assertFalse(
+                        "$transport mobile=${mobile.size} prefer=$prefer said both",
+                        restricts && ordinaryFirst,
+                    )
+                }
+            }
+        }
+    }
 }

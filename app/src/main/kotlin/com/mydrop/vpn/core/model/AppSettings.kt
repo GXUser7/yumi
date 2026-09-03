@@ -192,6 +192,21 @@ data class AppSettings(
      */
     val mobileNodeIds: Set<String> = emptySet(),
     /**
+     * Whether the mobile list is a fallback rather than the pool, while the phone is on cellular.
+     *
+     * Off, [mobileNodeIds] is the only place cellular traffic may go, which is the point of naming
+     * servers for it. On, the ordinary servers are tried first and the mobile list is what the
+     * tunnel falls back to once they stop answering *on this network* — for somebody whose mobile
+     * servers are slower, or cost more, or are simply held in reserve.
+     *
+     * The check behind "stop answering" is deliberately expensive: the whole eligible list is
+     * measured rather than a sample of seven. A sample is right for finding somewhere to go and
+     * wrong for concluding that nowhere is left, and a phone watched through one bad evening drew
+     * seven dead servers while live ones sat in the list untouched. Deciding to abandon the
+     * ordinary servers on that evidence would abandon them permanently.
+     */
+    val preferOrdinaryOnCellular: Boolean = false,
+    /**
      * Whether returning to Wi-Fi puts the tunnel back on the exact server it left.
      *
      * Off, coming home simply runs the ordinary choice, which may land somewhere else and is one

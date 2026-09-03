@@ -548,14 +548,26 @@ fun SettingsScreen(
                         // Only once the list means something: a switch about coming back from a
                         // network the tunnel never leaves is a switch about nothing.
                         AnimatedVisibility(visible = settings.mobileNodeIds.isNotEmpty()) {
-                            SwitchRow(
-                                title = stringResource(R.string.settings_restore_wifi),
-                                subtitle = stringResource(R.string.settings_restore_wifi_subtitle),
-                                checked = settings.restoreWifiNodeOnWifi,
-                                onCheckedChange = {
-                                    onUpdate { s -> s.copy(restoreWifiNodeOnWifi = it) }
-                                },
-                            )
+                            Column {
+                                SwitchRow(
+                                    title = stringResource(R.string.settings_prefer_ordinary_cellular),
+                                    subtitle = stringResource(
+                                        R.string.settings_prefer_ordinary_cellular_description,
+                                    ),
+                                    checked = settings.preferOrdinaryOnCellular,
+                                    onCheckedChange = {
+                                        onUpdate { s -> s.copy(preferOrdinaryOnCellular = it) }
+                                    },
+                                )
+                                SwitchRow(
+                                    title = stringResource(R.string.settings_restore_wifi),
+                                    subtitle = stringResource(R.string.settings_restore_wifi_subtitle),
+                                    checked = settings.restoreWifiNodeOnWifi,
+                                    onCheckedChange = {
+                                        onUpdate { s -> s.copy(restoreWifiNodeOnWifi = it) }
+                                    },
+                                )
+                            }
                         }
                         GroupDivider()
                         SwitchRow(

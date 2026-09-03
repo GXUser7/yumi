@@ -51,6 +51,14 @@ object FailoverGroup {
     const val MIN_ORDINARY = 12
 
     /**
+     * A `limit` for [candidates] meaning "everything eligible".
+     *
+     * Only for the question "is there anything left at all", which a sample cannot answer — see
+     * [AppSettings.preferOrdinaryOnCellular]. Choosing where to *go* still draws by lot.
+     */
+    const val NO_LIMIT = Int.MAX_VALUE
+
+    /**
      * How many of [mobileCount] servers actually go into the group.
      *
      * The rest are still switchable in the sense that matters — they are simply reached by

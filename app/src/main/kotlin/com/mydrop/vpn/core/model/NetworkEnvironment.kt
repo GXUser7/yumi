@@ -83,6 +83,19 @@ object NetworkEnvironment {
      *
      * So the constraint is stated separately from the correction, and both are read from here.
      */
+    /**
+     * Whether the ordinary servers are tried before the mobile list on this network.
+     *
+     * The mirror of [restrictsToMobileList] and never true alongside it. Only ever true on
+     * cellular with a mobile list to fall back to — with no list there is nothing to fall back to
+     * and the ordinary servers were always going to be tried.
+     */
+    fun triesOrdinaryFirst(
+        transport: NetworkTransport,
+        mobileIds: Set<String>,
+        preferOrdinary: Boolean,
+    ): Boolean = preferOrdinary && transport == NetworkTransport.Cellular && mobileIds.isNotEmpty()
+
     fun restrictsToMobileList(transport: NetworkTransport, mobileIds: Set<String>): Boolean =
         transport == NetworkTransport.Cellular && mobileIds.isNotEmpty()
 

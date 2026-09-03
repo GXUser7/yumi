@@ -417,6 +417,9 @@ Send it here: %2$s</string>
     <string name="log_mobile_switch">Cellular network — moving to “%1$s” (%2$s ms)</string>
     <string name="log_mobile_back">Wi-Fi is back — moving to “%1$s” (%2$s ms)</string>
     <string name="log_mobile_none_answered">Cellular, but no server on the mobile list answered after %1$d tries — staying</string>
+    <string name="log_cellular_ordinary_dead">Ordinary servers stopped answering on cellular — falling back to the mobile list (%1$d)</string>
+    <string name="settings_prefer_ordinary_cellular">Ordinary servers first on cellular</string>
+    <string name="settings_prefer_ordinary_cellular_description">Use the mobile list only once the ordinary ones stop answering. Checks the whole list, which costs traffic</string>
     <string name="log_mobile_none_left">On cellular, but not one server from the mobile list is left — staying put</string>
     <string name="log_failover_probing">“%1$s” is not answering — checking %2$d spares</string>
     <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>
