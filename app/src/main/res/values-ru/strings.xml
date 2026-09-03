@@ -412,6 +412,7 @@
     <string name="log_failover_nothing_to_swap">«%1$s» не отвечает, но заменить его нечем</string>
     <string name="log_mobile_switch">Мобильная сеть — перехожу на «%1$s» (%2$s мс)</string>
     <string name="log_mobile_back">Wi-Fi вернулся — перехожу на «%1$s» (%2$s мс)</string>
+    <string name="log_mobile_none_answered">Мобильная сеть, но ни один сервер из мобильного списка не ответил за %1$d попыток — остаюсь</string>
     <string name="log_mobile_none_left">Мобильная сеть, но ни одного сервера из мобильного списка не осталось — остаюсь</string>
     <string name="log_failover_probing">«%1$s» не отвечает — проверяю %2$d запасных</string>
     <string name="log_failover_all_dead">Ни один запасной сервер не ответил — остаюсь на «%1$s»</string>

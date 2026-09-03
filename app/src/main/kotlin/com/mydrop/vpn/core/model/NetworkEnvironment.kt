@@ -34,6 +34,32 @@ object NetworkEnvironment {
         if (target == NetworkTransport.Cellular) TO_CELLULAR_MILLIS else TO_WIFI_MILLIS
 
     /**
+     * How long to keep trying to move the tunnel after the network has changed.
+     *
+     * [settleMillis] assumes a network that has appeared is a network that works, and the
+     * commonest way onto cellular is the one where it does not: leaving a flat, Wi-Fi dropping in
+     * the doorway, and the phone spending the lift ride holding a bar of signal that carries
+     * nothing. Every probe times out, and without this the first attempt is the only one there
+     * ever was.
+     *
+     * Five minutes covers a lift and the walk out of a building. Past that the honest reading is
+     * that cellular does not reach the chosen servers from here, and a phone in a basement should
+     * not spend the afternoon opening handshakes to keep finding that out.
+     */
+    const val TRANSPORT_RETRY_WINDOW_MILLIS = 300_000L
+
+    /**
+     * How long to wait before the next attempt, spreading them out rather than repeating at speed
+     * — what is being waited for is a radio finding a tower, which is seconds to minutes, and each
+     * attempt costs a handshake to every server on the list over a metered network.
+     */
+    fun transportRetryMillis(attempt: Int): Long = when (attempt) {
+        1 -> 15_000L
+        2 -> 30_000L
+        else -> 60_000L
+    }
+
+    /**
      * Whether a transport is worth acting on at all.
      *
      * [NetworkTransport.None] is a phone with no network, and moving the tunnel then would repeat

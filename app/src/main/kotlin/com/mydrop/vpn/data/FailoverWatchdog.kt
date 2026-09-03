@@ -150,17 +150,51 @@ class FailoverWatchdog(
                     // Re-checked after the wait: the settle is seconds long and the tunnel can go
                     // down inside it.
                     if (tunnel.state.value !is VpnState.Connected) return@collectLatest
+                    retryUntilApplied(transport)
+                    // Marked only once the attempts are done with. Marking it first — which is
+                    // what this did — meant a switch that could not happen yet was remembered as
+                    // one that had, and the guard at the top swallowed every re-evaluation until
+                    // the phone found another network.
                     confirmedTransport = transport
-                    applyTransport(transport)
                 }
         }
     }
 
-    private suspend fun applyTransport(transport: NetworkTransport) {
+    /**
+     * Keeps offering to move the tunnel for as long as the answer is "not yet".
+     *
+     * A journal caught the case on the third of September: cellular at 11:59, one sweep at
+     * 12:00:12 with nothing answering, and the tunnel left on an ordinary German server for the
+     * whole ten minutes out of the building — while that server carried traffic perfectly well the
+     * entire time, so nothing else in the app had any reason to complain. The measurement had run
+     * four seconds after the network changed, which is to say inside a lift.
+     *
+     * So a sweep where nothing answers is a question still open rather than an answer. See
+     * [NetworkEnvironment.TRANSPORT_RETRY_WINDOW_MILLIS] for how long it stays open.
+     */
+    private suspend fun retryUntilApplied(transport: NetworkTransport) {
+        val startedAt = SystemClock.elapsedRealtime()
+        var attempt = 0
+        while (true) {
+            if (tunnel.state.value !is VpnState.Connected) return
+            if (applyTransport(transport)) return
+            attempt++
+            val next = NetworkEnvironment.transportRetryMillis(attempt)
+            val elapsed = SystemClock.elapsedRealtime() - startedAt
+            if (elapsed + next > NetworkEnvironment.TRANSPORT_RETRY_WINDOW_MILLIS) {
+                logs.warn(R.string.log_mobile_none_answered, attempt)
+                return
+            }
+            delay(next)
+        }
+    }
+
+    /** @return whether the question is settled — false only when a wanted move could not be made. */
+    private suspend fun applyTransport(transport: NetworkTransport): Boolean {
         val current = settings.value
-        if (current.mobileNodeIds.isEmpty()) return
-        if (tunnel.state.value !is VpnState.Connected) return
-        val carrying = profiles.selectedNode() ?: return
+        if (current.mobileNodeIds.isEmpty()) return true
+        if (tunnel.state.value !is VpnState.Connected) return true
+        val carrying = profiles.selectedNode() ?: return true
 
         when {
             NetworkEnvironment.wantsMobileServer(transport, current.mobileNodeIds, carrying.id) -> {
@@ -168,14 +202,18 @@ class FailoverWatchdog(
                     profiles.nodes.filter { it.id in current.mobileNodeIds },
                     configs.switchable.value,
                 )
-                val chosen = measureAndPick(pool)
-                if (chosen == null) {
-                    // Either the named servers have gone from the subscription, or none of them
-                    // answered from here. Staying put beats guessing: the user said which servers
-                    // may carry cellular traffic, and none of the others were on that list.
+                if (pool.isEmpty()) {
+                    // The named servers have gone from the subscription. Nothing to wait for, and
+                    // staying put beats guessing: the user said which servers may carry cellular
+                    // traffic, and none of the others were on that list.
                     logs.warn(R.string.log_mobile_none_left)
-                    return
+                    return true
                 }
+                // Told apart from the empty pool above, because the two used to share a message
+                // that said the list had emptied — which sent a reading of this exact journal off
+                // hunting for a pruning that had never happened. Here the servers are present and
+                // simply did not answer, which is a reason to try again rather than to give up.
+                val chosen = measureAndPick(pool) ?: return false
                 savedOrdinaryNodeId = carrying.id
                 logs.info(R.string.log_mobile_switch, chosen.node.name, chosen.millis.toString())
                 noteSwitch(chosen.node)
@@ -202,19 +240,21 @@ class FailoverWatchdog(
                     logs.info(R.string.log_mobile_back, remembered.name, "")
                     noteSwitch(remembered)
                     launcher.switchTo(remembered)
-                    return
+                    return true
                 }
                 val pool = FailoverGroup.preferSwitchable(
                     ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds),
                     configs.switchable.value,
                 )
-                val chosen = measureAndPick(pool) ?: return
+                if (pool.isEmpty()) return true
+                val chosen = measureAndPick(pool) ?: return false
                 savedOrdinaryNodeId = null
                 logs.info(R.string.log_mobile_back, chosen.node.name, chosen.millis.toString())
                 noteSwitch(chosen.node)
                 launcher.switchTo(chosen.node)
             }
         }
+        return true
     }
 
     /**

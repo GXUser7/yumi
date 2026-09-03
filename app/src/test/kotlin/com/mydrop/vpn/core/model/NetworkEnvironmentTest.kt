@@ -148,4 +148,38 @@ class NetworkEnvironmentTest {
             }
         }
     }
+
+    /**
+     * The lift. Wi-Fi drops in the doorway, cellular is nominally there and carries nothing, and
+     * the settle wait expires four seconds later with every probe timing out. The window has to
+     * outlast the ride and the walk out of the building, or the one sweep that happened inside a
+     * metal box is the only one there ever was.
+     */
+    @Test
+    fun `the retry window outlasts a lift ride`() {
+        var elapsed = 0L
+        var attempts = 0
+        while (true) {
+            attempts++
+            val next = NetworkEnvironment.transportRetryMillis(attempts)
+            if (elapsed + next > NetworkEnvironment.TRANSPORT_RETRY_WINDOW_MILLIS) break
+            elapsed += next
+        }
+        assertTrue("must keep trying for at least two minutes, tried $elapsed ms", elapsed >= 120_000)
+        assertTrue("must give up inside five minutes", elapsed <= NetworkEnvironment.TRANSPORT_RETRY_WINDOW_MILLIS)
+        assertTrue("a handful of attempts, not a poll", attempts in 4..8)
+    }
+
+    /** Spread out, because what is awaited is a radio finding a tower and each try costs data. */
+    @Test
+    fun `attempts spread out and then settle to a steady interval`() {
+        assertTrue(NetworkEnvironment.transportRetryMillis(1) >= 10_000)
+        assertTrue(
+            NetworkEnvironment.transportRetryMillis(2) > NetworkEnvironment.transportRetryMillis(1),
+        )
+        assertEquals(
+            NetworkEnvironment.transportRetryMillis(9),
+            NetworkEnvironment.transportRetryMillis(4),
+        )
+    }
 }
