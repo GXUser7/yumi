@@ -115,17 +115,28 @@ object NetworkEnvironment {
         currentId !in mobileIds
 
     /**
-     * Whether the tunnel should come back off the mobile list.
+     * Whether the tunnel should come off the mobile list.
      *
-     * Only when it is actually on one. A phone that reaches Wi-Fi while already on an ordinary
-     * server has nothing to return from, and moving it would be a switch nobody asked for.
+     * Only when it is actually on one. A phone that reaches a network while already on an ordinary
+     * server has nothing to come off, and moving it would be a switch nobody asked for.
+     *
+     * Wi-Fi always wants this: the list is for cellular and the phone is not on cellular. Cellular
+     * wants it too when [preferOrdinaryOnCellular] is set, and that is the half that was missing —
+     * the switch made failover prefer the ordinary servers but left nobody to move the tunnel onto
+     * them, so connecting on LTE while sitting on a mobile server stayed exactly where it was.
+     * Whether the ordinary servers can actually be reached is not decided here; the caller
+     * measures, and stays put when none of them answer.
      */
     fun wantsOrdinaryServer(
         transport: NetworkTransport,
         mobileIds: Set<String>,
         currentId: String?,
-    ): Boolean = transport == NetworkTransport.Wifi &&
-        mobileIds.isNotEmpty() &&
+        preferOrdinaryOnCellular: Boolean = false,
+    ): Boolean = mobileIds.isNotEmpty() &&
         currentId != null &&
-        currentId in mobileIds
+        currentId in mobileIds &&
+        (
+            transport == NetworkTransport.Wifi ||
+                (preferOrdinaryOnCellular && transport == NetworkTransport.Cellular)
+            )
 }

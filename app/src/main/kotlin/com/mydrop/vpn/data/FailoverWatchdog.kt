@@ -223,7 +223,12 @@ class FailoverWatchdog(
                 launcher.switchTo(chosen.node)
             }
 
-            NetworkEnvironment.wantsOrdinaryServer(transport, current.mobileNodeIds, carrying.id) -> {
+            NetworkEnvironment.wantsOrdinaryServer(
+                transport,
+                current.mobileNodeIds,
+                carrying.id,
+                current.preferOrdinaryOnCellular,
+            ) -> {
                 val remembered = savedOrdinaryNodeId
                     ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
                     ?.takeIf { it.id !in current.mobileNodeIds }
@@ -238,15 +243,28 @@ class FailoverWatchdog(
                 // never nominated for anything — and pick whichever happened to answer quickest.
                 // The failover list exists precisely to say which servers are acceptable to be
                 // moved onto, and coming home is a move like any other.
-                if (current.restoreWifiNodeOnWifi && remembered != null) {
+                // Only coming home to Wi-Fi. On cellular there is no server to come back to —
+                // the tunnel never left one, it is being moved off the list for the first time —
+                // and the remembered id is whatever Wi-Fi last had, which is not an answer to
+                // "which ordinary server works on this cellular network".
+                if (transport == NetworkTransport.Wifi &&
+                    current.restoreWifiNodeOnWifi &&
+                    remembered != null
+                ) {
                     savedOrdinaryNodeId = null
                     logs.info(R.string.log_mobile_back, remembered.name, "")
                     noteSwitch(remembered)
                     launcher.switchTo(remembered)
                     return true
                 }
+                // The whole list on cellular, for the same reason the failover path measures it
+                // whole there: a sample of seven that happens to be dead would conclude the
+                // ordinary servers are unreachable from this network and leave the tunnel on the
+                // mobile list for the rest of the trip.
+                val whole = current.preferOrdinaryOnCellular &&
+                    transport == NetworkTransport.Cellular
                 val pool = FailoverGroup.preferSwitchable(
-                    ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds),
+                    ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds, whole),
                     configs.switchable.value,
                 )
                 if (pool.isEmpty()) return true
@@ -286,17 +304,21 @@ class FailoverWatchdog(
      * one — the same pool [swapAwayFrom] draws from, and for the same reason: these are the
      * servers they have said they are willing to be on.
      */
-    private fun ordinaryPoolFor(anchor: ProxyNode, mobileIds: Set<String>): List<ProxyNode> =
-        FailoverGroup.sample(
-            FailoverGroup.candidates(
-                nodes = profiles.nodes,
-                selected = anchor,
-                latencies = profiles.state.value.latencies,
-                limit = FailoverGroup.roomFor(mobileIds.size),
-                chosen = settings.value.failoverNodeIds,
-                exclude = mobileIds,
-            ),
+    private fun ordinaryPoolFor(
+        anchor: ProxyNode,
+        mobileIds: Set<String>,
+        whole: Boolean = false,
+    ): List<ProxyNode> {
+        val eligible = FailoverGroup.candidates(
+            nodes = profiles.nodes,
+            selected = anchor,
+            latencies = profiles.state.value.latencies,
+            limit = if (whole) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
+            chosen = settings.value.failoverNodeIds,
+            exclude = mobileIds,
         )
+        return if (whole) eligible else FailoverGroup.sample(eligible)
+    }
 
     private data class Measured(val node: ProxyNode, val millis: Int)
 

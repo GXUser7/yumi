@@ -226,4 +226,63 @@ class NetworkEnvironmentTest {
             }
         }
     }
+
+    /**
+     * The half that was missing. The switch made failover prefer the ordinary servers but left
+     * nobody to move the tunnel onto them, so connecting on LTE while sitting on a mobile server
+     * stayed exactly where it was — which is what a journal showed at 17:06 on the third, on
+     * cellular, with the switch on and a Norwegian mobile server carrying traffic.
+     */
+    @Test
+    fun `on cellular the tunnel comes off the mobile list when asked to`() {
+        val mobile = setOf("m1")
+
+        assertTrue(
+            NetworkEnvironment.wantsOrdinaryServer(
+                NetworkTransport.Cellular, mobile, "m1", preferOrdinaryOnCellular = true,
+            ),
+        )
+        assertFalse(
+            "without the switch the list is the pool and staying on it is the point",
+            NetworkEnvironment.wantsOrdinaryServer(
+                NetworkTransport.Cellular, mobile, "m1", preferOrdinaryOnCellular = false,
+            ),
+        )
+    }
+
+    /** Wi-Fi never needed asking: the list is for cellular and this is not cellular. */
+    @Test
+    fun `coming off the list on Wi-Fi is unchanged by the switch`() {
+        val mobile = setOf("m1")
+
+        for (prefer in listOf(false, true)) {
+            assertTrue(
+                NetworkEnvironment.wantsOrdinaryServer(
+                    NetworkTransport.Wifi, mobile, "m1", preferOrdinaryOnCellular = prefer,
+                ),
+            )
+        }
+    }
+
+    /** Nothing to come off when the tunnel is not on the list. */
+    @Test
+    fun `an ordinary server is not moved off the list it is not on`() {
+        val mobile = setOf("m1")
+
+        assertFalse(
+            NetworkEnvironment.wantsOrdinaryServer(
+                NetworkTransport.Cellular, mobile, "ordinary", preferOrdinaryOnCellular = true,
+            ),
+        )
+        assertFalse(
+            NetworkEnvironment.wantsOrdinaryServer(
+                NetworkTransport.Cellular, emptySet(), "m1", preferOrdinaryOnCellular = true,
+            ),
+        )
+        assertFalse(
+            NetworkEnvironment.wantsOrdinaryServer(
+                NetworkTransport.Cellular, mobile, null, preferOrdinaryOnCellular = true,
+            ),
+        )
+    }
 }
