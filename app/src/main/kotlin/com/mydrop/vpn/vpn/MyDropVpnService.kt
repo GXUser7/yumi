@@ -30,6 +30,7 @@ import androidx.core.content.ContextCompat
 import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.CoreChatter
 import com.mydrop.vpn.core.model.CoreGenerations
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.NetworkTransport
@@ -286,6 +287,13 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * shown five.
      */
     private val coreGenerations = CoreGenerations()
+
+    /**
+     * The core's budget for writing to the journal. See [CoreChatter] — a storm of its lines once
+     * left a fifty-megabyte journal covering two minutes, with the app's own account of what it
+     * had done evicted from it entirely.
+     */
+    private val coreChatter = CoreChatter()
 
     private var commandServer: CommandServer? = null
     private var commandClient: CommandClient? = null
@@ -683,6 +691,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         stopDefaultInterfaceMonitor()
         stopWakeMonitor()
         coreGenerations.reset()
+        coreChatter.reset()
 
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
@@ -819,8 +828,16 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             while (messageList?.hasNext() == true) {
                 val entry = messageList.next()
                 val level = entry.level.toLogLevel()
-                logs.log(level, entry.message)
+                // Counted before the budget is consulted, and from every line rather than the
+                // ones that get written: the count of live cores is the reason the budget exists,
+                // and reading it off a sample of the evidence would be reading it off the symptom.
                 noteCoreGeneration(entry.message)
+                val verdict = coreChatter.admit(System.currentTimeMillis())
+                if (verdict.suppressed > 0) {
+                    logs.warn(R.string.log_core_flood, verdict.suppressed)
+                }
+                if (!verdict.write) continue
+                logs.log(level, entry.message)
                 // Mirrored to logcat as well as the in-app journal. The journal is an in-memory
                 // ring buffer that dies with the process, so when the core misbehaves there is
                 // otherwise nothing to read from a development machine.
