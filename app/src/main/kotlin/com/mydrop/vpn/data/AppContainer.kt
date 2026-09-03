@@ -101,12 +101,16 @@ class AppContainer(context: Context) {
         val state = profiles.state.value
         val current = settings.value
         val byId = state.nodes.associateBy { it.id }
-        val mobile = current.mobileNodeIds.mapNotNull(byId::get)
+        // Truncated here rather than by the `take` at the end, which trims the tail — and the
+        // tail is the ordinary spares. A long mobile list used to consume every slot before they
+        // were ever reached.
+        val named = current.mobileNodeIds.mapNotNull(byId::get)
+        val mobile = named.take(com.mydrop.vpn.core.model.FailoverGroup.mobileSlots(named.size))
         val failover = com.mydrop.vpn.core.model.FailoverGroup.candidates(
             nodes = state.nodes,
             selected = selected,
             latencies = state.latencies,
-            limit = com.mydrop.vpn.core.model.FailoverGroup.roomFor(mobile.size),
+            limit = com.mydrop.vpn.core.model.FailoverGroup.roomFor(named.size),
             chosen = current.failoverNodeIds,
             // Excluded here for the same reason FailoverWatchdog.swapAwayFrom excludes them: the
             // mobile servers are added above, by name, and a candidate list that can also contain

@@ -270,23 +270,83 @@ class FailoverGroupTest {
 
     @Test
     fun `the group always leaves room for the servers alongside it`() {
-        // Whatever the mobile list costs, the three parts have to fit in one selector group:
-        // a draw from a longer list than the core holds is a switch that cannot happen.
-        for (mobile in 0..40) {
+        // Whatever the mobile list costs, the parts have to fit in one selector group: a draw from
+        // a longer list than the core holds is a switch that cannot happen.
+        for (mobile in 0..60) {
             val spares = (FailoverGroup.roomFor(mobile) - 1).coerceAtLeast(0)
             assertTrue(
                 "selected + mobile + spares must fit in one selector group",
-                1 + mobile + spares <= maxOf(FailoverGroup.SWITCHABLE, 1 + mobile),
+                1 + FailoverGroup.mobileSlots(mobile) + spares <= FailoverGroup.SWITCHABLE + 1,
             )
         }
-        // And a mobile list that fills the group on its own leaves no spares at all, rather than
-        // naming servers the core was never given.
-        assertEquals(emptyList<ProxyNode>(), FailoverGroup.candidates(
-            nodes = (1..5).map { node("n$it") },
-            selected = node("cur"),
-            latencies = emptyMap(),
-            limit = FailoverGroup.roomFor(FailoverGroup.SWITCHABLE),
-        ))
+        // This used to assert the opposite — that a mobile list filling the group on its own left
+        // no spares at all, which read as honesty about a group that was full. On a phone with
+        // thirty-four mobile servers it meant the core was handed no ordinary server at any point,
+        // and «нечем заменить» on a subscription of a hundred and forty. The list gives way now.
+        assertTrue(
+            FailoverGroup.candidates(
+                nodes = (1..5).map { node("n$it") },
+                selected = node("cur"),
+                latencies = emptyMap(),
+                limit = FailoverGroup.roomFor(FailoverGroup.SWITCHABLE),
+            ).isNotEmpty(),
+        )
     }
 
+
+    /**
+     * A phone with thirty-four servers on the mobile list and twenty-four slots. `roomFor` went
+     * negative, [FailoverGroup.candidates] answered every request with nothing, and the group the
+     * core received held no ordinary server at all — so on Wi-Fi there was nothing to come back to
+     * and nothing to replace a dead server with.
+     */
+    @Test
+    fun `a long mobile list cannot starve the ordinary side`() {
+        val room = FailoverGroup.roomFor(34)
+        assertTrue("thirty-four mobile servers left room for $room", room >= FailoverGroup.MIN_ORDINARY)
+        assertTrue(
+            "the two parts must still fit the group",
+            FailoverGroup.mobileSlots(34) + room <= FailoverGroup.SWITCHABLE,
+        )
+    }
+
+    /** However long the list, the ordinary side keeps enough for a draw. */
+    @Test
+    fun `the ordinary reserve survives any mobile list`() {
+        for (count in intArrayOf(0, 1, 12, 24, 34, 60, 500)) {
+            assertTrue(
+                "mobile=$count left ${FailoverGroup.roomFor(count)}",
+                FailoverGroup.roomFor(count) >= FailoverGroup.MIN_ORDINARY,
+            )
+            assertTrue(
+                "mobile=$count claimed more slots than it named",
+                FailoverGroup.mobileSlots(count) <= count,
+            )
+        }
+    }
+
+    /** A reserve smaller than one draw would be a reserve in name only. */
+    @Test
+    fun `the reserve holds a whole draw`() {
+        assertTrue(FailoverGroup.MIN_ORDINARY >= FailoverGroup.MAX_GROUP)
+    }
+
+    /** With room restored, the ordinary pool is actually populated again. */
+    @Test
+    fun `ordinary candidates come back for a long mobile list`() {
+        val mobileIds = (1..34).map { "m$it" }.toSet()
+        val nodes = (1..34).map { node("m$it") } +
+            (1..20).map { node("o$it") }
+
+        val ordinary = FailoverGroup.candidates(
+            nodes = nodes,
+            selected = nodes.last(),
+            latencies = emptyMap(),
+            limit = FailoverGroup.roomFor(mobileIds.size),
+            exclude = mobileIds,
+        )
+
+        assertTrue("nothing to come back to", ordinary.isNotEmpty())
+        assertTrue("a mobile server leaked in", ordinary.none { it.id in mobileIds })
+    }
 }

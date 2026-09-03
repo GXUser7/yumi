@@ -28,7 +28,35 @@ object FailoverGroup {
      * draw has to be. Membership is cheap: an outbound is a few hundred bytes of configuration
      * that costs nothing until it carries traffic.
      */
-    const val SWITCHABLE = 24
+    const val SWITCHABLE = 48
+
+    /**
+     * Slots the ordinary side of the group keeps whatever the mobile list does.
+     *
+     * Letting the mobile list take the whole group was written as a deliberate choice — "a mobile
+     * list long enough to fill the group on its own leaves no room for spares" — on the assumption
+     * that such a list would be unusual. A phone with thirty-four mobile servers and twenty-four
+     * slots showed what it actually costs: `roomFor` went negative, [candidates] answered every
+     * request with nothing, and the group handed to the core held the current server and mobile
+     * servers and not one ordinary one.
+     *
+     * That is not a smaller group, it is a different app. On Wi-Fi there was nothing to come back
+     * to from the mobile list and nothing to replace a dead server with — the journal filled with
+     * «не отвечает, но заменить его нечем» while a subscription of a hundred and forty servers sat
+     * there unused. Neither symptom points anywhere near a group size.
+     *
+     * Twelve is enough for a real draw: [sample] wants seven, and the rest absorb the servers that
+     * have just been failing.
+     */
+    const val MIN_ORDINARY = 12
+
+    /**
+     * How many of [mobileCount] servers actually go into the group.
+     *
+     * The rest are still switchable in the sense that matters — they are simply reached by
+     * restarting the core rather than by pointing the selector, which is slower and always works.
+     */
+    fun mobileSlots(mobileCount: Int): Int = minOf(mobileCount, SWITCHABLE - MIN_ORDINARY)
 
     /**
      * The `limit` to ask [candidates] for when [mobileCount] servers are also going into the
@@ -37,12 +65,8 @@ object FailoverGroup {
      * Both the builder of the group and the watchdog choosing inside it have to arrive at the
      * same number. If the watchdog draws from a longer list than the group holds, the lot can
      * fall on a server the core has never heard of, and an instant switch becomes a failed one.
-     *
-     * Deliberately allowed to reach zero. A mobile list long enough to fill the group on its own
-     * leaves no room for spares, and [candidates] answers such a limit with nothing — which is
-     * the truth, and better than handing back names the core cannot be pointed at.
      */
-    fun roomFor(mobileCount: Int): Int = SWITCHABLE - mobileCount
+    fun roomFor(mobileCount: Int): Int = SWITCHABLE - mobileSlots(mobileCount)
 
     /**
      * Companions for [selected], best first.
