@@ -1,6 +1,8 @@
 package com.mydrop.vpn.core.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -134,5 +136,61 @@ class CoreGenerationsTest {
         counter.observe("INFO[0001] fresh", start + 1_000L)
         assertEquals(1, counter.liveCores(start + 1_000L))
         assertNull(counter.dueReport(start + 1_000L))
+    }
+
+    /**
+     * Which core wrote the line, so the leaked one's output can be kept in a file of its own.
+     *
+     * The ages are the real ones: a journal window of a hundred and twenty-three seconds carried
+     * lines aged six hundred and thirty-five seconds through two thousand one hundred and
+     * twenty-seven, a spread of twenty-five minutes.
+     */
+    @Test
+    fun `lines from an older core are marked as leaked`() {
+        val counter = CoreGenerations()
+        val now = 1_000_000L
+
+        val young = counter.observe("INFO[0635] router: ...", now)
+        val old = counter.observe("INFO[2127] router: ...", now)
+
+        assertTrue(young.fromCore)
+        assertFalse("the newest core is the one the app believes it is running", young.leaked)
+        assertTrue("a core twenty-five minutes older than the newest is the fault", old.leaked)
+        assertEquals(2_127_000L, old.ageMillis)
+    }
+
+    /** Whichever arrives first, the older one is still the leak. */
+    @Test
+    fun `order of arrival does not decide which core is the live one`() {
+        val counter = CoreGenerations()
+        val now = 1_000_000L
+
+        assertFalse(counter.observe("INFO[2127] a", now).leaked)
+        assertTrue(
+            "the newer core arriving second must take over as the live one",
+            counter.observe("INFO[2127] b", now + 50).leaked ||
+                counter.observe("INFO[0635] c", now + 100).let { !it.leaked },
+        )
+        assertTrue(counter.observe("INFO[2130] d", now + 150).leaked)
+    }
+
+    /** One core writing alone is never its own leak, however long it has been up. */
+    @Test
+    fun `a single core is never leaked`() {
+        val counter = CoreGenerations()
+        var now = 1_000_000L
+        for (age in 2100..2130) {
+            assertFalse("age $age called itself a leak", counter.observe("INFO[$age] x", now).leaked)
+            now += 1_000
+        }
+    }
+
+    /** The app's own lines carry no age and must fall straight through. */
+    @Test
+    fun `an app line is not attributed to any core`() {
+        val line = CoreGenerations().observe("switched to Germany without restarting", 1_000_000L)
+
+        assertFalse(line.fromCore)
+        assertFalse(line.leaked)
     }
 }

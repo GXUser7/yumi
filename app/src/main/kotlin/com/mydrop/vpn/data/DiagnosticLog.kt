@@ -23,10 +23,22 @@ import java.util.Locale
  * them in memory for exactly that reason. Writing them to storage is a trade worth making while
  * chasing a bug on your own phone, and not one to make silently for everybody else.
  */
-class DiagnosticLog(directory: File, private val enabled: Boolean) {
+class DiagnosticLog(
+    directory: File,
+    private val enabled: Boolean,
+    /**
+     * Which file this instance owns.
+     *
+     * A second one is kept for the lines of leaked cores — see [CORES_FILE_NAME]. The point of a
+     * separate file is that the main journal is the thing being drowned: a leak writes hundreds of
+     * lines a second, so the record of it cannot live in the ring it is overflowing.
+     */
+    name: String = FILE_NAME,
+    private val maxBytes: Long = MAX_BYTES,
+) {
 
-    private val file = File(directory, FILE_NAME)
-    private val previous = File(directory, "$FILE_NAME.1")
+    private val file = File(directory, name)
+    private val previous = File(directory, "$name.1")
     private val lock = Any()
     private val timestamps = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
@@ -41,7 +53,7 @@ class DiagnosticLog(directory: File, private val enabled: Boolean) {
                 file.parentFile?.mkdirs()
                 // Rotated before the write rather than after, so the cap is a cap: checking
                 // afterwards lets one long line push the file past it and leaves it there.
-                if (file.length() > MAX_BYTES) {
+                if (file.length() > maxBytes) {
                     previous.delete()
                     file.renameTo(previous)
                 }
@@ -67,8 +79,16 @@ class DiagnosticLog(directory: File, private val enabled: Boolean) {
         Unit
     }
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "yumi.log"
+
+        /**
+         * The lines of cores that should no longer exist, kept apart from everything else.
+         *
+         * Smaller than the main journal on purpose: it holds one kind of line, it only fills while
+         * a fault is happening, and it is worth nothing if the fault's own noise rotates it away.
+         */
+        const val CORES_FILE_NAME = "yumi-cores.log"
 
         /**
          * Two of these at most, so the whole thing is bounded at fifty megabytes.

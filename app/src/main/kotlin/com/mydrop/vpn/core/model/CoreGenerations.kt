@@ -43,8 +43,22 @@ class CoreGenerations(
      * Lines the app itself wrote have no age prefix and are ignored, so this can be fed everything
      * without filtering.
      */
-    fun observe(message: String, nowMillis: Long) {
-        val uptimeSeconds = uptimeSecondsOf(message) ?: return
+    /**
+     * What one line says about who wrote it.
+     *
+     * @param fromCore whether it was a core line at all — the app's own lines carry no age.
+     * @param leaked whether it came from a core older than the newest one seen. The newest is the
+     *   one the app believes it is running; anything still writing behind it is the fault.
+     * @param ageMillis how long that core has been alive.
+     */
+    data class Line(val fromCore: Boolean, val leaked: Boolean, val ageMillis: Long) {
+        internal companion object {
+            val NotCore = Line(fromCore = false, leaked = false, ageMillis = 0L)
+        }
+    }
+
+    fun observe(message: String, nowMillis: Long): Line {
+        val uptimeSeconds = uptimeSecondsOf(message) ?: return Line.NotCore
         val startedAt = nowMillis - uptimeSeconds * 1000L
 
         val existing = generations.minByOrNull { kotlin.math.abs(it.startedAtMillis - startedAt) }
@@ -63,6 +77,16 @@ class CoreGenerations(
         // A core that stopped writing is gone, and keeping it would make the count creep upwards
         // over a long session until every reconnect looked like a leak.
         generations.removeAll { nowMillis - it.lastSeenMillis > liveWindowMillis }
+
+        // Newest by start, not by which wrote last: a leaked core goes on writing, and picking the
+        // most recent writer would make whichever one happened to be busiest look like the live
+        // one. The app's core is the one it started last.
+        val newest = generations.maxOfOrNull { it.startedAtMillis } ?: startedAt
+        return Line(
+            fromCore = true,
+            leaked = startedAt < newest - sameGenerationMillis,
+            ageMillis = uptimeSeconds * 1000L,
+        )
     }
 
     /** Cores that have written something inside the live window. */

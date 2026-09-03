@@ -536,6 +536,8 @@
     <string name="alert_list_emptied_title">Список серверов опустел</string>
     <string name="alert_list_emptied_failover">Обновление подписки унесло все серверы для подмены. Замену туннель снова выбирает сам, по всей подписке.</string>
     <string name="alert_list_emptied_mobile">Обновление подписки унесло все серверы для мобильного. Разделение сетей выключилось: везде снова общий список.</string>
+    <string name="alert_cores_title">Одновременно работает ядер: %1$d</string>
+    <string name="alert_cores_text">Они рвут соединения друг у друга. Старшему %1$d мин — пришлите, пожалуйста, журнал вместе с yumi-cores.log</string>
     <string name="alert_update_title">Вышла версия %1$s</string>
     <string name="alert_update_text">Откройте настройки, чтобы скачать и установить</string>
 

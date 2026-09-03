@@ -540,6 +540,8 @@ Send it here: %2$s</string>
     <string name="alert_list_emptied_title">A server list is empty</string>
     <string name="alert_list_emptied_failover">A subscription refresh took away every failover server. Replacements are chosen automatically again, from the whole subscription.</string>
     <string name="alert_list_emptied_mobile">A subscription refresh took away every mobile server. The networks are no longer separated: one list everywhere again.</string>
+    <string name="alert_cores_title">%1$d cores running at once</string>
+    <string name="alert_cores_text">They are cutting connections out from under each other. Oldest has been alive %1$d min — please send the journal, yumi-cores.log included</string>
     <string name="alert_update_title">Version %1$s is out</string>
     <string name="alert_update_text">Open Settings to download and install it</string>
 

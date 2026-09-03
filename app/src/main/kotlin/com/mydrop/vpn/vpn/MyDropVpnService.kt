@@ -359,6 +359,16 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private val logs by lazy { (application as MyDropApplication).container.logs }
 
+    /** Where the lines of cores that should not exist go. Empty on a healthy phone. */
+    private val coreLeakLog by lazy { (application as MyDropApplication).container.coreLeakLog }
+
+    private val alerts by lazy { (application as MyDropApplication).container.alerts }
+
+    /** Whether the leak hunt's instruments may run at all — debug builds only. */
+    private val diagnosticBuild by lazy {
+        (application as MyDropApplication).container.diagnosticBuild
+    }
+
     /** Notification copy and failure messages both surface to the user; both follow the setting. */
     private val strings by lazy { (application as MyDropApplication).container.strings }
 
@@ -831,7 +841,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 // Counted before the budget is consulted, and from every line rather than the
                 // ones that get written: the count of live cores is the reason the budget exists,
                 // and reading it off a sample of the evidence would be reading it off the symptom.
-                noteCoreGeneration(entry.message)
+                noteCoreGeneration(entry.message, level)
                 val verdict = coreChatter.admit(System.currentTimeMillis())
                 if (verdict.suppressed > 0) {
                     logs.warn(R.string.log_core_flood, verdict.suppressed)
@@ -1380,9 +1390,21 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * it is true, several cores are fighting over one TUN and cutting each other's connections,
      * and the person holding the phone is experiencing that as the app being broken.
      */
-    private fun noteCoreGeneration(message: String) {
+    private fun noteCoreGeneration(message: String, level: LogEntry.Level) {
         val now = System.currentTimeMillis()
-        coreGenerations.observe(message, now)
+        val line = coreGenerations.observe(message, now)
+
+        // Written whole and outside the budget, because this file exists for exactly these lines
+        // and there are only ever a few of them on a healthy phone: none. Kept apart from the main
+        // journal so the leak's own noise cannot rotate away the record of the leak.
+        if (line.leaked && diagnosticBuild) {
+            coreLeakLog.write(
+                level.name.first(),
+                "core+${line.ageMillis / 1000}s",
+                message,
+            )
+        }
+
         val report = coreGenerations.dueReport(now) ?: return
         logs.warn(
             R.string.log_cores_alive,
@@ -1393,6 +1415,12 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             NATIVE_TAG,
             "core leak: ${report.liveCores} instances alive, oldest ${report.oldestAgeMillis}ms",
         )
+        // Past the user's alert switches deliberately, and only where the instruments run: those
+        // switches are about work done on the owner's behalf, and this is the app saying it is in
+        // a state it cannot get out of.
+        if (diagnosticBuild) {
+            alerts.coresAlive(report.liveCores, report.oldestAgeMillis / 60_000)
+        }
     }
 
     private fun stopWakeMonitor() {

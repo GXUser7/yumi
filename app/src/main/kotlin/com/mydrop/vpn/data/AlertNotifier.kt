@@ -97,8 +97,27 @@ class AlertNotifier(
         text = strings.get(R.string.alert_update_text),
     )
 
+    /**
+     * Several cores are alive at once — debug builds only, and posted past the user's own alert
+     * switches on purpose.
+     *
+     * Those switches decide how chatty the app is about work it did on the owner's behalf. This is
+     * not that: it is an instrument saying the app is in a state it has no way to recover from,
+     * addressed to whoever is hunting it. On a phone that is not being debugged it never fires,
+     * because the file behind it is never written either.
+     */
+    fun coresAlive(count: Int, oldestMinutes: Long) = postAlways(
+        id = ID_CORES,
+        title = strings.get(R.string.alert_cores_title, count),
+        text = strings.get(R.string.alert_cores_text, oldestMinutes),
+    )
+
     private fun post(kind: AlertKind, id: Int, title: String, text: String) {
         if (!enabled(kind)) return
+        postAlways(id, title, text)
+    }
+
+    private fun postAlways(id: Int, title: String, text: String) {
         val notifications = manager ?: return
         ensureChannel(notifications)
 
@@ -145,6 +164,7 @@ class AlertNotifier(
         const val ID_SERVER = 4001
         const val ID_DNS = 4002
         const val ID_UPDATE = 4003
+        const val ID_CORES = 4004
         const val ID_LIST = 4004
     }
 }

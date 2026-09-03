@@ -44,6 +44,29 @@ class AppContainer(context: Context) {
         enabled = debuggable,
     )
 
+    /**
+     * Lines written by cores that should no longer exist, and nothing else.
+     *
+     * Debug builds only — this is an instrument for finding one fault, not a feature. It stays
+     * empty on a healthy phone, which is itself the reading: a file with anything in it is a leak
+     * that happened, with the time it started and how old the leaked core was.
+     *
+     * Separate from [diagnostics] because that journal is the casualty. A leak writes hundreds of
+     * lines a second, so a record kept inside the ring it is overflowing is a record that rotates
+     * itself away before anybody looks — which is exactly what happened on the third of September,
+     * where fifty megabytes of journal covered two minutes and said nothing about the three cores
+     * that filled it.
+     */
+    val coreLeakLog = DiagnosticLog(
+        directory = java.io.File(context.filesDir, "diagnostics"),
+        enabled = debuggable,
+        name = DiagnosticLog.CORES_FILE_NAME,
+        maxBytes = 4L * 1024 * 1024,
+    )
+
+    /** True in debug builds, where the leak hunt's instruments are allowed to run. */
+    val diagnosticBuild: Boolean get() = debuggable
+
     /** Says out loud what the app would otherwise fix in silence. */
     val alerts = AlertNotifier(appContext, strings, enabled = { kind ->
         settings.value.let {
