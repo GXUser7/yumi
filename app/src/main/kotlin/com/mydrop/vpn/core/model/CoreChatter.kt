@@ -19,23 +19,41 @@ package com.mydrop.vpn.core.model
  * destroys the evidence of the fault precisely when the fault is happening, and the one artefact
  * anyone can send in comes back empty of everything except the noise.
  *
- * So the core gets a budget and the app does not. [PER_SECOND] a second is far above anything
- * normal running produces and far below a storm, and what does not fit is counted rather than
+ * So the core gets a budget and the app does not, and what does not fit is counted rather than
  * dropped silently: the count is the most useful line in the file, because a core that wants to
  * write eight hundred lines a second is a core in trouble whatever else the journal says.
  *
- * Second, quieter benefit: [com.mydrop.vpn.data.LogRepository] republishes its whole buffer on
- * every line, so a line costs the length of the ring. At eight hundred a second against twenty
- * thousand entries that is some seventeen million element copies a second, spent on a phone whose
- * cores are already fighting each other. The budget takes that down with it.
+ * ## Why a bucket and not a cap per second
+ *
+ * A flat cap was the first shape of this, and on Xray it was wrong. Ordinary browsing is not a
+ * steady trickle — it is quiet, then a page opens forty connections and the core writes five lines
+ * about each of them. A three-hour journal from a phone measured that: fifty thousand core lines
+ * over two and a half thousand seconds, a **peak sustained rate of two hundred and thirty-three a
+ * second over ten seconds**, and single seconds asking for twelve hundred. Against a flat sixty a
+ * second that threw away thirty-nine per cent of everything the core said and raised the alarm
+ * below ninety-six times, in a session where nothing was wrong. A warning that common is not read.
+ *
+ * A bucket separates the two questions. [BURST] is how much of a spike may pass at once, and it is
+ * what makes ordinary bursts invisible. [PER_SECOND] is the rate the bucket refills at, and it —
+ * not the burst — is what a *sustained* storm is clamped to, which is the number that decides
+ * whether the file survives. So the burst can be generous without weakening the protection at all:
+ * eight hundred and forty-one lines a second empties the bucket in under a second and is held to
+ * sixty a second for as long as it lasts, exactly as before.
+ *
+ * Second, quieter reason the burst is not larger still: [com.mydrop.vpn.data.LogRepository]
+ * republishes its whole buffer on every line, so a line costs the length of the ring. The refill
+ * rate bounds that cost in the steady state; the burst is what it can cost at once.
  */
 class CoreChatter(
-    private val perWindow: Int = PER_SECOND,
+    private val perSecond: Int = PER_SECOND,
+    private val burst: Int = BURST,
     private val windowMillis: Long = WINDOW_MILLIS,
 ) {
 
-    private var windowStartMillis = 0L
-    private var admitted = 0
+    /** Fractional, because a refill of sixty a second must survive being asked every few millis. */
+    private var tokens = burst.toDouble()
+    private var refilledAtMillis = UNSTARTED
+    private var windowStartMillis = UNSTARTED
     private var dropped = 0
 
     /**
@@ -47,37 +65,72 @@ class CoreChatter(
 
     /** Whether one line from the core may be written now. */
     fun admit(nowMillis: Long): Verdict {
+        refill(nowMillis)
+
         // Also the first call, when the window has never started: nowMillis is far past zero.
-        if (nowMillis - windowStartMillis >= windowMillis) {
-            val hidden = dropped
+        val hidden = if (windowStartMillis == UNSTARTED || nowMillis - windowStartMillis >= windowMillis) {
             windowStartMillis = nowMillis
-            admitted = 1
-            dropped = 0
+            dropped.also { dropped = 0 }
+        } else {
+            0
+        }
+
+        if (tokens >= 1.0) {
+            tokens -= 1.0
             return Verdict(write = true, suppressed = hidden)
         }
-        if (admitted < perWindow) {
-            admitted++
-            return Verdict(write = true, suppressed = 0)
-        }
         dropped++
-        return Verdict(write = false, suppressed = 0)
+        // A rollover that lands on a dropped line still has to report: the count belongs to the
+        // window that ended, not to whichever line happens to be admitted next, and a storm can
+        // run for whole windows without a single line getting through.
+        return Verdict(write = false, suppressed = hidden)
+    }
+
+    private fun refill(nowMillis: Long) {
+        if (refilledAtMillis == UNSTARTED) {
+            refilledAtMillis = nowMillis
+            return
+        }
+        // Backwards is not expected — the caller passes a monotonic clock — but a negative elapsed
+        // would drain the bucket rather than fill it, and silently throttling a healthy core is a
+        // worse failure than briefly refusing to.
+        val elapsed = (nowMillis - refilledAtMillis).coerceAtLeast(0L)
+        refilledAtMillis = nowMillis
+        tokens = (tokens + elapsed * perSecond / 1000.0).coerceAtMost(burst.toDouble())
     }
 
     /** Forgotten along with the core that was shouting. */
     fun reset() {
-        windowStartMillis = 0L
-        admitted = 0
+        tokens = burst.toDouble()
+        refilledAtMillis = UNSTARTED
+        windowStartMillis = UNSTARTED
         dropped = 0
     }
 
     internal companion object {
         /**
-         * Chosen from what the two states actually look like rather than from a round number.
-         * Ordinary running is a handful of lines a second; the storm was eight hundred and forty.
-         * Sixty keeps every line of the former and cuts the latter by nine tenths.
+         * The rate a storm is held to, chosen from what the two states actually look like.
+         *
+         * Ordinary running averages a handful of lines a second; the storm was eight hundred and
+         * forty. Sixty is far above the former as an average and cuts the latter by nine tenths.
          */
         const val PER_SECOND = 60
 
+        /**
+         * How much of a spike passes untouched — ten seconds' worth of refill.
+         *
+         * Measured against the three-hour phone journal: at sixty with no burst the core lost
+         * thirty-nine per cent of its lines and tripped the alarm ninety-six times; at this size
+         * it loses eleven and trips it twenty-three. Larger would be better journalling still —
+         * twelve hundred brings the loss under one per cent — and the thing to weigh before
+         * raising it is not the storm, which the refill rate handles either way, but the cost of
+         * the burst arriving at once through `LogRepository`, which copies its whole ring per line.
+         */
+        const val BURST = 600
+
         const val WINDOW_MILLIS = 1_000L
+
+        /** No clock reading, rather than a clock reading of zero. */
+        private const val UNSTARTED = Long.MIN_VALUE
     }
 }

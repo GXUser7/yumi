@@ -1340,7 +1340,9 @@ class MyDropVpnService : VpnService() {
     private fun writeCoreLine(level: LogEntry.Level, message: String) {
         noteCoreGeneration(message, level)
         val verdict = coreChatter.admit(SystemClock.elapsedRealtime())
-        if (verdict.suppressed > 0) logs.warn(R.string.log_core_flood, verdict.suppressed)
+        if (verdict.suppressed > 0) {
+            logs.warn(R.string.log_core_flood, strings.plural(R.plurals.core_lines, verdict.suppressed))
+        }
         if (!verdict.write) return
 
         logs.log(level, message)
