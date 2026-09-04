@@ -16,6 +16,16 @@ VPN-клиент для Android: подписки, серверы по ссыл�
 | <img src="docs/screenshots/tunnel-off.png" width="240"> | <img src="docs/screenshots/connected.png" width="240"> | <img src="docs/screenshots/session.png" width="240"> |
 | <img src="docs/screenshots/servers.png" width="240"> | <img src="docs/screenshots/subscriptions.png" width="240"> | <img src="docs/screenshots/speed.png" width="240"> |
 
+### На телевизоре
+
+Отдельное приложение для Android TV — файл **yumi-tv** в том же релизе. Управление с пульта,
+подписка переезжает с телефона по QR-коду.
+
+| | |
+|:-:|:-:|
+| <img src="docs/screenshots/tv-connect.png" width="380"> | <img src="docs/screenshots/tv-servers.png" width="380"> |
+| <img src="docs/screenshots/tv-pairing.png" width="380"> | <img src="docs/screenshots/tv-settings.png" width="380"> |
+
 ## Что умеет
 
 **Добавить можно почти что угодно.** Ссылки `vless://`, `vmess://`, `trojan://`, `ss://`,

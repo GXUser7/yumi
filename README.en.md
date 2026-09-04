@@ -16,6 +16,16 @@ phones; if you are not sure which one you have, take arm64. Android 8.0 or newer
 | <img src="docs/screenshots/tunnel-off.png" width="240"> | <img src="docs/screenshots/connected.png" width="240"> | <img src="docs/screenshots/session.png" width="240"> |
 | <img src="docs/screenshots/servers.png" width="240"> | <img src="docs/screenshots/subscriptions.png" width="240"> | <img src="docs/screenshots/speed.png" width="240"> |
 
+### On a television
+
+A separate Android TV app — the **yumi-tv** file in the same release. Driven from the remote, and
+the subscription travels over from the phone by QR code.
+
+| | |
+|:-:|:-:|
+| <img src="docs/screenshots/tv-connect.png" width="380"> | <img src="docs/screenshots/tv-servers.png" width="380"> |
+| <img src="docs/screenshots/tv-pairing.png" width="380"> | <img src="docs/screenshots/tv-settings.png" width="380"> |
+
 ## What it can do
 
 **You can add almost anything.** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`,
