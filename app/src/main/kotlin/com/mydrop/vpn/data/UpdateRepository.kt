@@ -2,6 +2,7 @@ package com.mydrop.vpn.data
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -130,7 +131,7 @@ class UpdateRepository(
      * here turns a silent refusal into a sentence.
      */
     private fun verify(file: File): String? {
-        val flags = PackageManager.GET_SIGNING_CERTIFICATES
+        val flags = signatureFlags()
         val candidate = runCatching {
             context.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
         }.getOrNull() ?: return strings.get(R.string.error_update_not_an_apk)
@@ -143,14 +144,48 @@ class UpdateRepository(
             context.packageManager.getPackageInfo(context.packageName, flags)
         }.getOrNull() ?: return null
 
-        val ours = installed.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
-        val theirs = candidate.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
+        val ours = signersOf(installed)
+        val theirs = signersOf(candidate)
         // Null on either side means the platform would not tell us, which is not evidence of a
         // mismatch — and refusing on "do not know" would block every update on a phone that
         // answers differently.
         if (ours.isNullOrEmpty() || theirs.isNullOrEmpty()) return null
         if (ours != theirs) return strings.get(R.string.error_update_wrong_signature)
         return null
+    }
+
+    /**
+     * Which question to ask the package manager about signatures, by platform version.
+     *
+     * `GET_SIGNING_CERTIFICATES` and the `signingInfo` it fills in arrived in Android 9; this app
+     * runs from Android 8. Asking the newer question on an older phone does not degrade — the
+     * field is simply not on the class there, and reading it throws `NoSuchFieldError` at the
+     * moment somebody tries to install an update, which is the worst possible moment for it.
+     */
+    private fun signatureFlags(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+
+    /**
+     * The certificates a package is signed with, or null when the platform did not say.
+     *
+     * The pre-9 answer is the deprecated `signatures` array, and deprecated is the right word for
+     * it rather than wrong: it reports the signers of the APK the same way, and its replacement
+     * exists to describe key *rotation*, which an app distributed as a file outside a store has no
+     * way to perform anyway.
+     */
+    private fun signersOf(info: PackageInfo): Set<String>? {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures
+        }
+        return signatures?.mapNotNull { it?.toCharsString() }?.toSet()
     }
 
     /**
