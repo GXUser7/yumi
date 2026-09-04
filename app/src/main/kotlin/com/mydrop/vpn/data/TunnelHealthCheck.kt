@@ -110,11 +110,41 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
         )
         socket.outputStream.flush()
 
-        val status = socket.inputStream.bufferedReader().readLine().orEmpty()
+        val stream = socket.inputStream
+        val status = stream.bufferedReader().readLine().orEmpty()
         // Exactly 204, not "any 2xx". An endpoint that promises an empty response and returns a
         // page instead is not the endpoint answering — it is a portal, an injected block page, or
         // something else that replaced the response, and none of those mean the tunnel works.
-        status.split(' ').getOrNull(1) == "204"
+        val ok = status.split(' ').getOrNull(1) == "204"
+        drain(stream)
+        ok
+    }
+
+    /**
+     * Reads what is left of the response, so that closing the socket does not interrupt a write.
+     *
+     * The verdict is decided by the status line and nothing after it, so this reads only to be
+     * polite — but the impoliteness was expensive. Closing here left the core mid-write and it
+     * logged a warning for it: on one three-hour phone journal, 238 of 486 probes each produced
+     * an `app/proxyman/inbound: connection ends > proxy/http: failed to write response > broken
+     * pipe`, which is half the warnings in the file, all of them from the app talking to itself,
+     * and all of them noise sitting on top of the ones that mean something.
+     *
+     * Bounded twice over: both probe targets answer `204` with no body, the response carries
+     * `Connection: close`, and [TIMEOUT_MILLIS] still applies — but a far end that ignores all of
+     * that must not hold the watchdog. Failures are swallowed on purpose; the answer is already in
+     * hand, and a probe that worked must not be reported as a failure because of the goodbye.
+     */
+    private fun drain(stream: java.io.InputStream) {
+        runCatching {
+            val scratch = ByteArray(DRAIN_CHUNK_BYTES)
+            var left = DRAIN_LIMIT_BYTES
+            while (left > 0) {
+                val read = stream.read(scratch, 0, minOf(scratch.size, left))
+                if (read < 0) break
+                left -= read
+            }
+        }
     }
 
     private fun trace(tag: String, message: String) {
@@ -134,5 +164,15 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
          * Eight leaves the failing probe and its confirmation inside one twenty-second cycle.
          */
         const val TIMEOUT_MILLIS = 8_000
+
+        /**
+         * Far more than a `204` and its headers, far less than a page somebody wants to send us.
+         *
+         * The point of a limit is the endpoint that is not the endpoint — a captive portal or an
+         * injected block page, which is exactly the case [fetch] already refuses on the status
+         * line. Having refused it, there is no reason to read its body to the end.
+         */
+        const val DRAIN_LIMIT_BYTES = 8 * 1024
+        const val DRAIN_CHUNK_BYTES = 1024
     }
 }
