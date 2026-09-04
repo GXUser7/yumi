@@ -29,6 +29,20 @@ data class TlsOptions(
     /** uTLS client hello to mimic: chrome, firefox, safari, ios, edge, random, randomized… */
     val fingerprint: String? = null,
     val reality: RealityOptions? = null,
+    /**
+     * SHA-256 of the certificate the server is expected to present, as hex.
+     *
+     * The replacement for "do not check the certificate", and not a synonym for it: the connection
+     * is still verified, against exactly one certificate instead of against a public CA. That is
+     * what makes a self-signed server usable without opening the door to anyone in the middle.
+     *
+     * Providers put it in a share link as `pcs`, and the reason it matters here is empirical: every
+     * gRPC node in a real subscription carried one, and dropping it made all twenty-eight fail with
+     * `x509: certificate signed by unknown authority` — a whole transport, silently.
+     */
+    val pinnedCertSha256: String = "",
+    /** Names the certificate may carry instead of the SNI; `vcn` in a share link. */
+    val verifyPeerCertByName: String = "",
     val certificate: String? = null,
     val ech: EchOptions? = null,
 ) {

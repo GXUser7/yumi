@@ -9,17 +9,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * A transport the core cannot speak has to make the whole node disappear.
+ * A transport the core cannot speak has to make the whole node disappear — and one it *can* speak
+ * has to survive.
  *
- * This is written from a real failure. A subscription started handing out `type=xhttp` nodes;
- * the parser did not recognise the name, dropped the transport, and produced an ordinary-looking
- * VLESS server. It appeared in the list with a normal latency, the tunnel came up on it, and then
- * every single connection failed with `reality verification failed` — three hundred and fifty of
- * them in forty seconds — because the server was framing XHTTP at a client sending plain TLS.
+ * This file is written from a real failure, and the failure is also why the app changed cores. A
+ * subscription started handing out `type=xhttp` nodes; the parser did not recognise the name,
+ * dropped the transport, and produced an ordinary-looking VLESS server. It appeared in the list
+ * with a normal latency, the tunnel came up on it, and then every connection failed with
+ * `reality verification failed` — three hundred and fifty of them in forty seconds — because the
+ * server was framing XHTTP at a client sending plain TLS.
  *
- * sing-box implements five stream transports (`option/v2ray_transport.go`): HTTP, WebSocket, QUIC,
- * gRPC and HTTPUpgrade. XHTTP is not one of them and no amount of parsing will make it work, so
- * the only honest answer is to refuse the line at import.
+ * The first answer was to refuse those links at import, because sing-box implements five stream
+ * transports and XHTTP is not among them and never will be. The second answer was to move to a core
+ * that does implement it, which is where these tests now point: XHTTP parses, and the transports
+ * Xray *removed* — `http`/`h2` and `quic` — are refused in its place.
+ *
+ * The rule underneath has not moved at all: accept what the core can carry, refuse what it cannot,
+ * and never drop a transport quietly.
  */
 class UnsupportedTransportTest {
 
@@ -29,25 +35,50 @@ class UnsupportedTransportTest {
         ProxyUriParser.parse("vless://$uuid@example.com:443?security=tls&$query#N")
 
     @Test
-    fun `an xhttp node is refused rather than silently stripped of its transport`() {
-        assertNull(vless("type=xhttp&path=%2Fx"))
+    fun `an xhttp node parses, which is what the port was for`() {
+        val node = requireNotNull(vless("type=xhttp&path=%2Fx&host=cdn.example.com"))
+        val transport = node.transport as TransportOptions.Xhttp
+        assertEquals("/x", transport.path)
+        assertEquals("cdn.example.com", transport.host)
+    }
+
+    /** The name it went by before the rename; subscriptions still hand out both. */
+    @Test
+    fun `splithttp is the same transport under its older name`() {
+        assertTrue(vless("type=splithttp")?.transport is TransportOptions.Xhttp)
     }
 
     @Test
-    fun `other transports the core has no implementation for are refused too`() {
-        assertNull(vless("type=splithttp"))
+    fun `xhttp mode is carried when named and left to the core when not`() {
+        assertEquals("stream-up", (vless("type=xhttp&mode=stream-up")?.transport as TransportOptions.Xhttp).mode)
+        assertEquals("auto", (vless("type=xhttp")?.transport as TransportOptions.Xhttp).mode)
+    }
+
+    /**
+     * Removed from the core outright, both of them, with an explicit removed-feature error. A link
+     * asking for one has to be refused here: accepting it would mean emitting the node without its
+     * transport, which is the exact failure at the top of this file.
+     */
+    @Test
+    fun `transports the core removed are refused`() {
+        assertNull(vless("type=http"))
+        assertNull(vless("type=h2"))
+        assertNull(vless("type=quic"))
+    }
+
+    @Test
+    fun `transports no core ever implemented are refused too`() {
         assertNull(vless("type=kcp"))
         assertNull(vless("type=mkcp"))
         assertNull(vless("type=meek"))
     }
 
     @Test
-    fun `the five the core does implement still parse`() {
+    fun `the transports the core does implement still parse`() {
         assertTrue(vless("type=ws&path=%2Fws")?.transport is TransportOptions.WebSocket)
         assertTrue(vless("type=grpc&serviceName=s")?.transport is TransportOptions.Grpc)
-        assertTrue(vless("type=http")?.transport is TransportOptions.Http)
         assertTrue(vless("type=httpupgrade")?.transport is TransportOptions.HttpUpgrade)
-        assertEquals(TransportOptions.Quic, vless("type=quic")?.transport)
+        assertTrue(vless("type=xhttp")?.transport is TransportOptions.Xhttp)
     }
 
     /** `tcp` is not a wrapper, it is the absence of one, and those nodes are the common case. */
@@ -81,33 +112,54 @@ class UnsupportedTransportTest {
     }
 
     @Test
-    fun `a clash entry naming an unsupported network is skipped`() {
+    fun `a clash entry naming xhttp is kept and one naming a removed transport is skipped`() {
         val document = """
             proxies:
-              - name: broken
+              - name: xhttp-node
                 type: vless
                 server: example.com
                 port: 443
                 uuid: $uuid
                 network: xhttp
-              - name: fine
+              - name: removed
                 type: vless
                 server: example.com
                 port: 8443
                 uuid: $uuid
-                network: ws
+                network: h2
         """.trimIndent()
 
         val nodes = ClashParser.parse(document, "sub")
-        assertEquals(listOf("fine"), nodes.map { it.name })
+        assertEquals(listOf("xhttp-node"), nodes.map { it.name })
+        assertTrue(nodes.single().transport is TransportOptions.Xhttp)
     }
 
     @Test
-    fun `an xray outbound naming an unsupported network is skipped`() {
+    fun `an xray outbound naming xhttp keeps its transport`() {
         val document = """
             {"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"example.com",
             "port":443,"users":[{"id":"$uuid"}]}]},"streamSettings":{"network":"xhttp",
+            "xhttpSettings":{"path":"/x","mode":"packet-up"},
             "security":"reality","realitySettings":{"publicKey":"k"}}}]}
+        """.trimIndent().replace("\n", "")
+
+        val node = ConfigDocumentParser.parse(document, "sub").single()
+        val transport = node.transport as TransportOptions.Xhttp
+        assertEquals("/x", transport.path)
+        assertEquals("packet-up", transport.mode)
+    }
+
+    /**
+     * The bug this pair of sets used to hide: a network could be *accepted* by the check and then
+     * have no branch in the builder, so the node was created with no transport at all and dialled
+     * as plain TCP. `h2` did exactly that.
+     */
+    @Test
+    fun `an xray outbound naming a removed transport is skipped rather than stripped`() {
+        val document = """
+            {"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"example.com",
+            "port":443,"users":[{"id":"$uuid"}]}]},"streamSettings":{"network":"h2",
+            "security":"tls"}}]}
         """.trimIndent().replace("\n", "")
 
         assertTrue(ConfigDocumentParser.parse(document, "sub").isEmpty())

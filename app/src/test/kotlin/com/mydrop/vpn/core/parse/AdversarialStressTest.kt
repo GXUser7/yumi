@@ -6,7 +6,7 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.TransportOptions
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -33,11 +33,45 @@ class AdversarialStressTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; prettyPrint = true }
 
     private fun config(node: ProxyNode, settings: AppSettings = AppSettings()): JsonObject =
-        json.parseToJsonElement(SingBoxConfigFactory.build(node, settings, "/rule-sets")).jsonObject
+        json.parseToJsonElement(
+            XrayConfigFactory.build(
+                nodes = listOf(node),
+                selected = node,
+                settings = settings,
+                geoAvailable = false,
+            ).json,
+        ).jsonObject
 
     private val JsonObject.outbounds: JsonArray get() = this["outbounds"]!!.jsonArray
+
+    /** `streamSettings`, where Xray keeps everything wrapped around the protocol. */
+    private val JsonObject.stream: JsonObject get() = proxy["streamSettings"]!!.jsonObject
+    private val JsonObject.realitySettings: JsonObject get() = stream["realitySettings"]!!.jsonObject
+    private val JsonObject.tlsSettings: JsonObject get() = stream["tlsSettings"]!!.jsonObject
+
+    /**
+     * The server the outbound dials.
+     *
+     * Xray files it under `vnext` for the protocols that carry a user list and under `servers` for
+     * the ones that carry a password, which is a distinction with no meaning at this level.
+     */
+    private val JsonObject.endpoint: JsonObject
+        get() = proxy["settings"]!!.jsonObject.let { settings ->
+            (settings["vnext"] ?: settings["servers"])!!.jsonArray.first().jsonObject
+        }
+
+    private val JsonObject.user: JsonObject
+        get() = endpoint["users"]!!.jsonArray.first().jsonObject
+
+    /**
+     * The outbound the parsed link became.
+     *
+     * Found by prefix rather than by an exact tag: every node is an outbound of its own now, named
+     * after the node, because that prefix is how the balancer selects among them.
+     */
     private val JsonObject.proxy: JsonObject
-        get() = outbounds.map { it.jsonObject }.first { it["tag"]?.jsonPrimitive?.content == "proxy" }
+        get() = outbounds.map { it.jsonObject }
+            .first { it["tag"]?.jsonPrimitive?.content?.startsWith("proxy-") == true }
 
     // =========================================================================
     // 1. VLESS Reality Edge Cases & Casing Permutations
@@ -71,17 +105,18 @@ class AdversarialStressTest {
 
         val cfg = config(node)
         val proxy = cfg.proxy
-        assertEquals("vless", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals("node.vless.monster", proxy["server"]!!.jsonPrimitive.content)
-        assertEquals("11111111-2222-3333-4444-555555555555", proxy["uuid"]!!.jsonPrimitive.content)
-        assertEquals("xtls-rprx-vision", proxy["flow"]!!.jsonPrimitive.content)
+        assertEquals("vless", proxy["protocol"]!!.jsonPrimitive.content)
+        assertEquals("node.vless.monster", cfg.endpoint["address"]!!.jsonPrimitive.content)
+        assertEquals("11111111-2222-3333-4444-555555555555", cfg.user["id"]!!.jsonPrimitive.content)
+        assertEquals("xtls-rprx-vision", cfg.user["flow"]!!.jsonPrimitive.content)
+        // Mandatory on every VLESS user, and the one field with no sing-box counterpart at all.
+        assertEquals("none", cfg.user["encryption"]!!.jsonPrimitive.content)
 
-        val tlsObj = proxy["tls"]!!.jsonObject
-        assertEquals("learn.microsoft.com", tlsObj["server_name"]!!.jsonPrimitive.content)
-        assertEquals("firefox", tlsObj["utls"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content)
-        val realityObj = tlsObj["reality"]!!.jsonObject
-        assertEquals("PUB_KEY_UPPER", realityObj["public_key"]!!.jsonPrimitive.content)
-        assertEquals("a1b2c3d4", realityObj["short_id"]!!.jsonPrimitive.content)
+        val realityObj = cfg.realitySettings
+        assertEquals("learn.microsoft.com", realityObj["serverName"]!!.jsonPrimitive.content)
+        assertEquals("firefox", realityObj["fingerprint"]!!.jsonPrimitive.content)
+        assertEquals("PUB_KEY_UPPER", realityObj["publicKey"]!!.jsonPrimitive.content)
+        assertEquals("a1b2c3d4", realityObj["shortId"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -110,9 +145,9 @@ class AdversarialStressTest {
         assertEquals("", reality.shortId)
 
         val cfg = config(node)
-        val realityObj = cfg.proxy["tls"]!!.jsonObject["reality"]!!.jsonObject
-        assertEquals("MYKEY", realityObj["public_key"]!!.jsonPrimitive.content)
-        assertNull("short_id must be omitted when empty", realityObj["short_id"])
+        val realityObj = cfg.realitySettings
+        assertEquals("MYKEY", realityObj["publicKey"]!!.jsonPrimitive.content)
+        assertNull("shortId must be omitted when empty", realityObj["shortId"])
     }
 
     @Test
@@ -124,8 +159,8 @@ class AdversarialStressTest {
         assertEquals("", node.tls?.reality?.shortId)
 
         val cfg = config(node)
-        val realityObj = cfg.proxy["tls"]!!.jsonObject["reality"]!!.jsonObject
-        assertNull(realityObj["short_id"])
+        val realityObj = cfg.realitySettings
+        assertNull(realityObj["shortId"])
     }
 
     @Test
@@ -137,9 +172,7 @@ class AdversarialStressTest {
         assertNull(node.tls?.fingerprint)
 
         val cfg = config(node)
-        val utlsObj = cfg.proxy["tls"]!!.jsonObject["utls"]!!.jsonObject
-        assertEquals(true, utlsObj["enabled"]!!.jsonPrimitive.content.toBoolean())
-        assertEquals("chrome", utlsObj["fingerprint"]!!.jsonPrimitive.content)
+        assertEquals("chrome", cfg.realitySettings["fingerprint"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -151,15 +184,14 @@ class AdversarialStressTest {
         assertEquals("some_invalid_fp", node.tls?.fingerprint)
 
         val cfg = config(node)
-        val utlsObj = cfg.proxy["tls"]!!.jsonObject["utls"]!!.jsonObject
-        assertEquals("chrome", utlsObj["fingerprint"]!!.jsonPrimitive.content)
+        assertEquals("chrome", cfg.realitySettings["fingerprint"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `vless reality with all supported utls fingerprints preserves each fingerprint`() {
         val fingerprints = listOf(
             "chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android",
-            "random", "randomized", "chrome_psk", "chrome_pq",
+            "random", "randomized", "hellochrome_133", "hellofirefox_148",
         )
         fingerprints.forEach { fp ->
             val uri = "vless://user-uuid@proxy.domain.net:443?security=reality&sni=decoy.com&pbk=KEY&fp=$fp#FpTest"
@@ -167,7 +199,7 @@ class AdversarialStressTest {
             assertEquals(fp, node.tls?.fingerprint)
 
             val cfg = config(node)
-            val emittedFp = cfg.proxy["tls"]!!.jsonObject["utls"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content
+            val emittedFp = cfg.realitySettings["fingerprint"]!!.jsonPrimitive.content
             assertEquals("fingerprint  should be emitted verbatim", fp, emittedFp)
         }
     }
@@ -179,7 +211,7 @@ class AdversarialStressTest {
         assertEquals("xn--e1afmkfd.xn--p1ai", node.tls?.serverName)
 
         val cfg = config(node)
-        assertEquals("xn--e1afmkfd.xn--p1ai", cfg.proxy["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+        assertEquals("xn--e1afmkfd.xn--p1ai", cfg.realitySettings["serverName"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -190,8 +222,8 @@ class AdversarialStressTest {
         assertEquals("learn.microsoft.com", node.tls?.serverName)
 
         val cfg = config(node)
-        assertEquals("de-01.vless.monster", cfg.proxy["server"]!!.jsonPrimitive.content)
-        assertEquals("learn.microsoft.com", cfg.proxy["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+        assertEquals("de-01.vless.monster", cfg.endpoint["address"]!!.jsonPrimitive.content)
+        assertEquals("learn.microsoft.com", cfg.realitySettings["serverName"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -206,7 +238,10 @@ class AdversarialStressTest {
         assertEquals("uuid-encoded@val", (node.settings as ProxySettings.Vless).uuid)
         assertEquals("xtls-rprx-vision", (node.settings as ProxySettings.Vless).flow)
         assertEquals("decoy-site.example.com", node.tls?.serverName)
-        assertEquals("PUB+KEY/123", node.tls?.reality?.publicKey)
+        // Normalised to the URL-safe alphabet, which is the only one the core decodes a
+        // REALITY key with. The same thirty-two bytes either way, and a document carrying
+        // the standard spelling is rejected whole rather than node by node.
+        assertEquals("PUB-KEY_123", node.tls?.reality?.publicKey)
         assertEquals("ab:cd", node.tls?.reality?.shortId)
         assertEquals("/deep/path?key=val", node.tls?.reality?.spiderX)
     }
@@ -262,9 +297,11 @@ class AdversarialStressTest {
 
         val cfg = config(node)
         val proxy = cfg.proxy
-        assertEquals("vmess", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals("zero", proxy["security"]!!.jsonPrimitive.content)
-        assertEquals(0, proxy["alter_id"]!!.jsonPrimitive.int)
+        assertEquals("vmess", proxy["protocol"]!!.jsonPrimitive.content)
+        assertEquals("zero", cfg.user["security"]!!.jsonPrimitive.content)
+        // Left out rather than written as zero. A present alterId asks for the legacy handshake,
+        // and a server that has moved on refuses it.
+        assertNull(cfg.user["alterId"])
     }
 
     @Test
@@ -316,11 +353,11 @@ class AdversarialStressTest {
 
         val cfg = config(node)
         val proxy = cfg.proxy
-        assertEquals("trojan", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals("p@ss:123", proxy["password"]!!.jsonPrimitive.content)
-        assertEquals("trojan.monster.net", proxy["server"]!!.jsonPrimitive.content)
-        assertEquals("decoy.trojan.com", proxy["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
-        assertEquals("TR_PUB", proxy["tls"]!!.jsonObject["reality"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
+        assertEquals("trojan", proxy["protocol"]!!.jsonPrimitive.content)
+        assertEquals("p@ss:123", cfg.endpoint["password"]!!.jsonPrimitive.content)
+        assertEquals("trojan.monster.net", cfg.endpoint["address"]!!.jsonPrimitive.content)
+        assertEquals("decoy.trojan.com", cfg.realitySettings["serverName"]!!.jsonPrimitive.content)
+        assertEquals("TR_PUB", cfg.realitySettings["publicKey"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -350,12 +387,10 @@ class AdversarialStressTest {
         assertEquals("v2ray-plugin", settings.plugin)
         assertEquals("server;host=cdn.com", settings.pluginOptions)
 
-        val cfg = config(node)
-        val proxy = cfg.proxy
-        assertEquals("shadowsocks", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals("chacha20-ietf-poly1305", proxy["method"]!!.jsonPrimitive.content)
-        assertEquals("v2ray-plugin", proxy["plugin"]!!.jsonPrimitive.content)
-        assertEquals("server;host=cdn.com", proxy["plugin_opts"]!!.jsonPrimitive.content)
+        // Parsed in full above and then refused, which is the honest answer: Xray implements no
+        // Shadowsocks plugin on the client side, and a node emitted without the obfuscation its
+        // server expects is one that dials, measures well and carries nothing.
+        assertEquals("Shadowsocks + v2ray-plugin", XrayConfigFactory.unsupported(node))
     }
 
     @Test
@@ -394,13 +429,25 @@ class AdversarialStressTest {
         assertTrue(node.tls!!.insecure)
 
         val cfg = config(node)
-        val proxy = cfg.proxy
-        assertEquals("hysteria2", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals(100, proxy["up_mbps"]!!.jsonPrimitive.int)
-        assertEquals(250, proxy["down_mbps"]!!.jsonPrimitive.int)
-        assertEquals("SALAMANDER", proxy["obfs"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("obfs_pwd", proxy["obfs"]!!.jsonObject["password"]!!.jsonPrimitive.content)
-        assertTrue(proxy["tls"]!!.jsonObject["insecure"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals("hysteria", cfg.proxy["protocol"]!!.jsonPrimitive.content)
+        // The credential is not in `settings` — that object holds version, address and port and
+        // nothing else, and a password put in it produces an outbound that completes nothing while
+        // reporting no error at all.
+        assertEquals(
+            "secret-pass",
+            cfg.stream["hysteriaSettings"]!!.jsonObject["auth"]!!.jsonPrimitive.content,
+        )
+        val mask = cfg.stream["finalmask"]!!.jsonObject
+        assertEquals(
+            "salamander",
+            mask["udp"]!!.jsonArray.first().jsonObject["type"]!!.jsonPrimitive.content,
+        )
+        assertEquals("100mbps", mask["quicParams"]!!.jsonObject["brutalUp"]!!.jsonPrimitive.content)
+        assertEquals("250mbps", mask["quicParams"]!!.jsonObject["brutalDown"]!!.jsonPrimitive.content)
+        // "do not verify the certificate" cannot be expressed at all — the core answers the field
+        // it used to live in with a removed-feature error — so the node keeps working only if its
+        // certificate really is valid. The journal says so; the document cannot.
+        assertNull(cfg.tlsSettings["allowInsecure"])
     }
 
     @Test
@@ -434,63 +481,9 @@ class AdversarialStressTest {
         assertEquals("quic", settings.udpRelayMode)
         assertTrue(settings.zeroRttHandshake)
 
-        val cfg = config(node)
-        val proxy = cfg.proxy
-        assertEquals("tuic", proxy["type"]!!.jsonPrimitive.content)
-        assertEquals("tuic-uuid", proxy["uuid"]!!.jsonPrimitive.content)
-        assertEquals("tuic-pass", proxy["password"]!!.jsonPrimitive.content)
-        assertEquals("cubic", proxy["congestion_control"]!!.jsonPrimitive.content)
-        assertEquals("quic", proxy["udp_relay_mode"]!!.jsonPrimitive.content)
-        assertTrue(proxy["zero_rtt_handshake"]!!.jsonPrimitive.content.toBoolean())
-    }
-
-    // =========================================================================
-    // 7. DPI-Resilient DNS Direct & Bootstrap Verification
-    // =========================================================================
-
-    @Test
-    fun `domain named proxy node with blank directDns falls back to a resolver that actually answers`() {
-        // This used to assert the opposite — that a blank field defaults to "local" and that no
-        // raw UDP 8.8.8.8 appears anywhere. Both were wrong on this platform, checked on a real
-        // device: nothing implements PlatformInterface.localDNSTransport() (it returns null in
-        // MyDropVpnService), /etc/resolv.conf does not exist on Android, and sing-box's own
-        // fallback for that case is 127.0.0.1:53 — which nothing answers. So "local" was not a
-        // more private resolver than 8.8.8.8, it was a dead one: default_domain_resolver would
-        // point at it for every proxy server named by domain, and none of them could ever
-        // resolve. See SingBoxConfigFactory.DEFAULT_DIRECT_DNS for the full account.
-        val uri = "vless://uuid@my-proxy-node.vless.monster:443?security=reality&sni=learn.microsoft.com&pbk=KEY#Monster"
-        val node = requireNotNull(ProxyUriParser.parse(uri))
-        val cfg = config(node, AppSettings(directDns = ""))
-
-        val servers = cfg["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
-        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
-        assertEquals("udp", direct["type"]!!.jsonPrimitive.content)
-        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, direct["server"]!!.jsonPrimitive.content)
-
-        val defaultDomainResolver = cfg["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content
-        assertEquals("dns-direct", defaultDomainResolver)
-    }
-
-    @Test
-    fun `custom doh direct dns bootstraps with a working numeric resolver, not the dead local one`() {
-        val uri = "vless://uuid@my-proxy-node.vless.monster:443?security=tls#Node"
-        val node = requireNotNull(ProxyUriParser.parse(uri))
-        val cfg = config(node, AppSettings(directDns = "https://my-doh.com/dns-query"))
-
-        val servers = cfg["dns"]!!.jsonObject["servers"]!!.jsonArray.map { it.jsonObject }
-        val direct = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-direct" }
-        assertEquals("https", direct["type"]!!.jsonPrimitive.content)
-        assertEquals("my-doh.com", direct["server"]!!.jsonPrimitive.content)
-        assertEquals("dns-bootstrap", direct["domain_resolver"]!!.jsonPrimitive.content)
-
-        // Not "local" — see DEFAULT_DIRECT_DNS. The one lookup that bootstraps a named direct
-        // resolver has to go somewhere real, and on this platform "somewhere real" is numeric.
-        val bootstrap = servers.first { it["tag"]!!.jsonPrimitive.content == "dns-bootstrap" }
-        assertEquals("udp", bootstrap["type"]!!.jsonPrimitive.content)
-        assertEquals(SingBoxConfigFactory.DEFAULT_DIRECT_DNS, bootstrap["server"]!!.jsonPrimitive.content)
-
-        val defaultDomainResolver = cfg["route"]!!.jsonObject["default_domain_resolver"]!!.jsonPrimitive.content
-        assertEquals("dns-bootstrap", defaultDomainResolver)
+        // Parsed completely and then refused: TUIC has no implementation in this core, and a row
+        // in the server list that can never carry traffic is worse than an honest absence.
+        assertEquals("TUIC", XrayConfigFactory.unsupported(node))
     }
 
     // =========================================================================
@@ -498,16 +491,18 @@ class AdversarialStressTest {
     // =========================================================================
 
     @Test
-    fun `unsupported transports such as xhttp or splithttp are rejected cleanly`() {
-        val xhttpUri = "vless://uuid@proxy.com:443?security=reality&type=xhttp&pbk=KEY#XHttp"
-        assertNull("xhttp transport must be rejected at parse time", ProxyUriParser.parse(xhttpUri))
+    fun `transports the core removed are rejected cleanly and counted`() {
+        // xhttp and splithttp used to be the subjects here, and they are the reason the app
+        // changed cores: this one carries them. What it does not carry is the pair below.
+        val h2Uri = "vless://uuid@proxy.com:443?security=reality&type=h2&pbk=KEY#H2"
+        assertNull("h2 transport must be rejected at parse time", ProxyUriParser.parse(h2Uri))
 
-        val splitHttpUri = "vless://uuid@proxy.com:443?security=reality&type=splithttp&pbk=KEY#SplitHttp"
-        assertNull("splithttp transport must be rejected at parse time", ProxyUriParser.parse(splitHttpUri))
+        val quicUri = "vless://uuid@proxy.com:443?security=reality&type=quic&pbk=KEY#Quic"
+        assertNull("quic transport must be rejected at parse time", ProxyUriParser.parse(quicUri))
 
-        val counts = ProxyUriParser.unsupportedTransports(listOf(xhttpUri, splitHttpUri).joinToString("\n"))
-        assertEquals(1, counts["xhttp"])
-        assertEquals(1, counts["splithttp"])
+        val counts = ProxyUriParser.unsupportedTransports(listOf(h2Uri, quicUri).joinToString("\n"))
+        assertEquals(1, counts["h2"])
+        assertEquals(1, counts["quic"])
     }
 
     @Test

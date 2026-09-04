@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.parse
 
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
 import com.mydrop.vpn.core.model.TlsOptions
@@ -44,7 +45,16 @@ object ConfigDocumentParser {
         return when {
             // An array is either a list of whole Xray configs (what panels emit per client) or a
             // bare list of outbounds.
-            root is JsonArray -> root.mapNotNull { it as? JsonObject }.flatMap { fromDocument(it, subscriptionId) }
+            // Either a list of whole configs, or a bare list of outbounds — and the second was
+            // being lost entirely. Every element was treated as a document, `fromDocument` found no
+            // `outbounds` key in it, and a subscription of forty servers imported as none at all.
+            root is JsonArray -> root.mapNotNull { it as? JsonObject }.flatMap { element ->
+                if (element["outbounds"] != null || element["servers"] != null) {
+                    fromDocument(element, subscriptionId)
+                } else {
+                    listOfNotNull(fromOutbound(element, null, subscriptionId))
+                }
+            }
             root is JsonObject -> fromDocument(root, subscriptionId)
             else -> emptyList()
         }
@@ -53,8 +63,11 @@ object ConfigDocumentParser {
     private fun fromDocument(document: JsonObject, subscriptionId: String?): List<ProxyNode> {
         // SIP008 keeps its servers under "servers" with "server_port"; nothing else uses that pair.
         document["servers"]?.let { servers ->
-            if (servers is JsonArray && servers.any { it.jsonObject["method"] != null }) {
-                return servers.mapNotNull { sip008(it.jsonObject, subscriptionId) }
+            // `as?` on every element, not just on the array: a `servers` list holding anything
+            // other than objects threw out of `jsonObject` and failed the whole refresh.
+            val entries = (servers as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+            if (entries.any { it["method"] != null }) {
+                return entries.mapNotNull { runCatching { sip008(it, subscriptionId) }.getOrNull() }
             }
         }
 
@@ -62,16 +75,32 @@ object ConfigDocumentParser {
         val label = document.str("remarks")
 
         return outbounds.mapNotNull { element ->
-            val outbound = element as? JsonObject ?: return@mapNotNull null
-            // Xray calls it "protocol", sing-box calls it "type".
-            val xray = outbound["protocol"] != null && outbound["settings"] != null
-            if (xray) {
-                fromXray(outbound, label, subscriptionId)
-            } else {
-                fromSingBox(outbound, subscriptionId)
-            }
+            fromOutbound(element as? JsonObject ?: return@mapNotNull null, label, subscriptionId)
         }
     }
+
+    /**
+     * One outbound, whichever dialect it is written in.
+     *
+     * Wrapped in [runCatching] because everything below reads a document written by somebody else.
+     * `jsonObject` and `jsonPrimitive` throw on an element of the wrong kind, and a provider that
+     * writes `"port": {}` or `"alpn": [{}]` — a template that rendered wrong, most likely — used to
+     * take the whole subscription refresh down with an `IllegalArgumentException`. One unreadable
+     * entry in a list of forty is a missing server, not a failed subscription.
+     */
+    private fun fromOutbound(
+        outbound: JsonObject,
+        label: String?,
+        subscriptionId: String?,
+    ): ProxyNode? = runCatching {
+        // Xray calls it "protocol", sing-box calls it "type".
+        val xray = outbound["protocol"] != null && outbound["settings"] != null
+        if (xray) {
+            fromXray(outbound, label, subscriptionId)
+        } else {
+            fromSingBox(outbound, subscriptionId)
+        }
+    }.getOrNull()
 
     // ------------------------------------------------------------- sing-box
 
@@ -86,18 +115,18 @@ object ConfigDocumentParser {
         if (type in plumbingTypes) return null
 
         val server = outbound.str("server") ?: return null
-        val port = outbound["server_port"]?.jsonPrimitive?.intOrNull ?: return null
+        val port = outbound.port("server_port") ?: return null
         val name = outbound.str("tag")?.takeIf { it.isNotBlank() } ?: "$server:$port"
 
         val settings = ProxySettings.Raw(outbound = outbound.toString(), declaredType = type)
         return ProxyNode(
-            id = ProxyNode.stableId(server, port, settings, subscriptionId),
+            id = "",
             name = name,
             server = server,
             port = port,
             settings = settings,
             subscriptionId = subscriptionId,
-        )
+        ).identified()
     }
 
     // ----------------------------------------------------------------- Xray
@@ -119,7 +148,7 @@ object ConfigDocumentParser {
         val endpoint = vnext ?: servers ?: return null
 
         val server = endpoint.str("address") ?: return null
-        val port = endpoint["port"]?.jsonPrimitive?.intOrNull ?: return null
+        val port = endpoint.port("port") ?: return null
         val user = (endpoint["users"] as? JsonArray)?.firstOrNull()?.jsonObject
 
         val proxySettings = when (protocol) {
@@ -158,7 +187,7 @@ object ConfigDocumentParser {
             if (declared !in KNOWN_NETWORKS && declared !in PLAIN_NETWORKS) return null
         }
         return ProxyNode(
-            id = ProxyNode.stableId(server, port, proxySettings, subscriptionId),
+            id = "",
             name = label?.takeIf { it.isNotBlank() } ?: outbound.str("tag") ?: "$server:$port",
             server = server,
             port = port,
@@ -166,11 +195,11 @@ object ConfigDocumentParser {
             tls = stream?.let(::xrayTls),
             transport = stream?.let(::xrayTransport),
             subscriptionId = subscriptionId,
-        )
+        ).identified()
     }
 
     /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
-    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    private val KNOWN_NETWORKS = setOf("ws", "grpc", "httpupgrade", "xhttp", "splithttp")
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun xrayTls(stream: JsonObject): TlsOptions? {
@@ -189,12 +218,18 @@ object ConfigDocumentParser {
             serverName = active?.str("serverName", "server_name", "server-name", "servername", "sni", "peer"),
             insecure = tlsSettings?.bool("allowInsecure", "allow_insecure", "allowinsecure", "skip-cert-verify", "skip_cert_verify", "insecure") ?: false,
             alpn = ((tlsSettings?.get("alpn") ?: tlsSettings?.get("alpn_list")) as? JsonArray)
-                ?.mapNotNull { it.jsonPrimitive.contentOrNullSafe() }
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNullSafe() }
                 .orEmpty(),
             fingerprint = active?.str("fingerprint", "client_fingerprint", "client-fingerprint", "fp"),
+            pinnedCertSha256 = tlsSettings
+                ?.str("pinnedPeerCertSha256", "pinned_peer_cert_sha256", "pcs")
+                .orEmpty(),
+            verifyPeerCertByName = tlsSettings
+                ?.str("verifyPeerCertByName", "verify_peer_cert_by_name", "vcn")
+                .orEmpty(),
             reality = (realitySettings?.str("publicKey", "public_key", "public-key", "pbk", "publickey", "pubkey", "key"))?.let { key ->
                 RealityOptions(
-                    publicKey = key,
+                    publicKey = normalizeRealityKey(key),
                     shortId = realitySettings.str("shortId", "short_id", "short-id", "shortid", "sid").orEmpty(),
                     spiderX = realitySettings.str("spiderX", "spider_x", "spider-x", "spiderx", "spx", "path") ?: "/",
                 )
@@ -234,7 +269,23 @@ object ConfigDocumentParser {
                 )
             }
 
-            "quic" -> TransportOptions.Quic
+            "xhttp", "splithttp" -> {
+                val xhttp = stream["xhttpSettings"]?.jsonObject
+                    ?: stream["splithttpSettings"]?.jsonObject
+                    ?: stream["xhttp_settings"]?.jsonObject
+                    ?: stream["splithttp_settings"]?.jsonObject
+                TransportOptions.Xhttp(
+                    path = xhttp?.str("path") ?: "/",
+                    host = xhttp?.str("host").orEmpty(),
+                    mode = xhttp?.str("mode") ?: "auto",
+                )
+            }
+
+            // Every network name this parser accepts has a branch above, and that is now checked
+            // rather than assumed. It was not: `http`, `h2` and `quic` were accepted as known and
+            // then fell through to null here, so the node was built with no transport at all and
+            // dialled as plain TCP — a server that connected, showed a plausible latency and
+            // carried nothing. The accepted set and the branches below it have to agree.
             else -> null
         }
 
@@ -242,7 +293,7 @@ object ConfigDocumentParser {
 
     private fun sip008(entry: JsonObject, subscriptionId: String?): ProxyNode? {
         val server = entry.str("server") ?: return null
-        val port = entry["server_port"]?.jsonPrimitive?.intOrNull ?: return null
+        val port = entry.port("server_port") ?: return null
         val settings = ProxySettings.Shadowsocks(
             method = entry.str("method") ?: return null,
             password = entry.str("password") ?: return null,
@@ -250,16 +301,26 @@ object ConfigDocumentParser {
             pluginOptions = entry.str("plugin_opts").orEmpty(),
         )
         return ProxyNode(
-            id = ProxyNode.stableId(server, port, settings, subscriptionId),
+            id = "",
             name = entry.str("remarks")?.takeIf { it.isNotBlank() } ?: "$server:$port",
             server = server,
             port = port,
             settings = settings,
             subscriptionId = subscriptionId,
-        )
+        ).identified()
     }
 
     // ------------------------------------------------------------- Helpers
+
+    /**
+     * A port that can actually be dialled, or null.
+     *
+     * The range is checked here rather than left to the core. Nothing downstream validates it: a
+     * `"port": 0` or `"port": 99999` from a mis-rendered template produced a node that looked
+     * ordinary in the list and could never connect, and the range is not a matter of opinion.
+     */
+    private fun JsonObject.port(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.contentOrNullSafe()?.toIntOrNull()?.takeIf { it in 1..65535 }
 
     private fun JsonObject.str(vararg keys: String): String? =
         keys.firstNotNullOfOrNull { key ->

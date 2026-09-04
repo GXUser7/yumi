@@ -12,7 +12,7 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -336,51 +336,28 @@ class FailoverWatchdog(
      * time, the caller measures the old way. A worse number is better than no candidate at all.
      */
     private suspend fun coreMeasured(candidates: List<ProxyNode>): Map<String, LatencyResult> {
-        if (!tunnel.requestUrlTest()) return emptyMap()
-        val tags = candidates.associateBy { SingBoxConfigFactory.nodeTag(it.id) }
-
-        // Waited out, not grabbed.
+        // One call, every candidate, and it returns when they have all answered or timed out.
         //
-        // The core fills its table in as the answers come back and republishes the whole thing
-        // each time, so the first snapshot mentioning any candidate at all usually mentions
-        // exactly one. Ending the wait there — `first { keys.any { it in tags } }`, which is what
-        // this did — handed [FailoverChoice] a pool of one: the six candidates with no number are
-        // indistinguishable from six that failed, the median of one number is that number, and
-        // drawing at random from a list of length one is not drawing at all. The random draw
-        // exists so a subscription's worth of phones do not pile onto the same server when a
-        // popular one dies, and the order the core reports in is much the same on every phone, so
-        // they piled on anyway. A journal caught it twice inside fifteen minutes, both times as
-        // `core measured 1/7 candidates`.
+        // The old core made this the longest method in the file. sing-box streamed its url-test
+        // results — the table filled in one server at a time and was republished on every answer —
+        // so this side had to decide when to stop waiting, and deciding it wrongly was expensive.
+        // Stopping at the first snapshot handed the chooser a pool of one: six candidates with no
+        // number are indistinguishable from six that failed, and a random draw from a list of
+        // length one is not a draw at all, so a subscription's worth of phones piled onto the same
+        // replacement. A journal caught it twice inside fifteen minutes as `core measured 1/7
+        // candidates`. Waiting for the table to be *complete* was the opposite mistake, because a
+        // server that fails the test never appears in it at all and the wait would spend the whole
+        // budget every time.
         //
-        // Waiting for the table to be *complete* would be the opposite mistake. A server that
-        // fails the test never appears — MyDropVpnService.writeGroups keeps only a positive delay,
-        // because a zero would mean "answered instantly" — so a pool with one dead member never
-        // completes and every failover would spend the whole budget. The wait ends on quiet
-        // instead: everything asked for, or nothing new for CORE_URLTEST_QUIET_MILLIS, or the
-        // budget, whichever comes first. Whatever has accumulated by then is the answer, and it
-        // is an answer about several servers rather than about the fastest one to reply.
-        val delays = withTimeoutOrNull(FailoverPolicy.CORE_URLTEST_BUDGET_MILLIS) {
-            // The first answer gets the whole budget, and only then does the quiet clock start.
-            // The table is emptied before the test is asked for, so starting the clock on an
-            // empty one would be timing the core's round trip rather than the gap after it: in
-            // the journal the first answer over LTE took 1.0 s and 1.25 s, near enough to the
-            // quiet window that a slower evening would give up having measured nothing and fall
-            // back to the direct probe — the measurement this whole method exists to replace.
-            var seen = tunnel.coreDelays.first { it.isNotEmpty() }
-            while (!tags.keys.all { it in seen }) {
-                seen = withTimeoutOrNull(FailoverPolicy.CORE_URLTEST_QUIET_MILLIS) {
-                    tunnel.coreDelays.first { it != seen }
-                } ?: break
-            }
-            seen
-        } ?: tunnel.coreDelays.value
+        // Xray is asked for all of them at once, so there is no partial table to mistake for a
+        // complete one and nothing here to get wrong.
+        val delays = tunnel.measureThroughTunnel(candidates)
+        if (delays.isEmpty()) return emptyMap()
 
         val now = System.currentTimeMillis()
-        val measured = delays.mapNotNull { (tag, millis) ->
-            tags[tag]?.let { node ->
-                node.id to LatencyResult(node.id, millis, now, failed = false)
-            }
-        }.toMap()
+        val measured = delays.mapValues { (id, millis) ->
+            LatencyResult(id, millis, now, failed = false)
+        }
         measured.values.forEach(profiles::recordLatency)
         logs.trace(TAG, "core measured ${measured.size}/${candidates.size} candidates through themselves")
         return measured
@@ -661,11 +638,11 @@ class FailoverWatchdog(
                 // of a broken tunnel would blame DNS for somebody else's outage.
                 //
                 // And asked only about a resolver somebody chose. The shipped default is not
-                // policed at all — see SingBoxConfigFactory.isShippedResolver for the three
+                // policed at all — see XrayConfigFactory.isShippedResolver for the three
                 // rebuilds that bought — so the query is not sent, not merely ignored: it is one
                 // DoH round trip every twenty seconds, on somebody's mobile data, to answer a
                 // question nothing is allowed to act on.
-                val policed = !SingBoxConfigFactory.isShippedResolver(
+                val policed = !XrayConfigFactory.isShippedResolver(
                     currentResolver(),
                     settings.value.routingMode,
                 )
@@ -750,7 +727,7 @@ class FailoverWatchdog(
                         }
 
                         settings.value.dnsFallback -> {
-                            val replacement = SingBoxConfigFactory.fallbackResolver(resolver)
+                            val replacement = XrayConfigFactory.fallbackResolver(resolver)
                             logs.warn(R.string.log_dns_switching, resolver, replacement)
                             alerts.dnsReplaced(resolver, replacement)
                             configs.useDnsFallback(true)
@@ -849,6 +826,26 @@ class FailoverWatchdog(
             if (it.routingMode == RoutingMode.Direct) it.directDns else it.remoteDns
         }
 
+    /**
+     * Starts the leave cooldown even though nothing moved, so a hopeless situation is not retried
+     * every few seconds.
+     *
+     * The cooldown is measured from the last *switch*, and both paths above give up without one —
+     * so it stayed expired, `decide` returned `LeaveCurrent` again on the very next probe, and the
+     * watchdog went round in a loop: a full measurement sweep of every candidate, an alert, and
+     * three seconds of waiting, indefinitely. On a phone whose network says "connected" while
+     * carrying nothing — a lift, a hotel portal, a full block — that is the battery gone by
+     * lunchtime, and a notification buzzing throughout.
+     *
+     * Deliberately not a separate timer. Reusing the switch clock means the next attempt comes at
+     * the same interval a real switch would allow, which is the interval already tuned in
+     * [FailoverPolicy].
+     */
+    private fun giveUpFor(cooldownMillis: Long) {
+        lastSwitchAtMillis = SystemClock.elapsedRealtime()
+        logs.trace(TAG, "nowhere to move; holding for ${cooldownMillis / 1000}s before trying again")
+    }
+
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val mobileIds = settings.value.mobileNodeIds
         // Which list is allowed, before which member of it is best.
@@ -946,6 +943,7 @@ class FailoverWatchdog(
         if (FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)) {
             logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
             alerts.serverStranded(dead.name)
+            giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
             return
         }
 
@@ -994,6 +992,7 @@ class FailoverWatchdog(
         if (chosen == null) {
             logs.warn(R.string.log_failover_all_dead, dead.name)
             alerts.serverStranded(dead.name)
+            giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
             return
         }
 

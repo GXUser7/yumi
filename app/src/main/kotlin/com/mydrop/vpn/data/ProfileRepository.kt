@@ -2,6 +2,7 @@ package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.LatencyResult
+import com.mydrop.vpn.core.model.NodeIdMigration
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
@@ -43,8 +44,18 @@ class ProfileRepository(
 
     val nodes: List<ProxyNode> get() = store.value.nodes
 
+    /**
+     * Old id to new id for this launch, empty once the move has been made.
+     *
+     * Published because the two lists the user curates live in the settings store, which this class
+     * has no business reaching into — see [AppContainer], which applies it there.
+     */
+    var nodeIdMigration: Map<String, String> = emptyMap()
+        private set
+
     init {
         dropDemoContent()
+        migrateNodeIds()
 
         // Repair on load, not just on write. Duplicate ids reached the disk before ids were
         // scoped by subscription, and a profile written by that build still crashes the servers
@@ -62,6 +73,36 @@ class ProfileRepository(
                     latencies = current.latencies.filterKeys { id -> repaired.any { it.id == id } },
                 )
             }
+        }
+    }
+
+    /**
+     * Moves every stored server onto the id its contents now imply; see [NodeIdMigration].
+     *
+     * Runs before anything reads the profile, and writes only when something actually moves.
+     */
+    private fun migrateNodeIds() {
+        val mapping = NodeIdMigration.remap(store.value.nodes)
+        if (mapping.isEmpty()) return
+        nodeIdMigration = mapping
+
+        store.update { current ->
+            val moved = current.nodes.map { node ->
+                mapping[node.id]?.let { node.copy(id = it) } ?: node
+            }
+            current.copy(
+                nodes = moved,
+                selectedNodeId = current.selectedNodeId?.let { NodeIdMigration.follow(it, mapping) },
+                // Rekeyed rather than dropped: these are measurements of servers that have not
+                // changed, only of ids that have, and throwing them away would leave the failover
+                // choosing blind until a fresh sweep.
+                latencies = current.latencies
+                    .mapKeys { (id, _) -> NodeIdMigration.follow(id, mapping) }
+                    .mapValues { (id, result) -> result.copy(nodeId = id) },
+                subscriptions = current.subscriptions.map { subscription ->
+                    subscription.copy(nodeIds = NodeIdMigration.follow(subscription.nodeIds, mapping))
+                },
+            )
         }
     }
 

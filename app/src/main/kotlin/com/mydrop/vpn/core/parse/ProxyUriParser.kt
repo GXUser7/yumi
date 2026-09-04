@@ -3,6 +3,7 @@ package com.mydrop.vpn.core.parse
 import com.mydrop.vpn.core.model.MultiplexOptions
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
 import com.mydrop.vpn.core.model.TlsOptions
@@ -101,7 +102,7 @@ object ProxyUriParser {
 
     private fun parseVmessJson(o: JsonObject, uri: String, subId: String?): ProxyNode? {
         val host = o.str("add") ?: return null
-        val port = o.str("port")?.toIntOrNull() ?: return null
+        val port = o.str("port")?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
         val uuid = o.str("id") ?: return null
 
         val net = o.str("net")?.lowercase().orEmpty()
@@ -141,7 +142,7 @@ object ProxyUriParser {
         )
 
         return ProxyNode(
-            id = ProxyNode.stableId(host, port, settings, subId),
+            id = "",
             name = o.str("ps")?.ifEmpty { null } ?: "$host:$port",
             server = host,
             port = port,
@@ -150,7 +151,7 @@ object ProxyUriParser {
             transport = transport,
             subscriptionId = subId,
             sourceUri = uri,
-        )
+        ).identified()
     }
 
     private fun parseVmessUri(uri: String, subId: String?): ProxyNode? {
@@ -190,14 +191,14 @@ object ProxyUriParser {
             val (host, port) = splitHostAndPort(decoded.substring(at + 1)) ?: return null
             val settings = ProxySettings.Shadowsocks(method, password)
             return ProxyNode(
-                id = ProxyNode.stableId(host, port, settings, subId),
+                id = "",
                 name = name.ifEmpty { "$host:$port" },
                 server = host,
                 port = port,
                 settings = settings,
                 subscriptionId = subId,
                 sourceUri = uri,
-            )
+            ).identified()
         }
 
         // SIP002: ss://base64(method:password)@host:port?plugin=...#name
@@ -213,14 +214,14 @@ object ProxyUriParser {
             pluginOptions = plugin.substringAfter(';', ""),
         )
         return ProxyNode(
-            id = ProxyNode.stableId(p.host, p.port, settings, subId),
+            id = "",
             name = p.fragment.ifEmpty { "${p.host}:${p.port}" },
             server = p.host,
             port = p.port,
             settings = settings,
             subscriptionId = subId,
             sourceUri = uri,
-        )
+        ).identified()
     }
 
     // ------------------------------------------------------------ Hysteria2
@@ -344,7 +345,7 @@ object ProxyUriParser {
      * named in a link is a wrapper it has never heard of.
      */
     private val KNOWN_TRANSPORTS =
-        setOf("ws", "websocket", "grpc", "http", "h2", "httpupgrade", "quic")
+        setOf("ws", "websocket", "grpc", "httpupgrade", "xhttp", "splithttp")
 
     /** Spellings that all mean "no wrapper at all", which is a perfectly good answer. */
     private val PLAIN_TRANSPORTS = setOf("tcp", "raw", "none", "original")
@@ -378,7 +379,7 @@ object ProxyUriParser {
 
         val transport = p.transport()
         return ProxyNode(
-            id = ProxyNode.stableId(p.host, p.port, settings, subId),
+            id = "",
             name = p.fragment.ifEmpty { "${p.host}:${p.port}" },
             server = p.host,
             port = p.port,
@@ -388,7 +389,7 @@ object ProxyUriParser {
             multiplex = p.multiplex(),
             subscriptionId = subId,
             sourceUri = sourceUri,
-        )
+        ).identified()
     }
 
     private fun ParsedUri.transport(): TransportOptions? {
@@ -404,9 +405,19 @@ object ProxyUriParser {
             "grpc" -> TransportOptions.Grpc(
                 serviceName = q("servicename", "service_name", "service-name", "path").orEmpty(),
             )
-            "http", "h2" -> TransportOptions.Http(host = splitCsv(hostHeader), path = path)
             "httpupgrade" -> TransportOptions.HttpUpgrade(host = hostHeader, path = path)
-            "quic" -> TransportOptions.Quic
+            // Two names for one transport: `splithttp` is what it was called before it was
+            // renamed, and subscriptions still hand out both.
+            "xhttp", "splithttp" -> TransportOptions.Xhttp(
+                path = path,
+                host = hostHeader,
+                mode = q("mode").orEmpty().ifEmpty { "auto" },
+            )
+            // `http`/`h2` and `quic` are deliberately absent, and their absence is the point.
+            // The core removed both transports outright and answers a document naming either with
+            // a removed-feature error, so a link asking for one has to be refused at import rather
+            // than accepted and quietly downgraded to plain TCP — which is what accepting it would
+            // amount to, and which produces a server that dials, measures well and carries nothing.
             else -> null
         }
     }
@@ -434,9 +445,11 @@ object ProxyUriParser {
             insecure = qBool("insecure", "allowinsecure", "allow_insecure", "skip-cert-verify", "skip_cert_verify"),
             alpn = splitCsv(q("alpn")),
             fingerprint = q("fp", "fingerprint", "client-fingerprint", "client_fingerprint"),
+            pinnedCertSha256 = q("pcs", "pinnedpeercertsha256", "pinned_peer_cert_sha256").orEmpty(),
+            verifyPeerCertByName = q("vcn", "verifypeercertbyname", "verify_peer_cert_by_name").orEmpty(),
             reality = realityKey?.let {
                 RealityOptions(
-                    publicKey = it,
+                    publicKey = normalizeRealityKey(it),
                     shortId = q("sid", "short-id", "shortid", "short_id").orEmpty(),
                     spiderX = q("spx", "spider-x", "spiderx", "spider_x", "path") ?: "/",
                 )
@@ -460,10 +473,23 @@ object ProxyUriParser {
      * makes it a pair; anything else falls back to plain percent-decoding. See [parseSocks].
      */
     private fun credentialPair(userInfo: String): List<String> {
-        val decoded = base64DecodeOrNull(userInfo)
-            ?.takeIf { it.contains(':') && it.all { ch -> ch == '	' || ch.code in 0x20..0x7e } }
+        val decoded = base64DecodeOrNull(userInfo)?.takeIf(::looksLikeCredentials)
         return (decoded ?: urlDecode(userInfo)).split(':', limit = 2)
     }
+
+    /**
+     * Whether a base64 decode produced credentials rather than noise.
+     *
+     * The colon is what makes it a pair. The character test used to demand printable ASCII, which
+     * threw away every password containing a non-Latin character — and the caller then fell back to
+     * the *raw base64 string* as the password, so the node was created with credentials nobody had
+     * ever set. Control characters are the real signal that a decode went wrong; letters outside
+     * ASCII are not.
+     */
+    private fun looksLikeCredentials(decoded: String): Boolean =
+        decoded.contains(':') &&
+            decoded.none { ch -> ch.code < 0x20 && ch != '\t' } &&
+            decoded.none { ch -> ch.code == 0x7f }
 
     /** vmess JSON mixes strings and numbers for the same field depending on the panel. */
     private fun JsonObject.str(vararg keys: String): String? {

@@ -4,8 +4,7 @@ import android.content.Context
 import com.mydrop.vpn.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
-import com.mydrop.vpn.core.model.RoutingMode
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.UUID
@@ -35,6 +34,14 @@ class TunnelConfigBuilder(
      * failover pool is already decided.
      */
     private val switchableGroup: (ProxyNode) -> List<ProxyNode> = { listOf(it) },
+    /**
+     * Whether the geo databases are on disk right now.
+     *
+     * Asked rather than held, and asked at build time: they arrive in the background after the
+     * first connection, so a value captured earlier would keep the rules out of the document long
+     * after the files landed.
+     */
+    private val geoAvailable: () -> Boolean = { false },
 ) {
 
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
@@ -91,43 +98,42 @@ class TunnelConfigBuilder(
     val switchable: StateFlow<Set<String>> = _switchable.asStateFlow()
 
     /** Null when the configuration could not be built; the reason is already in the log. */
-    fun build(node: ProxyNode): String? {
-        // Extraction happens here, before the core is handed paths it will read during startup.
-        // A rule-set the core cannot open fails the whole tunnel, not just one routing rule.
-        val ruleSets = RuleSetStore(context)
-        val ruleSetDir = ruleSets.ensureExtracted()
-        val missing = ruleSets.missing()
-
-        val effectiveSettings = if (missing.isEmpty()) {
-            settings.value
-        } else {
-            // Route by rules without the geo sets rather than refusing to connect: plain routing
-            // still works, and a tunnel that comes up beats one that will not.
-            logs.warn(R.string.log_georules_missing, missing.joinToString())
-            settings.value.copy(routingMode = RoutingMode.Global, blockAds = false)
-        }
+    fun build(node: ProxyNode): XrayConfigFactory.Document? {
+        // Asked before the document is built rather than after, because the answer changes what may
+        // go into it. Xray resolves every `geoip:`/`geosite:` reference while parsing and refuses
+        // the whole configuration when one is missing — so on a phone that has not fetched the
+        // databases yet, a document naming them is not a degraded tunnel, it is no tunnel.
+        val geoAvailable = geoAvailable()
+        if (!geoAvailable) logs.warn(R.string.log_geo_missing)
 
         val probe = newProbeEndpoint()
         val group = switchableGroup(node)
 
         return runCatching {
-            SingBoxConfigFactory.build(
-                node = node,
-                settings = effectiveSettings,
-                ruleSetDir = ruleSetDir.absolutePath,
+            XrayConfigFactory.build(
+                nodes = group,
+                selected = node,
+                settings = settings.value,
                 probe = probe,
                 dnsOverride = selectedDns(),
-                dnsFallback = _dnsFallback.value,
-                group = group,
+                geoAvailable = geoAvailable,
             )
-        }.onSuccess {
+        }.onSuccess { document ->
+            // Said once per connection rather than swallowed: Xray removed the "do not verify the
+            // certificate" switch outright, so a server that relied on it will fail its handshake
+            // and the journal has to be able to say why.
+            document.verificationForced.forEach { name ->
+                logs.warn(R.string.log_tls_verification_forced, name)
+            }
             // Only once the document exists: publishing an endpoint for a configuration that was
             // never handed to the core would point the speed test at a port nothing listens on.
             _probe.value = probe
             // Only what the core is about to be given, and only once the document it goes into
             // exists. A group published for a configuration that was never built would send the
             // watchdog at servers no core holds.
-            _switchable.value = group.mapTo(mutableSetOf()) { it.id }
+            _switchable.value = document.nodeTags.mapTo(mutableSetOf()) { tag ->
+                tag.removePrefix(XrayConfigFactory.nodeTag(""))
+            }
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
             // when reading a log off the device.

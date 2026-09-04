@@ -111,7 +111,7 @@ data class AppSettings(
 
     // DNS
     val remoteDns: String = "https://1.1.1.1/dns-query",
-    // Matches SingBoxConfigFactory.DEFAULT_DIRECT_DNS — see the comment there for why "local" is
+    // Matches XrayConfigFactory.DEFAULT_DIRECT_DNS — see the comment there for why "local" is
     // not this default: nothing implements the Android bridge it needs, so every install would
     // start with a direct resolver that answers nothing.
     val directDns: String = "8.8.8.8",

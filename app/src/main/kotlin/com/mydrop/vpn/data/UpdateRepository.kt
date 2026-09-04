@@ -2,6 +2,7 @@ package com.mydrop.vpn.data
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -122,6 +123,37 @@ class UpdateRepository(
     }
 
     /**
+     * What is wrong with the downloaded file, or null when nothing is.
+     *
+     * Three questions, cheapest first: is it an APK at all, is it *this* app, and is it signed by
+     * the key the running copy was signed with. The last is what Android will check anyway; asking
+     * here turns a silent refusal into a sentence.
+     */
+    private fun verify(file: File): String? {
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES
+        val candidate = runCatching {
+            context.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+        }.getOrNull() ?: return strings.get(R.string.error_update_not_an_apk)
+
+        if (candidate.packageName != context.packageName) {
+            return strings.get(R.string.error_update_wrong_package, candidate.packageName.orEmpty())
+        }
+
+        val installed = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, flags)
+        }.getOrNull() ?: return null
+
+        val ours = installed.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
+        val theirs = candidate.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
+        // Null on either side means the platform would not tell us, which is not evidence of a
+        // mismatch — and refusing on "do not know" would block every update on a phone that
+        // answers differently.
+        if (ours.isNullOrEmpty() || theirs.isNullOrEmpty()) return null
+        if (ours != theirs) return strings.get(R.string.error_update_wrong_signature)
+        return null
+    }
+
+    /**
      * Hands the downloaded file to Android's package installer.
      *
      * On Android 8 and later an app may only do this once the user has allowed it to install
@@ -143,6 +175,19 @@ class UpdateRepository(
                     Uri.parse("package:${context.packageName}"),
                 ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
+            return false
+        }
+
+        // Read before it is handed over.
+        //
+        // Android refuses an update signed by a different key, so this is not the last line of
+        // defence — but it is the only one that can say *why*. Without it a truncated download or a
+        // file from the wrong release reaches the system installer and comes back as
+        // "App not installed", a sentence that names nothing and sends the user to reinstall by
+        // hand — which on this app means losing their servers.
+        verify(ready.file)?.let { reason ->
+            logs.error(R.string.log_update_rejected, reason)
+            _state.value = UpdateState.Failed(strings.get(R.string.error_update_rejected, reason))
             return false
         }
 

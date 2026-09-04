@@ -324,6 +324,13 @@ Send it here: %2$s</string>
     <string name="settings_interval_1d">Once a day</string>
 
     <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_geo">Routing databases</string>
+    <string name="settings_geo_ready">Databases are in place</string>
+    <string name="settings_geo_missing">Databases not downloaded</string>
+    <string name="settings_geo_size">%1$s on disk — country and category rules work</string>
+    <string name="settings_geo_missing_subtitle">Until they are, everything goes through the proxy: rules by country and the ad blocker are left out</string>
+    <string name="settings_geo_update">Update</string>
+    <string name="settings_geo_download">Download</string>
     <string name="settings_logs">Journal</string>
     <string name="settings_alerts">Notify me about faults</string>
     <string name="settings_alerts_subtitle">When a server or resolver is replaced, or a new version is out</string>
@@ -350,6 +357,7 @@ Send it here: %2$s</string>
     <!-- ================================================== Snackbar / messages -->
 
     <string name="message_no_vpn_permission">Without VPN permission the tunnel cannot come up</string>
+    <string name="message_no_server_after_consent">Permission granted, but the server it was for is gone — pick one and connect again</string>
     <string name="message_routing_applied">“%1$s” mode applied</string>
     <string name="message_certificate_skipped">“%1$s”: the certificate is not checked</string>
     <string name="message_certificate_verified">“%1$s”: certificate checking is on</string>
@@ -407,6 +415,7 @@ Send it here: %2$s</string>
 
     <string name="log_subscription_message">Subscription “%1$s”: %2$s</string>
     <string name="log_subscription_received">Subscription “%1$s”: %2$s received</string>
+    <string name="log_subscription_via_tunnel">Provider unreachable directly — fetching «%1$s» through the tunnel</string>
     <string name="log_auto_update">Auto-refresh: %1$s</string>
     <string name="log_auto_update_failed">Subscription auto-refresh: %1$s</string>
 
@@ -442,6 +451,11 @@ Send it here: %2$s</string>
     <string name="log_autoselect_measuring">Auto-select: measuring latencies (%1$d)</string>
 
     <string name="log_georules_missing">Geo rules unavailable (%1$s) — routing without them</string>
+    <string name="log_geo_missing">Geo databases not downloaded yet — routing everything through the proxy until they are</string>
+    <string name="log_node_ids_migrated">Server identity updated for %1$d entries after the transport fix</string>
+    <string name="log_geo_downloaded">Geo database %1$s is ready</string>
+    <string name="log_geo_failed">Could not fetch %1$s (%2$s) — routing without it</string>
+    <string name="log_tls_verification_forced">%1$s asked for the certificate check to be skipped, which this core cannot do — it will be verified</string>
     <string name="log_probe_port">Speed test port: %1$d</string>
     <string name="log_config_failed">Could not assemble the configuration: %1$s</string>
 
@@ -509,6 +523,7 @@ Send it here: %2$s</string>
     <string name="speed_metered_body">The test opens several streams and can move a few hundred megabytes each way. On a metered plan that is charged.</string>
     <string name="log_failover_home_abandoned">“%1$s” keeps dropping out — staying on the replacement</string>
     <string name="log_skipped_unsupported_transport">Skipped %1$d servers: the core cannot carry %2$s</string>
+    <string name="log_skipped_unsupported_protocol">Skipped %1$d server(s) this core cannot carry: %2$s</string>
 
     <!-- Notifications for things the app would otherwise handle in silence. -->
     <string name="alert_channel_name">Faults</string>
@@ -553,4 +568,10 @@ Send it here: %2$s</string>
     <string name="error_update_unreadable">Could not read the release information</string>
     <string name="error_update_no_asset">The release has no build for this architecture (%1$s)</string>
     <string name="error_update_download">Download failed (%1$s)</string>
+    <string name="error_update_truncated">Download stopped early: %1$d bytes of %2$d</string>
+    <string name="error_update_not_an_apk">the downloaded file is not an installable package</string>
+    <string name="error_update_wrong_package">the package inside is %1$s, not this app</string>
+    <string name="error_update_wrong_signature">it is signed by a different key</string>
+    <string name="error_update_rejected">Update refused: %1$s</string>
+    <string name="log_update_rejected">Downloaded update refused: %1$s</string>
 </resources>

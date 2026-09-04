@@ -39,7 +39,10 @@ class TunnelLauncher(
 
         tunnel.permissionIntent()?.let { return ConnectOutcome.NeedsConsent(it) }
 
-        connectTo(node, "launcher.connect")
+        // Awaited, not fired off. This is the path the boot receiver and the Quick Settings tile
+        // take, and the receiver's permission to start a foreground service lasts only as long as
+        // this call does — see TunnelController.connectNow.
+        tunnel.connectNow(node, "launcher.connect")
         return ConnectOutcome.Started(node)
     }
 

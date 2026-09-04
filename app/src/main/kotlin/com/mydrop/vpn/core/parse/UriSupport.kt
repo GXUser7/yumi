@@ -1,6 +1,5 @@
 package com.mydrop.vpn.core.parse
 
-import java.net.URLDecoder
 import java.util.Base64
 import com.mydrop.vpn.core.net.splitHostPort
 
@@ -49,8 +48,14 @@ internal fun splitUri(raw: String): ParsedUri? {
         rest = rest.substring(0, queryIndex)
     }
 
-    // Trailing path segment ("/") carries no meaning for these schemes.
-    rest = rest.trimEnd('/')
+    // The path, which several schemes carry and none of them put the host after.
+    //
+    // Only the trailing slash used to be trimmed, so `trojan://pass@host:443/path?sni=x` reached
+    // the host/port split as `host:443/path` — where the port fails to parse and the whole line is
+    // refused. A trojan-go link with a path is an ordinary thing for a provider to hand out, and
+    // the server disappeared from the subscription without a word.
+    val pathStart = rest.indexOf('/', startIndex = rest.lastIndexOf('@') + 1)
+    if (pathStart >= 0) rest = rest.substring(0, pathStart)
 
     var userInfo = ""
     val atIndex = rest.lastIndexOf('@')
@@ -87,8 +92,56 @@ internal fun parseQuery(raw: String): Map<String, String> =
             else urlDecode(pair.substring(0, eq)).lowercase() to urlDecode(pair.substring(eq + 1))
         }
 
-internal fun urlDecode(value: String): String =
-    runCatching { URLDecoder.decode(value, Charsets.UTF_8.name()) }.getOrDefault(value)
+/**
+ * Percent-decoding, and deliberately *not* `URLDecoder`.
+ *
+ * `URLDecoder.decode` implements `application/x-www-form-urlencoded`, where `+` means a space. That
+ * is the correct reading of an HTML form and the wrong reading of a proxy share-link: a WireGuard
+ * key, a Shadowsocks-2022 key and a VMess password are all standard base64, where `+` is one of the
+ * sixty-four characters and appears in roughly half of them. Every one of those keys arrived here
+ * with its plus signs turned into spaces, which produces a server that is accepted, listed, and
+ * cannot authenticate — with nothing on screen to say the key was altered on the way in.
+ *
+ * A literal `+` is therefore kept as a literal `+`. Anything that really meant a space is written
+ * `%20`, which is decoded below.
+ *
+ * Malformed input is returned unchanged rather than thrown away: `%` is legal in a password, and a
+ * stray one is not a reason to lose the server.
+ */
+internal fun urlDecode(value: String): String {
+    if ('%' !in value) return value
+    val out = StringBuilder(value.length)
+    val bytes = java.io.ByteArrayOutputStream()
+
+    fun flush() {
+        if (bytes.size() > 0) {
+            out.append(String(bytes.toByteArray(), Charsets.UTF_8))
+            bytes.reset()
+        }
+    }
+
+    var index = 0
+    while (index < value.length) {
+        val ch = value[index]
+        if (ch == '%' && index + 2 < value.length) {
+            val hex = value.substring(index + 1, index + 3)
+            val byte = hex.toIntOrNull(16)
+            if (byte != null) {
+                // Collected rather than decoded one at a time: a multi-byte UTF-8 character is
+                // several escapes in a row, and turning each into its own string would produce
+                // mojibake instead of the character.
+                bytes.write(byte)
+                index += 3
+                continue
+            }
+        }
+        flush()
+        out.append(ch)
+        index++
+    }
+    flush()
+    return out.toString()
+}
 
 /**
  * Tolerant base64: subscription bodies and vmess payloads show up standard or URL-safe, padded
@@ -106,6 +159,27 @@ internal fun base64DecodeOrNull(value: String): String? {
         else -> normalized
     }
     return runCatching { String(Base64.getDecoder().decode(padded), Charsets.UTF_8) }.getOrNull()
+}
+
+/**
+ * A REALITY public key in the one spelling the core accepts.
+ *
+ * `publicKey` is decoded as raw URL-safe base64 without padding, so the standard alphabet a
+ * provider may have used — `+` and `/`, with `=` on the end — is rejected, and rejected is the whole
+ * document rather than the one node. Providers do emit both, and the same key written either way is
+ * the same thirty-two bytes; converting is lossless.
+ *
+ * Left alone when it does not look like base64 at all: a key this cannot understand is better
+ * handed to the core unaltered, so the core's own error names it, than quietly turned into
+ * something else.
+ */
+internal fun normalizeRealityKey(value: String): String {
+    val trimmed = value.trim().trimEnd('=')
+    if (trimmed.isEmpty()) return trimmed
+    if (!trimmed.all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '-' || it == '_' }) {
+        return trimmed
+    }
+    return trimmed.replace('+', '-').replace('/', '_')
 }
 
 internal fun base64UrlEncode(value: String): String =

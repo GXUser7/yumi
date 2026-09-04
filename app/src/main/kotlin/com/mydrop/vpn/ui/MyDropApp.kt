@@ -96,6 +96,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val logs by viewModel.logs.collectAsStateWithLifecycle()
     val speedTest by viewModel.speedTest.collectAsStateWithLifecycle()
     val updates by viewModel.updates.collectAsStateWithLifecycle()
+    val geoAssets by viewModel.geoAssets.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -190,7 +191,11 @@ fun MyDropApp(viewModel: MainViewModel) {
             composable(Routes.SPEED) {
                 SpeedTestScreen(
                     state = speedTest,
-                    isMetered = remember { viewModel.speedTestIsMetered() },
+                    // Asked on every composition rather than remembered. It is one cheap query to
+                    // ConnectivityManager, and `remember` with no key cached the answer for the
+                    // life of the screen — so the warning about spending mobile data never appeared
+                    // for the one person it exists for: somebody who started on Wi-Fi and lost it.
+                    isMetered = viewModel.speedTestIsMetered(),
                     onStart = viewModel::startSpeedTest,
                     onStop = viewModel::stopSpeedTest,
                     onBack = { navController.popBackStack() },
@@ -233,6 +238,8 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
                     onOpenFailover = { navController.navigate(Routes.FAILOVER) },
                     onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
+                    geoAssets = geoAssets,
+                    onRefreshGeo = viewModel::refreshGeoAssets,
                     updates = updates,
                     onCheckUpdate = viewModel::checkForUpdate,
                     onDownloadUpdate = viewModel::downloadUpdate,

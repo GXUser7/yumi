@@ -59,6 +59,28 @@ sealed interface TransportOptions {
     data object Quic : TransportOptions {
         override val label: String get() = "QUIC"
     }
+
+    /**
+     * XHTTP, which Xray also answers to as `splithttp`.
+     *
+     * The transport this whole port exists for. A subscription started handing out `type=xhttp`
+     * nodes, sing-box has no implementation of it and is not going to grow one, and the parser
+     * that met them first dropped the transport and produced ordinary-looking VLESS — servers
+     * that connected, showed a plausible latency, and failed every request underneath. The parser
+     * now refuses such a link outright while the core is sing-box; on Xray it is simply a
+     * transport like any other.
+     */
+    @Serializable
+    @SerialName("xhttp")
+    data class Xhttp(
+        val path: String = "/",
+        val host: String = "",
+        /** `auto`, `packet-up`, `stream-up`, `stream-one`; the core decides when left as `auto`. */
+        val mode: String = "auto",
+        val headers: Map<String, String> = emptyMap(),
+    ) : TransportOptions {
+        override val label: String get() = "XHTTP"
+    }
 }
 
 @Serializable

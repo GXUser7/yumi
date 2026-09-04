@@ -320,6 +320,13 @@
     <string name="settings_interval_1d">Раз в сутки</string>
 
     <string name="settings_diagnostics">Диагностика</string>
+    <string name="settings_geo">Базы маршрутизации</string>
+    <string name="settings_geo_ready">Базы на месте</string>
+    <string name="settings_geo_missing">Базы не скачаны</string>
+    <string name="settings_geo_size">%1$s на диске — правила по странам и категориям работают</string>
+    <string name="settings_geo_missing_subtitle">Пока их нет, всё идёт через прокси: правила по странам и блокировка рекламы не применяются</string>
+    <string name="settings_geo_update">Обновить</string>
+    <string name="settings_geo_download">Скачать</string>
     <string name="settings_logs">Журнал</string>
     <string name="settings_alerts">Сообщать о неполадках</string>
     <string name="settings_alerts_subtitle">Когда меняется сервер или DNS, а также о новой версии</string>
@@ -346,6 +353,7 @@
     <!-- ================================================== Сообщения -->
 
     <string name="message_no_vpn_permission">Без разрешения VPN туннель не поднять</string>
+    <string name="message_no_server_after_consent">Разрешение получено, но сервер, ради которого его просили, пропал — выберите заново</string>
     <string name="message_routing_applied">Режим «%1$s» применён</string>
     <string name="message_certificate_skipped">«%1$s»: сертификат не проверяется</string>
     <string name="message_certificate_verified">«%1$s»: проверка сертификата включена</string>
@@ -403,6 +411,7 @@
 
     <string name="log_subscription_message">Подписка «%1$s»: %2$s</string>
     <string name="log_subscription_received">Подписка «%1$s»: получено %2$s</string>
+    <string name="log_subscription_via_tunnel">Провайдер недоступен напрямую — тяну «%1$s» через туннель</string>
     <string name="log_auto_update">Автообновление: %1$s</string>
     <string name="log_auto_update_failed">Автообновление подписок: %1$s</string>
 
@@ -438,6 +447,11 @@
     <string name="log_autoselect_measuring">Автовыбор: измеряю задержки (%1$d)</string>
 
     <string name="log_georules_missing">Гео-правила недоступны (%1$s) — маршрутизация без них</string>
+    <string name="log_geo_missing">Гео-базы ещё не скачаны — пока весь трафик идёт через прокси</string>
+    <string name="log_node_ids_migrated">Обновлены идентификаторы серверов: %1$d — после правки различения транспортов</string>
+    <string name="log_geo_downloaded">Гео-база %1$s на месте</string>
+    <string name="log_geo_failed">Не удалось скачать %1$s (%2$s) — маршрутизация без неё</string>
+    <string name="log_tls_verification_forced">%1$s просит не проверять сертификат, а это ядро так не умеет — сертификат будет проверен</string>
     <string name="log_probe_port">Порт для замера скорости: %1$d</string>
     <string name="log_config_failed">Не удалось собрать конфигурацию: %1$s</string>
 
@@ -505,6 +519,7 @@
     <string name="speed_metered_body">Замер открывает несколько потоков и может прогнать по несколько сотен мегабайт в каждую сторону. На тарифе с лимитом это платный трафик.</string>
     <string name="log_failover_home_abandoned">«%1$s» продолжает отваливаться — остаюсь на запасном</string>
     <string name="log_skipped_unsupported_transport">Пропущено серверов: %1$d — ядро не умеет %2$s</string>
+    <string name="log_skipped_unsupported_protocol">Пропущено серверов, которые это ядро не умеет: %1$d (%2$s)</string>
 
     <!-- Уведомления о том, что приложение иначе сделало бы молча. -->
     <string name="alert_channel_name">Неполадки</string>
@@ -549,4 +564,10 @@
     <string name="error_update_unreadable">Не удалось прочитать сведения о релизе</string>
     <string name="error_update_no_asset">В релизе нет сборки для этой архитектуры (%1$s)</string>
     <string name="error_update_download">Не удалось скачать (%1$s)</string>
+    <string name="error_update_truncated">Загрузка оборвалась: %1$d байт из %2$d</string>
+    <string name="error_update_not_an_apk">скачанный файл — не устанавливаемый пакет</string>
+    <string name="error_update_wrong_package">внутри пакет %1$s, а не это приложение</string>
+    <string name="error_update_wrong_signature">подписан другим ключом</string>
+    <string name="error_update_rejected">Обновление отклонено: %1$s</string>
+    <string name="log_update_rejected">Скачанное обновление отклонено: %1$s</string>
 </resources>

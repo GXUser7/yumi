@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.Subscription
 import kotlinx.coroutines.CoroutineScope
@@ -30,13 +31,13 @@ class SubscriptionRefreshSelectionTest {
     private fun repository() = ProfileRepository(folder.newFolder(), scope)
 
     private fun node(name: String, server: String, uuid: String, subscription: String) = ProxyNode(
-        id = ProxyNode.stableId(server, 443, ProxySettings.Vless(uuid), subscription),
+        id = "",
         name = name,
         server = server,
         port = 443,
         settings = ProxySettings.Vless(uuid),
         subscriptionId = subscription,
-    )
+    ).identified()
 
     private val sub = "sub-1"
 

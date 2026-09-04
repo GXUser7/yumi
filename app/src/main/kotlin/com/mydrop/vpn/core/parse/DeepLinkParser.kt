@@ -68,6 +68,18 @@ object DeepLinkParser {
         }
     }
 
+    /**
+     * The query with the app's own `name` taken out and everything else left alone.
+     *
+     * Kept as text rather than rebuilt from a parsed map: re-encoding somebody's token is a way to
+     * change it, and the only parameter here that belongs to the app is the one being removed.
+     */
+    private fun stripName(query: String): String =
+        query.split('&')
+            .filterNot { it.substringBefore('=').equals("name", ignoreCase = true) }
+            .filter { it.isNotEmpty() }
+            .joinToString("&")
+
     private fun parseAppLink(text: String, scheme: String): DeepLinkPayload {
         val rest = text.removePrefix("$scheme://")
         val action = rest.substringBefore('/', missingDelimiterValue = "").lowercase()
@@ -76,11 +88,24 @@ object DeepLinkParser {
             return DeepLinkPayload.Unsupported(text, UnsupportedReason.NoPayload)
         }
 
-        val name = parseQuery(payloadWithQuery.substringAfter('?', ""))["name"]
-            ?.takeIf(String::isNotEmpty)
-        val payload = payloadWithQuery.substringBefore('?')
-        val decoded = base64DecodeOrNull(payload)?.takeIf { it.contains("://") }
-            ?: urlDecode(payload)
+        val query = payloadWithQuery.substringAfter('?', "")
+        val name = parseQuery(query)["name"]?.takeIf(String::isNotEmpty)
+        val head = payloadWithQuery.substringBefore('?')
+
+        // Cutting at the `?` is right for an encoded payload and wrong for a plain one, and the
+        // difference is a working subscription or a dead one.
+        //
+        // `mydrop://add/<base64>?name=Home` puts app metadata after the payload, and base64 cannot
+        // contain a `?`, so the cut is safe. `mydrop://add/https://panel.example.com/sub?token=…`
+        // is the same shape with the query belonging to the *link* — and cutting there dropped the
+        // token, so the subscription was saved without its credentials and answered 401 forever.
+        //
+        // Which one it is, is decidable: a payload that decodes to something with a scheme in it is
+        // encoded, and anything else is written plainly.
+        val encoded = base64DecodeOrNull(head)?.takeIf { it.contains("://") }
+        val decoded = encoded ?: urlDecode(
+            if (query.isEmpty()) head else "$head?" + stripName(query),
+        )
 
         return when {
             action in subscriptionActions && decoded.startsWith("http") ->

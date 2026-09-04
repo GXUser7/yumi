@@ -25,6 +25,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.mydrop.vpn.data.GeoAssetStore
+import com.mydrop.vpn.ui.format.formatBytes
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Article
@@ -145,6 +149,8 @@ fun SettingsScreen(
     onOpenSplitTunnel: () -> Unit,
     onOpenFailover: () -> Unit,
     onOpenMobileNodes: () -> Unit,
+    geoAssets: GeoAssetStore.State,
+    onRefreshGeo: () -> Unit,
     updates: UpdateState,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
@@ -602,6 +608,21 @@ fun SettingsScreen(
          * hand-picked list emptying itself happens once and quietly disarms something the user set
          * up. Somebody who has silenced the first still wants the second.
          */
+        /*
+         * Visible because its absence is not. The databases arrive in the background and the rules
+         * that name them are left out of the configuration when they are missing — so "route by
+         * rules" and "block ads" can both be switched on and quietly doing nothing, with the tunnel
+         * working perfectly and no way to tell from the outside.
+         */
+        item("geo") {
+            SettingsSection(
+                title = stringResource(R.string.settings_geo),
+                icon = Icons.Rounded.Router,
+            ) {
+                GeoRow(state = geoAssets, onRefresh = onRefreshGeo)
+            }
+        }
+
         item("alerts") {
             SettingsSection(
                 title = stringResource(R.string.settings_alerts_section),
@@ -681,6 +702,51 @@ fun SettingsScreen(
         }
 
         item("tail") { Spacer(Modifier.height(88.dp)) }
+    }
+}
+
+/**
+ * The state of the routing databases, and a way to fetch them again.
+ *
+ * The size is shown rather than a bare "ready", because that is the number that says whether these
+ * are the real databases or a truncated download: the pair comes to a couple of dozen megabytes.
+ */
+@Composable
+private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = stringResource(
+                    if (state.ready) R.string.settings_geo_ready else R.string.settings_geo_missing,
+                ),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = if (state.ready) {
+                    val size = formatBytes(state.bytes)
+                    stringResource(R.string.settings_geo_size, "${size.value} ${size.unit}")
+                } else {
+                    stringResource(R.string.settings_geo_missing_subtitle)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        if (state.refreshing) {
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        } else {
+            FilledTonalButton(onClick = onRefresh) {
+                Text(
+                    stringResource(
+                        if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
+                    ),
+                )
+            }
+        }
     }
 }
 

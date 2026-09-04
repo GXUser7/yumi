@@ -136,6 +136,10 @@ class AlertNotifier(
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(open)
             .setAutoCancel(true)
+            // Re-posting the same id refreshes the text without buzzing the phone again. Without
+            // it, a watchdog that cannot find anywhere to move re-alerts every few seconds — the
+            // same one line in the shade, and a vibration each time.
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .build()
 
@@ -165,6 +169,10 @@ class AlertNotifier(
         const val ID_DNS = 4002
         const val ID_UPDATE = 4003
         const val ID_CORES = 4004
-        const val ID_LIST = 4004
+
+        // 4005, not 4004. The comment above says stable *per kind*, and these two were the same
+        // number: an emptied-list warning replaced a live-cores warning and the other way round,
+        // so whichever fired second was the only one the user ever saw.
+        const val ID_LIST = 4005
     }
 }

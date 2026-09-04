@@ -56,18 +56,57 @@ data class ProxyNode(
          * the server list, the selection and the latency map, so duplicates crash the list and
          * make "which one did I pick" unanswerable. It is stable across refreshes because a
          * subscription keeps its own id for life.
+         *
+         * Takes the whole node rather than the four fields it used to, and that is the point: an
+         * id computed from a subset silently stops distinguishing whatever the subset leaves out.
+         * See [dialDiscriminator] for what that cost.
          */
-        fun stableId(
-            server: String,
-            port: Int,
-            settings: ProxySettings,
-            subscriptionId: String? = null,
-        ): String {
-            val scope = subscriptionId ?: "manual"
-            val seed =
-                "$scope|${settings.protocol.name}|$server|$port|${settings.credentialFingerprint()}"
+        fun stableId(node: ProxyNode): String {
+            val scope = node.subscriptionId ?: "manual"
+            val settings = node.settings
+            val seed = buildString {
+                append(scope).append('|')
+                append(settings.protocol.name).append('|')
+                append(node.server).append('|')
+                append(node.port).append('|')
+                append(settings.credentialFingerprint())
+                append('|').append(node.dialDiscriminator())
+            }
             val digest = MessageDigest.getInstance("SHA-256").digest(seed.toByteArray())
             return digest.take(12).joinToString("") { "%02x".format(it) }
+        }
+
+        /**
+         * What else makes two servers on the same endpoint two servers.
+         *
+         * The seed used to stop at the credentials, and that was wrong in a way only a real
+         * subscription showed: a provider offering the same host, port and key over several
+         * transports produced several nodes with one id, and [distinctById] kept whichever came
+         * first. In one subscription of a hundred and twenty-one servers, twelve never reached the
+         * list — no error, no line in the journal, just a shorter list than the provider's.
+         *
+         * Only what changes how the server is dialled goes in. The uTLS fingerprint and the ALPN
+         * list do not: they are how this side presents itself, not which endpoint it reaches, and
+         * putting them here would split one server into two whenever a provider re-issued its links
+         * with a different disguise.
+         */
+        private fun ProxyNode.dialDiscriminator(): String = buildString {
+            transport?.let { t ->
+                append(t.label)
+                when (t) {
+                    is TransportOptions.WebSocket -> append(t.path).append(t.headers["Host"].orEmpty())
+                    is TransportOptions.Grpc -> append(t.serviceName)
+                    is TransportOptions.HttpUpgrade -> append(t.host).append(t.path)
+                    is TransportOptions.Xhttp -> append(t.host).append(t.path).append(t.mode)
+                    is TransportOptions.Http -> append(t.host.joinToString(",")).append(t.path)
+                    TransportOptions.Quic -> Unit
+                }
+            }
+            tls?.takeIf { it.enabled }?.let { t ->
+                append('|').append(t.serverName.orEmpty())
+                t.reality?.let { append('|').append(it.publicKey).append(it.shortId) }
+                if (t.pinnedCertSha256.isNotBlank()) append('|').append(t.pinnedCertSha256)
+            }
         }
 
         private fun ProxySettings.credentialFingerprint(): String = when (this) {
@@ -91,6 +130,15 @@ data class ProxyNode(
         }
     }
 }
+
+/**
+ * The same node with the id its contents imply.
+ *
+ * Every parser builds a node and then needs an id for it. Doing it this way round — build, then
+ * identify — is what keeps the id and the node from disagreeing: there is no argument list to
+ * forget a field in.
+ */
+fun ProxyNode.identified(): ProxyNode = copy(id = ProxyNode.stableId(this))
 
 /** Latency measured for a node. Kept out of [ProxyNode] so a refresh does not wipe measurements. */
 @Serializable

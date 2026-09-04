@@ -104,6 +104,17 @@ class StaleSelectionPruner(
                     val pruned = applied ?: return@collect
                     if (followed > 0) logs.info(R.string.log_selection_followed, followed)
 
+                    // Emptiness is decided on what was written, not on what the prune found.
+                    //
+                    // `pruned.failoverEmptied` is computed from the intersection with the surviving
+                    // ids — before the rematch runs. When a provider rotates addresses the ids all
+                    // change, the rematch follows every server to its new one, the list is saved
+                    // intact, and the flag still says it is empty. The user was told their list had
+                    // been emptied while the app was busy proving it had not: the line above logs
+                    // the rescue two statements earlier.
+                    val failoverLeft = settings.value.failoverNodeIds.isNotEmpty()
+                    val mobileLeft = settings.value.mobileNodeIds.isNotEmpty()
+
                     if (pruned.lostFailover > 0) {
                         logs.info(
                             if (pruned.failoverEmptied) {
@@ -115,7 +126,7 @@ class StaleSelectionPruner(
                         )
                         // Only when it is gone entirely. Losing two of twenty is housekeeping;
                         // losing the last one changes what the app will do next time.
-                        if (pruned.failoverEmptied) alerts.listEmptied(mobile = false)
+                        if (pruned.failoverEmptied && !failoverLeft) alerts.listEmptied(mobile = false)
                     }
                     if (pruned.lostMobile > 0) {
                         // Louder than the failover list emptying: that one falling back to the
@@ -129,7 +140,7 @@ class StaleSelectionPruner(
                             },
                             pruned.lostMobile,
                         )
-                        if (pruned.mobileEmptied) alerts.listEmptied(mobile = true)
+                        if (pruned.mobileEmptied && !mobileLeft) alerts.listEmptied(mobile = true)
                     }
                 }
         }

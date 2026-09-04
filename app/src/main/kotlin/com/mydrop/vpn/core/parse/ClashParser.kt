@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.parse
 
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
 import com.mydrop.vpn.core.model.TlsOptions
@@ -72,7 +73,9 @@ object ClashParser {
 
     private fun node(fields: Map<String, String>, subscriptionId: String?): ProxyNode? {
         val server = fields["server"] ?: return null
-        val port = fields["port"]?.toIntOrNull() ?: return null
+        // The range, not just "is a number". A `port: 0` or `port: 99999` from a mis-rendered
+        // template made a node that looked ordinary in the list and could never connect.
+        val port = fields["port"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
 
         // Same reasoning as in ProxyUriParser: a stream transport the core cannot speak makes the
         // node unusable, and keeping it minus the transport produces a server that connects and
@@ -100,6 +103,11 @@ object ClashParser {
                 method = fields.getAny("cipher") ?: return null,
                 password = fields.getAny("password") ?: return null,
                 plugin = fields.getAny("plugin").orEmpty(),
+                // The options were dropped on the floor here while the SIP008 path read them, which
+                // is how the asymmetry gave itself away. A plugin without its options is a plugin
+                // with no mode and no host — it cannot work, and the node has to be refused rather
+                // than emitted half-configured.
+                pluginOptions = pluginOptions(fields),
             )
 
             "hysteria2", "hy2" -> ProxySettings.Hysteria2(
@@ -134,7 +142,7 @@ object ClashParser {
         }
 
         return ProxyNode(
-            id = ProxyNode.stableId(server, port, settings, subscriptionId),
+            id = "",
             name = fields["name"]?.takeIf { it.isNotBlank() } ?: "$server:$port",
             server = server,
             port = port,
@@ -142,7 +150,7 @@ object ClashParser {
             tls = tls(fields, settings),
             transport = transport(fields),
             subscriptionId = subscriptionId,
-        )
+        ).identified()
     }
 
     private fun tls(fields: Map<String, String>, settings: ProxySettings): TlsOptions? {
@@ -150,7 +158,12 @@ object ClashParser {
         val realityKey = fields.getAny("public-key", "public_key", "publicKey", "pbk", "pubkey", "key")
         // QUIC protocols are always encrypted; Clash omits `tls: true` for them because there is
         // nothing to switch off.
-        val implied = settings.protocol.isQuicBased || settings.protocol.name == "ANYTLS"
+        // Trojan is TLS by definition — there is no plaintext form of it — so Clash configs
+        // routinely leave `tls: true` off. Reading that omission as "no TLS" produced an outbound
+        // with no security at all, which cannot complete a handshake with any trojan server.
+        val implied = settings.protocol.isQuicBased ||
+            settings.protocol.name == "ANYTLS" ||
+            settings.protocol.name == "TROJAN"
         if (!explicit && realityKey == null && !implied) return null
 
         return TlsOptions(
@@ -158,6 +171,12 @@ object ClashParser {
             insecure = fields.getAnyBool("skip-cert-verify", "skip_cert_verify", "insecure", "allow-insecure", "allow_insecure"),
             alpn = fields.getAny("alpn")?.let(::inlineList).orEmpty(),
             fingerprint = fields.getAny("client-fingerprint", "client_fingerprint", "clientFingerprint", "fingerprint", "fp"),
+            pinnedCertSha256 = fields
+                .getAny("pinned-peer-cert-sha256", "pinnedPeerCertSha256", "pcs")
+                .orEmpty(),
+            verifyPeerCertByName = fields
+                .getAny("verify-peer-cert-by-name", "verifyPeerCertByName", "vcn")
+                .orEmpty(),
             reality = realityKey?.let {
                 RealityOptions(
                     publicKey = it,
@@ -169,7 +188,8 @@ object ClashParser {
     }
 
     /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
-    private val KNOWN_NETWORKS = setOf("ws", "grpc", "http", "h2", "httpupgrade", "quic")
+    private val KNOWN_NETWORKS =
+        setOf("ws", "grpc", "httpupgrade", "xhttp", "splithttp")
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun transport(fields: Map<String, String>): TransportOptions? =
@@ -185,18 +205,38 @@ object ClashParser {
                 serviceName = fields.getAny("grpc-service-name", "grpc_service_name", "serviceName", "service_name", "path").orEmpty(),
             )
 
-            "http", "h2" -> TransportOptions.Http(
-                host = fields.getAny("host")?.let(::listOf).orEmpty(),
-                path = fields.getAny("path") ?: "/",
-            )
-
             "httpupgrade" -> TransportOptions.HttpUpgrade(
                 host = fields.getAny("host").orEmpty(),
                 path = fields.getAny("path") ?: "/",
             )
 
+            // Two names for one transport: `splithttp` is what it was called before the rename,
+            // and subscriptions still hand out both.
+            "xhttp", "splithttp" -> TransportOptions.Xhttp(
+                path = fields.getAny("path") ?: "/",
+                host = fields.getAny("host").orEmpty(),
+                mode = fields.getAny("mode") ?: "auto",
+            )
+
+            // `http`/`h2` and `quic` are absent on purpose. The core removed both transports and
+            // answers a document naming either with a removed-feature error, so an entry asking for
+            // one is refused above rather than accepted here and quietly downgraded to plain TCP.
             else -> null
         }
+
+    /**
+     * `plugin-opts` flattened into the `k=v;k=v` string the cores expect.
+     *
+     * Clash writes them as a nested map, which [inlineMap] has already flattened into the same
+     * field map as everything else — so the options are recognised by name rather than by position.
+     */
+    private fun pluginOptions(fields: Map<String, String>): String =
+        listOfNotNull(
+            fields.getAny("mode")?.let { "mode=$it" },
+            fields.getAny("host")?.let { "host=$it" },
+            fields.getAny("path")?.let { "path=$it" },
+            fields.getAny("tls")?.takeIf { it == "true" }?.let { "tls" },
+        ).joinToString(";")
 
     private fun Map<String, String>.getAny(vararg keys: String): String? =
         keys.firstNotNullOfOrNull { key ->
@@ -222,10 +262,33 @@ object ClashParser {
         return if (key.isEmpty()) null else key to value
     }
 
-    private fun String.cleanValue(): String = trim()
+    private fun String.cleanValue(): String = stripComment()
         .removeSurrounding("\"")
         .removeSurrounding("'")
         .trim()
+
+    /**
+     * Drops a trailing `# comment`, which [toPair] has always claimed to do and never did.
+     *
+     * An entry written `server: example.com  # main node` produced the host
+     * `example.com  # main node`, which nothing can dial, so the server disappeared from the
+     * subscription without a word anywhere.
+     *
+     * Only outside quotes, and only where the `#` follows whitespace — YAML's own rule, and the one
+     * that keeps a password like `p#ss` intact.
+     */
+    private fun String.stripComment(): String {
+        var quote: Char? = null
+        forEachIndexed { index, ch ->
+            when {
+                quote != null -> if (ch == quote) quote = null
+                ch == '"' || ch == '\'' -> quote = ch
+                ch == '#' && (index == 0 || this[index - 1].isWhitespace()) ->
+                    return substring(0, index).trim()
+            }
+        }
+        return trim()
+    }
 
     /** `{a: 1, b: {c: 2}}` — flattened, because nested keys do not collide with the outer ones. */
     private fun inlineMap(text: String): Map<String, String> {

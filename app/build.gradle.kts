@@ -112,6 +112,16 @@ android {
     }
 }
 
+/*
+ * A profile pulled off a real phone, for RealProfileMigrationCheck to run the id migration over.
+ * Gradle's own -D does not reach the test JVM, so it is forwarded here. Absent on every machine
+ * that has not pulled one, and the check assumes itself away.
+ */
+tasks.withType<Test>().configureEach {
+    providers.systemProperty("yumi.realProfile").orNull?.let { systemProperty("yumi.realProfile", it) }
+    testLogging { showStandardStreams = true }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_17
@@ -125,9 +135,13 @@ kotlin {
 }
 
 dependencies {
-    // sing-box core, built from source with the SagerNet gomobile fork.
-    // See README for the exact build command; the AAR is not fetchable from any Maven repo.
-    implementation(files("libs/libbox.aar"))
+    // Xray core, wrapped by our own gomobile module in `core-xray/`. Xray ships no mobile binding
+    // of its own — there is no published .aar and nothing to fetch from a Maven repo — so this file
+    // is produced by `tools/build-core.sh` and exists only on machines that have run it.
+    //
+    // sing-box's libbox.aar stood here until the port. It was 118 MB against this one's 21, and
+    // carrying both would have made every user download two cores to run one.
+    implementation(files("libs/libyumi.aar"))
 
     implementation(platform(libs.compose.bom))
 

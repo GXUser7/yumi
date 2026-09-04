@@ -12,8 +12,24 @@ import com.mydrop.vpn.core.net.isNumericAddress
  * `sdns://` stamp — the base64 blob every DNSCrypt-era provider still publishes and no proxy
  * client on Android reads. Stamps are decoded here rather than refused, because for several
  * providers it is the only form they hand out.
+ *
+ * Two of those four are then refused, and it is worth saying why here rather than leaving it to be
+ * discovered. The core has no DNS-over-TLS implementation at all — the scheme is simply not in the
+ * list its resolver factory matches on (`app/dns/nameserver.go`) — and `quic://` exists only in a
+ * local form that bypasses routing, which for a resolver meant to be reached *through* the tunnel
+ * is the opposite of what was asked for.
+ *
+ * Refused rather than downgraded. Silently turning somebody's encrypted resolver into plaintext UDP
+ * would hand their ISP the list of names they look up, which is the one thing they chose an
+ * encrypted resolver to prevent — and it would do it without a word on screen.
  */
 object DnsUriParser {
+
+    /** Whether this core can actually query the resolver; see the note on the object. */
+    private fun carriable(url: String): Boolean =
+        !url.startsWith("tls://", ignoreCase = true) &&
+            !url.startsWith("quic://", ignoreCase = true) &&
+            !url.startsWith("h3://", ignoreCase = true)
 
     /** Null when the text is not a resolver at all — a proxy link, a subscription URL, prose. */
     fun parse(text: String, subscriptionId: String? = null): DnsProfile? {
@@ -24,11 +40,16 @@ object DnsUriParser {
         val body = trimmed.substringBefore('#')
 
         val url = when {
-            body.startsWith("sdns://", ignoreCase = true) -> fromStamp(body) ?: return null
+            // A stamp reaches the same place by another road, so the refusals below are applied
+            // to what it decodes to rather than to the `sdns://` it arrived as.
+            body.startsWith("sdns://", ignoreCase = true) ->
+                fromStamp(body)?.takeIf(::carriable) ?: return null
             body.startsWith("https://", ignoreCase = true) -> body
-            body.startsWith("h3://", ignoreCase = true) -> body
-            body.startsWith("tls://", ignoreCase = true) -> body
-            body.startsWith("quic://", ignoreCase = true) -> body
+            // See the note above: no DoT in this core, and DoQ only in a form that cannot be
+            // routed. Both refused rather than quietly turned into something weaker.
+            body.startsWith("tls://", ignoreCase = true) -> return null
+            body.startsWith("quic://", ignoreCase = true) -> return null
+            body.startsWith("h3://", ignoreCase = true) -> return null
             body.startsWith("tcp://", ignoreCase = true) -> body
             body.startsWith("udp://", ignoreCase = true) -> body.removePrefix("udp://")
             // A bare address is a plain resolver: `1.1.1.1`, `8.8.8.8:53`, `[2606:4700::1111]`.
@@ -131,6 +152,6 @@ object DnsUriParser {
         return isNumericAddress(parsed.host)
     }
 
-    private fun urlDecode(value: String): String =
-        runCatching { java.net.URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
+    /** Shared with the proxy parser, and for the same reason; see [com.mydrop.vpn.core.parse.urlDecode]. */
+    private fun urlDecode(value: String): String = com.mydrop.vpn.core.parse.urlDecode(value)
 }

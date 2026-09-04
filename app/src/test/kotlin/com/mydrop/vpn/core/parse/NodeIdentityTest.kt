@@ -73,15 +73,49 @@ class NodeIdentityTest {
 
     @Test
     fun `stableId is scoped by subscription`() {
-        val settings = ProxyUriParser.parse(link)!!.settings
+        val node = ProxyUriParser.parse(link)!!
 
         assertNotEquals(
-            ProxyNode.stableId("node.example.com", 443, settings, "sub-a"),
-            ProxyNode.stableId("node.example.com", 443, settings, "sub-b"),
+            ProxyNode.stableId(node.copy(subscriptionId = "sub-a")),
+            ProxyNode.stableId(node.copy(subscriptionId = "sub-b")),
         )
         assertEquals(
-            ProxyNode.stableId("node.example.com", 443, settings, "sub-a"),
-            ProxyNode.stableId("node.example.com", 443, settings, "sub-a"),
+            ProxyNode.stableId(node.copy(subscriptionId = "sub-a")),
+            ProxyNode.stableId(node.copy(subscriptionId = "sub-a")),
         )
+    }
+
+    /**
+     * The collision the seed was widened for: one endpoint, one key, two transports. Before this,
+     * both nodes hashed to the same id and `distinctById` kept whichever the provider listed first
+     * — twelve servers out of a hundred and twenty-one, in a real subscription, with nothing said.
+     */
+    @Test
+    fun `the same endpoint over two transports is two servers`() {
+        val uuid = "11111111-2222-3333-4444-555555555555"
+        val ws = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&type=ws&path=%2Fa#N")!!
+        val grpc = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&type=grpc&serviceName=s#N")!!
+        assertNotEquals(ws.id, grpc.id)
+    }
+
+    /** Two websocket paths on one endpoint are two servers as well. */
+    @Test
+    fun `the same transport with a different path is a different server`() {
+        val uuid = "11111111-2222-3333-4444-555555555555"
+        val one = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&type=ws&path=%2Fa#N")!!
+        val two = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&type=ws&path=%2Fb#N")!!
+        assertNotEquals(one.id, two.id)
+    }
+
+    /**
+     * …but the disguise is not part of the identity. A provider re-issuing its links with another
+     * uTLS fingerprint would otherwise orphan every selection and every curated list.
+     */
+    @Test
+    fun `the fingerprint does not change which server this is`() {
+        val uuid = "11111111-2222-3333-4444-555555555555"
+        val a = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&fp=chrome#N")!!
+        val b = ProxyUriParser.parse("vless://$uuid@node.example.com:443?security=tls&fp=firefox#N")!!
+        assertEquals(a.id, b.id)
     }
 }

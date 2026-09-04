@@ -158,8 +158,20 @@ class UpdateService(
                         }
                     }
                 }
+                // Compared against what was announced, not just against zero.
+                //
+                // The comment at the top of this method claims the `.part` file makes a half
+                // download impossible. It does not: a connection cut mid-transfer ends the read
+                // loop as normally as a complete one does, so the truncated file was renamed into
+                // place and offered to the installer as a valid update. `.part` protects against
+                // the process dying, which is a different accident.
                 if (written <= 0L) {
                     throw IllegalStateException(strings.get(R.string.error_update_download, "0"))
+                }
+                if (total > 0 && written != total) {
+                    throw IllegalStateException(
+                        strings.get(R.string.error_update_truncated, written, total),
+                    )
                 }
 
                 target.delete()

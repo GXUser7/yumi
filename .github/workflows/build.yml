@@ -1,16 +1,16 @@
 name: build
 
-# What this exists to catch: the app module cannot compile without libbox.aar, and that file is
-# not in the repository — so before this workflow, nothing checked a change at all. Not the tests,
-# not the Kotlin, not whether the generated sing-box configuration is one the core accepts.
+# What this exists to catch: the app module cannot compile without libyumi.aar, and that file is
+# not in the repository — so without this workflow, nothing checks a change at all. Not the tests,
+# not the Kotlin, not whether the generated Xray configuration is one the core accepts.
 #
 # The core is the expensive part (several minutes and a couple of gigabytes of Go modules), so it
-# is cached against the sing-box commit it was built from. A run that changes only app code
-# restores it and takes about as long as a local build.
+# is cached against the exact binding it was built from. A run that changes only app code restores
+# it and takes about as long as a local build.
 
 on:
   push:
-    branches: [main]
+    branches: [main, xray-port]
   pull_request:
   workflow_dispatch:
 
@@ -18,15 +18,8 @@ permissions:
   contents: read
 
 env:
-  # Matches app/build.gradle.kts. The core build wants 17 and refuses 21; see the steps below.
   APP_JAVA: '21'
-  CORE_JAVA: '17'
   NDK_VERSION: '28.2.13676358'
-  # A commit, never a branch. A branch would change the core the app links against without a
-  # single line in this repository changing, and the tunnel is the last place to want that.
-  # 77bd326 "Fix naive performance". Bump deliberately, and test the tunnel afterwards.
-  CORE_REV: '77bd3261367463b970648edf445c88ac541b3bf2'
-  CORE_DIR: /tmp/sing-box
 
 jobs:
   build:
@@ -35,94 +28,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # restore/save rather than the combined action: the combined one only writes the cache in
-      # a post step when the whole job succeeds, so a failure anywhere after this threw away
-      # fifteen minutes of core build and the next run started from nothing again.
-      - name: Restore libbox.aar
-        id: libbox-cache
+      # restore/save rather than the combined action: the combined one only writes the cache in a
+      # post step when the whole job succeeds, so a failure anywhere after this threw away fifteen
+      # minutes of core build and the next run started from nothing again.
+      #
+      # Keyed on the binding's own lock file and source. That is the honest input: change the
+      # pinned core or anything the binding does with it and the key moves; change a Kotlin file
+      # and it does not.
+      - name: Restore libyumi.aar
+        id: core-cache
         uses: actions/cache/restore@v4
         with:
-          path: app/libs/libbox.aar
-          key: libbox-${{ env.CORE_REV }}-ndk${{ env.NDK_VERSION }}
+          path: app/libs/libyumi.aar
+          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
 
-      # Unconditional: the configuration check below builds the sing-box CLI whether or not the
-      # core came out of the cache, and it needs a toolchain to do that with.
+      # Unconditional: the configuration check below builds the Xray CLI whether or not the core
+      # came out of the cache, and it needs a toolchain to do that with.
+      #
+      # The version comes from the binding's own go.mod, so the CLI validating the documents and
+      # the core reading them on a phone are the same revision. Drift between those two would make
+      # the check quietly meaningless.
       - uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version-file: core-xray/go.mod
 
-      - name: Fetch the pinned sing-box revision
+      - name: Pin the toolchain the core demands
         run: |
           set -euo pipefail
-          # `clone --branch` takes a name, not a commit, so the pin is fetched directly. Shallow,
-          # because one commit is all this needs and the history is large.
-          git init -q "$CORE_DIR"
-          git -C "$CORE_DIR" remote add origin https://github.com/SagerNet/sing-box.git
-          git -C "$CORE_DIR" fetch -q --depth 1 origin "$CORE_REV"
-          git -C "$CORE_DIR" checkout -q --detach FETCH_HEAD
-          echo "sing-box at $(git -C "$CORE_DIR" rev-parse --short HEAD)"
-
-          # Everything that compiles sing-box has to use the Go its go.mod names — the core here
-          # and the CLI further down alike. Pinning it inside one step is not enough: each `run`
-          # is its own shell, and the CLI step then built with whatever the runner had.
-          #
-          # GOTOOLCHAIN=auto does not save it either, because auto only ever upgrades. The runner
-          # ships a Go newer than the directive, so the directive is satisfied and ignored, and
-          # the //go:linkname reach into x/net/http2 that sing-box relies on stops linking:
-          # "relocation target golang.org/x/net/http2.(*Transport).connPool not defined".
-          GO_VERSION="$(awk '/^go /{print $2}' "$CORE_DIR/go.mod")"
-          go install "golang.org/dl/go${GO_VERSION}@latest"
-          pinned="$(go env GOPATH)/bin/go${GO_VERSION}"
-          "$pinned" download
-
-          # Put the pinned SDK first on PATH rather than leaning on GOTOOLCHAIN to fetch it: this
-          # way plain `go` in every later step is the right one, and `local` then forbids Go from
-          # quietly switching to another toolchain behind that.
-          echo "$("$pinned" env GOROOT)/bin" >> "$GITHUB_PATH"
+          # GOTOOLCHAIN=auto only ever upgrades, so a go.mod asking for less than what the runner
+          # ships is considered satisfied and ignored. `local` forbids Go from switching behind the
+          # version selected above.
           echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
-          echo "pinned Go toolchain: $("$pinned" version)"
+          go version
 
-      - uses: actions/setup-java@v4
-        if: steps.libbox-cache.outputs.cache-hit != 'true'
-        with:
-          distribution: temurin
-          java-version: ${{ env.CORE_JAVA }}
-
-      - name: Build libbox.aar
-        if: steps.libbox-cache.outputs.cache-hit != 'true'
+      - name: Build libyumi.aar
+        if: steps.core-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          cd "$CORE_DIR"
 
-          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
-          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          # Upstream gomobile, not SagerNet's fork: the fork expects `github.com/sagernet/gomobile`
+          # to be a dependency of the module it binds and fails on anything else.
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
 
-          # gomobile binds against API 24 whatever the app's minSdk says, and without that
-          # platform the build runs to completion and dies on its very last step.
+          # gomobile binds against API 24 whatever the app's minSdk says, and without that platform
+          # the build runs to completion and dies on its very last step.
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-24" "ndk;${NDK_VERSION}" > /dev/null
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
 
-          # Indirect, because `$JAVA_HOME_${CORE_JAVA}_X64` is not one variable name to bash: it
-          # reads as `${JAVA_HOME_}` followed by the literal expansion of CORE_JAVA, and under
-          # `set -u` that is an unbound variable rather than the JDK path.
-          core_java_home="JAVA_HOME_${CORE_JAVA}_X64"
-          export JAVA_HOME="${!core_java_home:-$JAVA_HOME}"
-          echo "core builds with $("$JAVA_HOME/bin/java" -version 2>&1 | head -1)"
+          mkdir -p app/libs
+          cd core-xray
 
-          go run ./cmd/internal/build_libbox -target android
-          mkdir -p "$GITHUB_WORKSPACE/app/libs"
-          cp libbox.aar "$GITHUB_WORKSPACE/app/libs/libbox.aar"
+          # -checklinkname=0 because github.com/wlynxg/anet — pulled in transitively, and the
+          # reason Xray can enumerate interfaces at all on Android 11+ — reaches into
+          # net.zoneCache with //go:linkname, which Go 1.23 started refusing. Everything compiles
+          # and only the link fails, with "invalid reference to net.zoneCache".
+          #
+          # -androidapi 26 matches the app's minSdk; a mismatch surfaces at install time on a real
+          # phone rather than here.
+          gomobile bind \
+            -target=android/arm64,android/arm \
+            -androidapi 26 \
+            -ldflags="-checklinkname=0" \
+            -javapkg=com.mydrop.vpn.xray \
+            -o "$GITHUB_WORKSPACE/app/libs/libyumi.aar" \
+            .
 
       # Immediately, while the thing exists. Everything after this is cheap by comparison and can
       # fail without costing another core build.
-      - name: Save libbox.aar
-        if: steps.libbox-cache.outputs.cache-hit != 'true'
+      - name: Save libyumi.aar
+        if: steps.core-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: app/libs/libbox.aar
-          key: libbox-${{ env.CORE_REV }}-ndk${{ env.NDK_VERSION }}
+          path: app/libs/libyumi.aar
+          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
 
       - uses: actions/setup-java@v4
         with:
@@ -140,32 +121,60 @@ jobs:
       - name: Check the generated configurations against the real core
         run: |
           set -euo pipefail
-          # A document that parses in Kotlin can still be refused by sing-box, and only sing-box is
-          # authoritative about its own schema. ConfigDumpTest writes the documents during the test
-          # run above; this puts the core itself over every one of them.
-          cd "$CORE_DIR"
-          go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
-            -o /tmp/sing-box-cli ./cmd/sing-box
-          cd "$GITHUB_WORKSPACE"
+          # A document that parses in Kotlin can still be refused by Xray, and only Xray is
+          # authoritative about its own schema.
+          #
+          # What this cannot catch is anything that fails only on Android: the CLI runs on Linux,
+          # where the core takes different platform paths. An empty TUN interface name sends it
+          # looking for a free one through netlink, which Linux allows and Android has refused
+          # since 11 — a document that passed here and was rejected on a phone. A pass here means
+          # the schema is right, not that the tunnel will come up.
+          # Built straight out of the module the binding already pins, rather than cloned. The
+          # first attempt cloned and fetched the commit from the pseudo-version, which cannot work:
+          # that carries only a twelve-character prefix and git will not fetch a short ref. Building
+          # from the module graph is both shorter and stronger — the CLI validating these documents
+          # and the core reading them on a phone are now the same bytes by construction.
+          version="$(cd core-xray && go list -m -f '{{.Version}}' github.com/xtls/xray-core)"
+          echo "validating against xray-core $version"
+          (cd core-xray && CGO_ENABLED=0 go build -o /tmp/xray github.com/xtls/xray-core/main)
 
-          # Regenerated rather than assumed. ConfigDumpTest writes these files as a side effect
+          # The geo databases, because the routing rules reference them and Xray resolves those
+          # while parsing: without the files every document naming `geoip:` or `geosite:` is
+          # rejected, and this step would fail for a reason that has nothing to do with the change.
+          mkdir -p /tmp/xray-assets
+          curl -sSL -o /tmp/xray-assets/geoip.dat \
+            https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
+          curl -sSL -o /tmp/xray-assets/geosite.dat \
+            https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
+          export XRAY_LOCATION_ASSET=/tmp/xray-assets
+
+          # Regenerated rather than assumed. XrayConfigDumpTest writes these files as a side effect
           # that Gradle does not track as a task output, so a cached or up-to-date test run leaves
           # the directory exactly as it was — empty on a fresh runner, or full of stale documents
           # from a previous revision. Both make this step a lie: the first checks nothing and
           # passes, the second checks the wrong thing.
-          rm -rf app/build/singbox-configs
-          ./gradlew :app:testDebugUnitTest --tests '*ConfigDumpTest*' --rerun
+          rm -rf app/build/xray-configs app/build/xray-matrix
+          ./gradlew :app:testDebugUnitTest \
+            --tests '*XrayConfigDumpTest*' --tests '*XrayMatrixDumpTest*' --rerun
 
           shopt -s nullglob
-          configs=(app/build/singbox-configs/*.json)
-          if [ ${#configs[@]} -eq 0 ]; then
-            echo "ConfigDumpTest produced nothing — the check would pass by being empty"
+          configs=(app/build/xray-configs/*.json app/build/xray-matrix/*.json)
+          # A hundred is well under what the two dumps write and well over anything a broken run
+          # could produce by accident. Without a floor this step passes loudest when it checks
+          # nothing at all.
+          if [ ${#configs[@]} -lt 100 ]; then
+            echo "only ${#configs[@]} documents were written — the check would pass by being empty"
             exit 1
           fi
+          echo "checking ${#configs[@]} documents"
           for config in "${configs[@]}"; do
-            echo "checking $(basename "$config")"
-            /tmp/sing-box-cli check -c "$config"
+            if ! /tmp/xray run -test -c "$config" > /tmp/xray-check.log 2>&1; then
+              echo "REFUSED $(basename "$config")"
+              tail -5 /tmp/xray-check.log
+              exit 1
+            fi
           done
+          echo "the core accepted all ${#configs[@]}"
 
       - name: Assemble debug
         run: ./gradlew :app:assembleDebug

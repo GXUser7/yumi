@@ -67,23 +67,16 @@ interface TunnelController {
     fun selectOutbound(node: ProxyNode): Boolean = false
 
     /**
-     * Round trips the core measured through each server of the group, keyed by node id.
-     *
-     * Empty for anything that is not a live sing-box tunnel, and empty until a test has been
-     * asked for with [requestUrlTest].
-     */
-    val coreDelays: StateFlow<Map<String, Int>> get() = NoDelays
-
-    /**
-     * Asks the running core to pull a page through every server in the group, one by one.
+     * Times a request through each of [nodes] and answers in milliseconds, keyed by node id.
      *
      * The measurement the app cannot make for itself. Everything it can reach from the phone
-     * describes the server's port; this describes whether traffic comes back out the far side,
+     * describes the port of a server; this describes whether traffic comes back out the far side,
      * which is the only property that matters when choosing where to move a broken tunnel.
      *
-     * Returns false when there is no tunnel to ask. Answers arrive later, in [coreDelays].
+     * A node that did not answer is absent rather than present with a zero. Empty for anything that
+     * is not a live tunnel, which the caller reads as "measure it the old way instead".
      */
-    fun requestUrlTest(): Boolean = false
+    suspend fun measureThroughTunnel(nodes: List<ProxyNode>): Map<String, Int> = emptyMap()
 
     /**
      * Whether the device has a default network at all.
@@ -108,7 +101,6 @@ interface TunnelController {
 
     companion object {
         private val AlwaysOnline = MutableStateFlow(true)
-        private val NoDelays = MutableStateFlow(emptyMap<String, Int>())
         private val UnknownTransport = MutableStateFlow(NetworkTransport.Other)
     }
 
@@ -123,6 +115,18 @@ interface TunnelController {
      *   without it a switch made by the watchdog, by a tap and by a settings change are one line.
      */
     fun connect(node: ProxyNode, reason: String)
+
+    /**
+     * The same thing, finished before it returns.
+     *
+     * [connect] is called from tap handlers and cannot block, so it hands the work to a coroutine
+     * and returns immediately. That is wrong for exactly one caller: a broadcast receiver, which
+     * holds the app's permission to start a foreground service only while it is still executing.
+     * Returning early there means `startForegroundService` runs after the window has closed, and on
+     * Android 12+ that is a `ForegroundServiceStartNotAllowedException` — "auto-connect on boot
+     * sometimes does not work", with nothing in the journal.
+     */
+    suspend fun connectNow(node: ProxyNode, reason: String) = connect(node, reason)
 
     fun disconnect()
 }

@@ -25,6 +25,7 @@ import com.mydrop.vpn.core.parse.DeepLinkPayload
 import com.mydrop.vpn.core.parse.DnsUriParser
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
+import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.ConnectOutcome
 import com.mydrop.vpn.data.describe
 import java.util.UUID
@@ -266,8 +267,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             emit(R.string.message_no_vpn_permission)
             return
         }
-        val node = container.profiles.nodes.firstOrNull { it.id == nodeId } ?: return
-        container.tunnelLauncher.connectTo(node, "routing mode changed")
+        // Said rather than swallowed. The node can be gone — nothing was selected when consent
+        // was asked for, or the process was killed behind the system dialog and took the pending id
+        // with it — and the old code simply returned: the user granted permission and watched
+        // nothing happen, with no message and no line in the journal.
+        val node = container.profiles.nodes.firstOrNull { it.id == nodeId }
+        if (node == null) {
+            emit(R.string.message_no_server_after_consent)
+            return
+        }
+        container.tunnelLauncher.connectTo(node, "vpn consent granted")
+    }
+
+    /** What the settings screen shows about the routing databases; see [GeoAssetStore]. */
+    val geoAssets: StateFlow<GeoAssetStore.State> = container.geoAssets.state
+
+    /**
+     * Fetches the routing databases again, whether or not they are already there.
+     *
+     * Asked for by a person rather than by the app, so it re-downloads rather than skipping what is
+     * on disk: the reason to press it is a list that has grown stale, and a store that answers
+     * "already have them" would make the button do nothing visible and nothing useful.
+     */
+    fun refreshGeoAssets() {
+        viewModelScope.launch { container.geoAssets.refresh(force = true) }
     }
 
     fun selectNode(nodeId: String) {

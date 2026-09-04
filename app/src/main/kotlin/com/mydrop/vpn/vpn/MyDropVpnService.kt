@@ -36,29 +36,9 @@ import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
-import com.mydrop.vpn.core.singbox.SingBoxConfigFactory
 import com.mydrop.vpn.core.net.interfaceCidr
-import io.nekohasekai.libbox.BridgeOptions
-import io.nekohasekai.libbox.BridgeSession
-import io.nekohasekai.libbox.CommandClient
-import io.nekohasekai.libbox.CommandClientOptions
-import io.nekohasekai.libbox.CommandServer
-import io.nekohasekai.libbox.CommandServerHandler
-import io.nekohasekai.libbox.ConnectionOwner
-import io.nekohasekai.libbox.InterfaceUpdateListener
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.LocalDNSTransport
-import io.nekohasekai.libbox.NeighborUpdateListener
-import io.nekohasekai.libbox.NetworkInterfaceIterator
-import io.nekohasekai.libbox.OverrideOptions
-import io.nekohasekai.libbox.PlatformInterface
-import io.nekohasekai.libbox.PlatformUser
-import io.nekohasekai.libbox.SetupOptions
-import io.nekohasekai.libbox.ShellSession
-import io.nekohasekai.libbox.StringIterator
-import io.nekohasekai.libbox.SystemProxyStatus
-import io.nekohasekai.libbox.TunOptions
-import io.nekohasekai.libbox.WIFIState
+import com.mydrop.vpn.core.model.SplitTunnelMode
+import com.mydrop.vpn.data.GeoAssetStore
 import java.io.File
 import java.net.Inet4Address
 import java.net.InetSocketAddress
@@ -77,17 +57,29 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Owns the platform tunnel and the sing-box core.
+ * Owns the platform tunnel and the Xray core.
  *
- * The class wears three hats on purpose: it is the [VpnService] that owns the TUN descriptor,
- * the libbox [PlatformInterface] the core calls back into, and the [CommandServerHandler] the
- * core uses to ask the app to stop or reload. Splitting them would mean passing the file
- * descriptor and service lifecycle across object boundaries for no benefit.
+ * It used to wear three hats: the [VpnService] holding the TUN descriptor, the libbox
+ * `PlatformInterface` the old core called back into, and the `CommandServerHandler` it used to ask
+ * the app to stop or reload. Two of the three are gone with the port, and that is the shape of the
+ * change: libbox inverted control and asked the app to open tunnels, enumerate interfaces and
+ * resolve names, while Xray is handed a descriptor and a way to protect a socket and decides the
+ * rest itself. Four hundred and seventy-nine lines of answering questions went with it.
+ *
+ * What did not change is everything around the core — the notification, the state machine, the
+ * default-interface monitor, the wake monitor, the core-generation counter and the journal budget.
+ * Those describe Android and this app, not the core, and they are the parts that took the longest
+ * to get right.
  */
-class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
+class MyDropVpnService : VpnService() {
 
     companion object {
         const val ACTION_START = "com.mydrop.vpn.action.START"
@@ -95,6 +87,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         const val EXTRA_CONFIG = "config"
         const val EXTRA_NODE_ID = "node_id"
         const val EXTRA_NODE_NAME = "node_name"
+
+        /**
+         * Which outbound the balancer starts pointed at.
+         *
+         * Carried in the intent rather than derived here, because only the side that built the
+         * document knows which of its outbounds is the server the user chose.
+         */
+        const val EXTRA_PINNED_TAG = "pinned_tag"
 
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "mydrop_tunnel"
@@ -110,8 +110,36 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
          */
         private const val INTERFACE_LOSS_GRACE_MILLIS = 2000L
 
-        /** Nanoseconds — libbox durations come straight from Go. */
-        private const val STATUS_INTERVAL_NANOS = 1_000_000_000L
+        /**
+         * How often the byte counters are read.
+         *
+         * One second, which is what sing-box pushed and what the connect screen was built to
+         * animate. Faster shows noise as speed; slower makes the figure lag the traffic visibly.
+         */
+        private const val TRAFFIC_POLL_MILLIS = 1_000L
+
+        /**
+         * How long [onDestroy] will wait for the tunnel lock before tearing down without it.
+         *
+         * Android's own limit for `onDestroy` is around twenty seconds; five leaves room for the
+         * rest of the teardown and is far longer than a stop has ever taken.
+         */
+        private const val DESTROY_LOCK_TIMEOUT_MILLIS = 5_000L
+
+        /**
+         * The addresses the tunnel carries.
+         *
+         * Arbitrary and private on purpose — nothing routes to them, and they exist so the
+         * interface has a family to install a default route for. The same pair the sing-box
+         * configuration used, kept so a phone upgrading across the port sees no change.
+         */
+        private const val TUN_ADDRESS_V4 = "172.19.0.1"
+        private const val TUN_PREFIX_V4 = 30
+        private const val TUN_ADDRESS_V6 = "fdfe:dcba:9876::1"
+        private const val TUN_PREFIX_V6 = 126
+
+        /** Advertised to applications; see [establishTunnel] for why the value does not matter. */
+        private const val TUN_DNS_V4 = "172.19.0.2"
 
         private val _state = MutableStateFlow<VpnState>(VpnState.Disconnected)
         val state: StateFlow<VpnState> = _state.asStateFlow()
@@ -240,10 +268,17 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             service.updateNotification()
         }
 
-        fun start(context: Context, config: String, nodeId: String, nodeName: String) {
+        fun start(
+            context: Context,
+            config: String,
+            pinnedTag: String,
+            nodeId: String,
+            nodeName: String,
+        ) {
             val intent = Intent(context, MyDropVpnService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_CONFIG, config)
+                putExtra(EXTRA_PINNED_TAG, pinnedTag)
                 putExtra(EXTRA_NODE_ID, nodeId)
                 putExtra(EXTRA_NODE_NAME, nodeName)
             }
@@ -256,6 +291,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             )
         }
     }
+
+    /** The document a running core was started from, and the outbound it was pinned to. */
+    private data class RunningConfig(val json: String, val pinnedTag: String)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -295,9 +333,29 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      */
     private val coreChatter = CoreChatter()
 
-    private var commandServer: CommandServer? = null
-    private var commandClient: CommandClient? = null
+    /**
+     * The tunnel, and this service owns it outright.
+     *
+     * sing-box dup'd whatever descriptor it was handed, so both sides held one and both closed it.
+     * Xray does not: `AndroidTun` takes the number as given and its `Close()` is empty
+     * (`proxy/tun/tun_android.go:46-48`), and the gVisor endpoint closes nothing either. That is
+     * better rather than worse — the descriptor outlives a core restart, so a network handover or a
+     * server switch never takes the interface down, the key never blinks in the status bar and no
+     * packet escapes through the gap. It also means nothing else will ever close this.
+     */
     private var tunDescriptor: ParcelFileDescriptor? = null
+
+    /** Polls the core's byte counters; see [startTrafficPolling] for why polling at all. */
+    private var trafficJob: Job? = null
+
+    /**
+     * What the running core was started from.
+     *
+     * Kept because a restart needs it and nobody else is holding it by then: a network handover
+     * rebuilds the core on the same descriptor, and the document it is rebuilt from has to be the
+     * one the tunnel is already carrying rather than whatever the settings happen to say now.
+     */
+    private var runningConfig: RunningConfig? = null
     private var nodeId: String = ""
     private var nodeName: String = ""
 
@@ -335,8 +393,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     /** Screen-on and idle-mode listener; see [startWakeMonitor]. */
     private var wakeReceiver: BroadcastReceiver? = null
 
-    /** The listener the current monitor reports to, so a late close cannot unregister a new one. */
-    private var interfaceListener: InterfaceUpdateListener? = null
+    /**
+     * Which default-interface monitor is the current one.
+     *
+     * A number rather than the core's listener object, which is what it used to be — the core no
+     * longer hands one out. The purpose is unchanged: a callback queued by a monitor that has since
+     * been replaced must not report to, or unregister, the monitor that replaced it.
+     */
+    private var monitorGeneration = 0
 
     /** The physical network last reported to the core, so onLost can tell it apart. */
     private var reportedInterface: Network? = null
@@ -423,7 +487,12 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 nodeId = intent.getStringExtra(EXTRA_NODE_ID).orEmpty()
                 nodeName = intent.getStringExtra(EXTRA_NODE_NAME).orEmpty()
                 startForegroundNotification()
-                startTunnel(config, nodeId, nodeName)
+                startTunnel(
+                    config,
+                    intent.getStringExtra(EXTRA_PINNED_TAG).orEmpty(),
+                    nodeId,
+                    nodeName,
+                )
             }
 
             // Anything else is Android starting the service on its own initiative: Always-on VPN
@@ -463,8 +532,8 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 return@launch
             }
 
-            val config = container.tunnelConfigs.build(node)
-            if (config == null) {
+            val document = container.tunnelConfigs.build(node)
+            if (document == null) {
                 stopSelf()
                 return@launch
             }
@@ -473,7 +542,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             nodeName = node.name
             updateNotification()
             logs.info(R.string.log_system_start, node.name)
-            startTunnel(config, node.id, node.name)
+            startTunnel(document.json, document.pinnedTag, node.id, node.name)
         }
     }
 
@@ -482,10 +551,30 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         stopTunnelWhenIdle("onRevoke: system withdrew VPN consent")
     }
 
+    /**
+     * The one teardown that cannot queue behind the lock, so it takes it the only way it can.
+     *
+     * Every other path into [stopTunnel] goes through [stopTunnelWhenIdle], which waits its turn.
+     * This one used to call it directly and off the lock — and `onDestroy` runs on the main thread
+     * while [startTunnel] runs on IO, so a service destroyed mid-connect had two threads in the
+     * core at once: one starting it, one closing the descriptor and nulling the fields underneath.
+     *
+     * `runBlocking` on the main thread is not free and is not usually the answer. Here it is: the
+     * work inside the lock is a stop, the system is already tearing the process down, and the
+     * alternative is a race against native code. The timeout is what keeps a wedged core from
+     * turning a teardown into an ANR — past it, the stop proceeds unsynchronised, which is exactly
+     * where this started but only after five seconds of trying to do better.
+     */
     override fun onDestroy() {
         logs.trace(NATIVE_TAG, "service onDestroy #${hashCode()}")
         if (live === this) live = null
-        stopTunnel()
+        val orderly = runBlocking {
+            withTimeoutOrNull(DESTROY_LOCK_TIMEOUT_MILLIS) { tunnelLock.withLock { stopTunnel() } }
+        }
+        if (orderly == null) {
+            logs.trace(NATIVE_TAG, "teardown could not take the lock in time, stopping anyway")
+            stopTunnel()
+        }
         scope.cancel()
         super.onDestroy()
     }
@@ -503,7 +592,12 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * and that stream kept writing another session's totals into the same [_traffic], which is what
      * made the session counters flicker between two sets of numbers.
      */
-    private fun startTunnel(config: String, requestedNodeId: String, requestedNodeName: String) {
+    private fun startTunnel(
+        config: String,
+        pinnedTag: String,
+        requestedNodeId: String,
+        requestedNodeName: String,
+    ) {
         val request = connectRequests.incrementAndGet()
         scope.launch {
             tunnelLock.withLock {
@@ -520,7 +614,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     )
                     return@withLock
                 }
-                val reloading = commandServer != null
+                val reloading = XrayCore.running
                 try {
                     nodeId = requestedNodeId
                     nodeName = requestedNodeName
@@ -531,18 +625,12 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     _state.value =
                         VpnState.Connecting(nodeId, VpnState.Connecting.Phase.Handshaking)
 
-                    val server = commandServer ?: createCommandServer()
-
-                    // Retired before the figures are read, not after the new client is built.
-                    // The outgoing core's status stream is still live at this point and sends a
-                    // total about once a second; one arriving between the banking below and the
-                    // new subscription would put the old core's figure back into `lastUploadBytes`
-                    // and get it banked a second time on the next reload — a session counter that
-                    // grows by a server's worth of traffic every time the server changes.
-                    statusGeneration.incrementAndGet()
-
-                    // The core's counters start over with the new service, so bank what the old one
-                    // moved before it goes away.
+                    // Stopped before the counters are banked, not after: the poller reads the same
+                    // numbers this is about to zero, and one tick landing in between would put the
+                    // outgoing core's figure back into `lastUploadBytes` and get it banked a second
+                    // time — a session counter that grows by a server's worth of traffic on every
+                    // switch.
+                    stopTrafficPolling()
                     if (reloading) {
                         carriedUploadBytes += lastUploadBytes
                         carriedDownloadBytes += lastDownloadBytes
@@ -553,37 +641,26 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     _state.value =
                         VpnState.Connecting(nodeId, VpnState.Connecting.Phase.EstablishingTunnel)
 
-                    // Asked before it is handed over. Anything crossing this bridge is parsed by Go
-                    // with Must* helpers in places, so a document the core dislikes is a process
-                    // abort with a tombstone rather than an error — and now that servers can carry
-                    // outbounds written by their provider rather than by us, the app no longer
-                    // controls every field in what it submits. checkConfig turns that class of
-                    // crash into a sentence on screen.
-                    runCatching { Libbox.checkConfig(config) }.onFailure { rejected ->
-                        throw IllegalStateException(
-                            strings.get(
-                                R.string.error_core_rejected_config,
-                                rejected.message ?: strings.get(R.string.error_core_no_reason),
-                            ),
-                        )
-                    }
+                    // The descriptor outlives the core, and that is the whole reason a server
+                    // switch is not a visible reconnect. Xray never closes what it is handed
+                    // (`proxy/tun/tun_android.go:46-48`), so the interface stays up across the stop
+                    // and start below: the key does not blink in the status bar, and no packet
+                    // finds its way out through a gap that never opens.
+                    val descriptor = tunDescriptor ?: establishTunnel()
 
-                    // The old core is closed here rather than left to the reload, and the reason is
-                    // a field journal with five of them running at once.
-                    //
-                    // `startOrReloadService` does close the previous instance — and then discards
-                    // whatever that close returned. So when it fails there is no error anywhere,
-                    // the new core starts on top, and the old one keeps its TUN, its outbounds and
-                    // its dialer. Asking for the close separately is the same machinery with the
-                    // answer kept: a failure now has somewhere to be read, and a close that hangs
-                    // shows up as a number instead of as a mystery.
-                    //
-                    // It is not a hard stop. If the close fails the start still goes ahead — a
-                    // tunnel that refuses to move to a working server because the dead one would
-                    // not tidy itself away is worse than the leak this is chasing.
+                    // Named before the document is parsed, because `geoip:`/`geosite:` are resolved
+                    // during parsing and a path set afterwards would be set too late.
+                    XrayCore.setAssetPath(GeoAssetStore(this@MyDropVpnService, logs).directory.absolutePath)
+                    XrayCore.setLogger(::writeCoreLine)
+
+                    // Xray refuses to start on top of itself, and this is also where the old core
+                    // actually goes away. sing-box's reload closed the previous instance and threw
+                    // away whatever the close returned — which is how a field journal came to show
+                    // five cores alive at once. Here the stop is a separate call with its own
+                    // answer, and a stop that fails is visible instead of silent.
                     if (reloading) {
                         val closeStartedAt = SystemClock.elapsedRealtime()
-                        runCatching { server.closeService() }
+                        runCatching { XrayCore.stop() }
                             .onSuccess {
                                 logs.trace(
                                     NATIVE_TAG,
@@ -599,17 +676,21 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                             }
                     }
 
-                    // Blocks until the core is up; openTun() is called back from inside it.
-                    val reloadStartedAt = SystemClock.elapsedRealtime()
-                    server.startOrReloadService(config, OverrideOptions())
+                    val startedAt = SystemClock.elapsedRealtime()
+                    XrayCore.start(config, descriptor.fd, pinnedTag, ::protectSocket)
                     logs.trace(
                         NATIVE_TAG,
-                        "startOrReloadService took ${SystemClock.elapsedRealtime() - reloadStartedAt}ms " +
-                            "(${if (reloading) "reload" else "first start"})",
+                        "core start took ${SystemClock.elapsedRealtime() - startedAt}ms " +
+                            "(${if (reloading) "switch" else "first start"})",
                     )
+                    runningConfig = RunningConfig(config, pinnedTag)
+                    // Started by this side now. The core used to ask for it through the platform
+                    // interface, which is also why it had to be stopped when the core went away —
+                    // that half is unchanged, in stopTunnel.
+                    startDefaultInterfaceMonitor()
 
                     _state.value = VpnState.Connecting(nodeId, VpnState.Connecting.Phase.Testing)
-                    subscribeToStatus()
+                    startTrafficPolling()
 
                     // A switch continues the session rather than starting one: the user did not
                     // reconnect, and restarting the clock alongside the byte counters would say
@@ -644,21 +725,6 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    /** Created once per process and kept until the tunnel is stopped for real. */
-    private fun createCommandServer(): CommandServer {
-        val workingDir = File(filesDir, "singbox").apply { mkdirs() }
-        Libbox.setup(
-            SetupOptions().apply {
-                basePath = filesDir.absolutePath
-                workingPath = workingDir.absolutePath
-                tempPath = cacheDir.absolutePath
-            },
-        )
-        val server = Libbox.newCommandServer(this@MyDropVpnService, this@MyDropVpnService)
-        server.start()
-        commandServer = server
-        return server
-    }
 
     /**
      * Queues the teardown behind whatever the tunnel lock is doing.
@@ -688,18 +754,16 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val failure = _state.value as? VpnState.Failed
         if (failure == null) _state.value = VpnState.Disconnecting
 
-        // Before the client is torn down: whatever the core sends on its way out belongs to a
-        // session that is over.
+        // Before the core is torn down: whatever it says on its way out belongs to a session that
+        // is over, and the poller must not read counters from an instance that is going away.
         statusGeneration.incrementAndGet()
-        runCatching { commandClient?.disconnect() }
-        commandClient = null
-
-        runCatching { commandServer?.closeService() }
-        runCatching { commandServer?.close() }
-        commandServer = null
+        stopTrafficPolling()
+        XrayCore.setLogger(null)
+        runCatching { XrayCore.stop() }
 
         stopDefaultInterfaceMonitor()
         stopWakeMonitor()
+        runningConfig = null
         coreGenerations.reset()
         coreChatter.reset()
 
@@ -719,345 +783,8 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         stopSelf()
     }
 
-    // -------------------------------------------------------------- Status
 
-    /**
-     * Replaces the status and log subscription, disconnecting whatever held it before.
-     *
-     * Both halves matter. Dropping the old client without disconnecting it leaves its stream
-     * running against a core that may no longer exist, and the generation bump makes even that
-     * stream harmless: a handler whose number is stale writes nothing.
-     */
-    private fun subscribeToStatus() {
-        runCatching { commandClient?.disconnect() }
-        commandClient = null
 
-        val generation = statusGeneration.incrementAndGet()
-        val client = Libbox.newCommandClient(
-            StatusHandler(generation),
-            CommandClientOptions().apply {
-                addCommand(Libbox.CommandStatus)
-                addCommand(Libbox.CommandLog)
-                // Carries the per-server round trips the core measures through the group. Local
-                // IPC that only speaks when something changed; it costs nothing to keep open and
-                // saves opening a second client every time a server has to be replaced.
-                addCommand(Libbox.CommandGroup)
-                statusInterval = STATUS_INTERVAL_NANOS
-            },
-        )
-        runCatching { client.connect() }
-            .onFailure {
-                logs.warn(R.string.log_status_subscribe_failed, it.message.orEmpty())
-                // Without this the counters simply stay at zero and there is nothing on screen or
-                // in logcat to say the subscription never happened.
-                android.util.Log.w(NATIVE_TAG, "status subscription failed: ${it.message}", it)
-            }
-        commandClient = client
-    }
-
-    private inner class StatusHandler(private val generation: Int) :
-        io.nekohasekai.libbox.CommandClientHandler {
-        private var warnedUnavailable = false
-        private var samples = 0
-
-        /** True once this subscription has been replaced; see [statusGeneration]. */
-        private val stale: Boolean get() = generation != statusGeneration.get()
-
-        override fun connected() = Unit
-
-        override fun disconnected(message: String?) {
-            if (message.isNullOrEmpty()) return
-            // Stopping the tunnel closes these streams, and libbox reports the closure as an
-            // error — so every ordinary disconnect wrote two warnings about a cancellation the
-            // app had just performed on purpose. Kept, because a stream that dies while the
-            // tunnel is meant to be up is worth knowing about; demoted when it is the shutdown
-            // we asked for.
-            if (stale || CANCELLED in message) {
-                logs.trace(NATIVE_TAG, "core stream closed: $message")
-                return
-            }
-            logs.warn(R.string.log_core_line, message)
-        }
-
-        override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
-            if (message == null || stale) return
-
-            // The first few, then one every half minute. Counters that sit at zero look identical
-            // whether the core is not accounting, the subscription is dead, or the screen is
-            // reading the wrong field — and only the core can say which.
-            if (samples < 3 || samples % 30 == 0) {
-                android.util.Log.i(
-                    NATIVE_TAG,
-                    "status#$samples: available=${message.trafficAvailable} " +
-                        "total=${message.uplinkTotal}/${message.downlinkTotal} " +
-                        "rate=${message.uplink}/${message.downlink} " +
-                        "conn=${message.connectionsOut} carried=$carriedUploadBytes/$carriedDownloadBytes",
-                )
-            }
-            samples++
-
-            // The core reports both cumulative totals and per-second rates. Take its rates rather
-            // than differentiating the totals here: this side only assumes the sampling interval,
-            // while the core actually measures it, and a late or dropped status message turned a
-            // steady stream into a spike followed by a flat second.
-            if (!message.trafficAvailable) {
-                if (!warnedUnavailable) {
-                    warnedUnavailable = true
-                    logs.warn(R.string.log_no_traffic_accounting)
-                    android.util.Log.w(NATIVE_TAG, "status: trafficAvailable = false")
-                }
-                // Totals are kept rather than zeroed. A status message without traffic data says
-                // nothing about how much has gone through — the core sends one while a service is
-                // being swapped — and replacing the session figure with 0 for that one second is
-                // half of what the counters were blinking between.
-                _traffic.value = _traffic.value.copy(
-                    uploadBytesPerSecond = 0,
-                    downloadBytesPerSecond = 0,
-                    activeConnections = message.connectionsOut,
-                )
-                return
-            }
-
-            lastUploadBytes = message.uplinkTotal
-            lastDownloadBytes = message.downlinkTotal
-
-            _traffic.value = TrafficStats(
-                // Plus what earlier cores in this session moved: reloading the core onto another
-                // server resets its counters, and the session did not restart just because the
-                // server did.
-                uploadBytes = carriedUploadBytes + message.uplinkTotal,
-                downloadBytes = carriedDownloadBytes + message.downlinkTotal,
-                uploadBytesPerSecond = message.uplink.coerceAtLeast(0),
-                downloadBytesPerSecond = message.downlink.coerceAtLeast(0),
-                activeConnections = message.connectionsOut,
-            )
-        }
-
-        override fun writeLogs(messageList: io.nekohasekai.libbox.LogIterator?) {
-            if (stale) return
-            while (messageList?.hasNext() == true) {
-                val entry = messageList.next()
-                val level = entry.level.toLogLevel()
-                // Counted before the budget is consulted, and from every line rather than the
-                // ones that get written: the count of live cores is the reason the budget exists,
-                // and reading it off a sample of the evidence would be reading it off the symptom.
-                noteCoreGeneration(entry.message, level)
-                val verdict = coreChatter.admit(System.currentTimeMillis())
-                if (verdict.suppressed > 0) {
-                    logs.warn(R.string.log_core_flood, verdict.suppressed)
-                }
-                if (!verdict.write) continue
-                logs.log(level, entry.message)
-                // Mirrored to logcat as well as the in-app journal. The journal is an in-memory
-                // ring buffer that dies with the process, so when the core misbehaves there is
-                // otherwise nothing to read from a development machine.
-                when (level) {
-                    LogEntry.Level.Error -> android.util.Log.e(NATIVE_TAG, entry.message)
-                    LogEntry.Level.Warn -> android.util.Log.w(NATIVE_TAG, entry.message)
-                    else -> android.util.Log.i(NATIVE_TAG, entry.message)
-                }
-            }
-        }
-
-        override fun clearLogs() = Unit
-        override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) = Unit
-        override fun setDefaultLogLevel(level: Int) = Unit
-        override fun updateClashMode(newMode: String?) = Unit
-        override fun writeConnectionEvents(message: io.nekohasekai.libbox.ConnectionEvents?) = Unit
-        override fun writeGroups(message: io.nekohasekai.libbox.OutboundGroupIterator?) {
-            if (message == null || stale) return
-            val delays = mutableMapOf<String, Int>()
-            while (message.hasNext()) {
-                val group = message.next() ?: continue
-                if (group.tag != SingBoxConfigFactory.PROXY_TAG) continue
-                val items = group.items
-                while (items.hasNext()) {
-                    val item = items.next() ?: continue
-                    // Zero means "never measured" and negative means "measured and failed"; both
-                    // are absences rather than numbers, and an absence has to stay absent — a
-                    // server that answered nothing must not be chosen for answering in 0 ms.
-                    if (item.urlTestDelay > 0) delays[item.tag] = item.urlTestDelay
-                }
-            }
-            if (delays.isNotEmpty()) _coreDelays.value = delays
-        }
-        override fun writeOutbounds(message: io.nekohasekai.libbox.OutboundGroupItemIterator?) = Unit
-    }
-
-    private fun Int.toLogLevel(): LogEntry.Level = LogEntry.levelFromCore(this)
-
-    // --------------------------------------------------- CommandServerHandler
-
-    override fun serviceStop() {
-        // Reached from inside a core callback, so the teardown is queued rather than run here:
-        // closing the service from within one of its own calls is how a reentrancy abort starts.
-        stopTunnelWhenIdle("the core asked to stop")
-    }
-
-    override fun serviceReload() {
-        logs.info(R.string.log_core_reload_requested)
-    }
-
-    override fun getSystemProxyStatus(): SystemProxyStatus =
-        SystemProxyStatus().apply {
-            available = false
-            enabled = false
-        }
-
-    override fun setSystemProxyEnabled(isEnabled: Boolean) = Unit
-
-    override fun writeDebugMessage(message: String?) {
-        message?.let { logs.debug(it) }
-    }
-
-    override fun connectSSHAgent(): Int = throw UnsupportedOperationException("SSH agent")
-
-    override fun triggerNativeCrash() = throw UnsupportedOperationException("crash trigger")
-
-    // ------------------------------------------------------ PlatformInterface
-
-    override fun openTun(options: TunOptions): Int {
-        val builder = Builder()
-        builder.setSession(nodeName.ifEmpty { "MyDrop" })
-        builder.setMtu(options.mtu)
-
-        options.inet4Address.forEachPrefix { builder.addAddress(it.address(), it.prefix()) }
-        // Recorded while iterating: these iterators are one-shot, so asking `hasNext()` further
-        // down returns false no matter what the core actually gave us.
-        var hasInet6 = false
-        options.inet6Address.forEachPrefix {
-            builder.addAddress(it.address(), it.prefix())
-            hasInet6 = true
-        }
-
-        // An empty route list from the core means "everything"; VpnService needs that spelled out.
-        var routeCount = 0
-        options.inet4RouteAddress.forEachPrefix {
-            builder.addRoute(it.address(), it.prefix())
-            routeCount++
-        }
-        options.inet6RouteAddress.forEachPrefix {
-            builder.addRoute(it.address(), it.prefix())
-            routeCount++
-        }
-        if (routeCount == 0) {
-            builder.addRoute("0.0.0.0", 0)
-            // Unconditional now: the core always gives the tunnel an IPv6 address, precisely so
-            // that this route can exist. Leaving it out is how IPv6 used to walk out of the phone
-            // past a connected tunnel — see buildTunInbound for the whole of it.
-            if (hasInet6) builder.addRoute("::", 0)
-        }
-
-        runCatching { options.dnsServerAddress }.getOrNull()?.forEachString {
-            builder.addDnsServer(it)
-        }
-
-        options.includePackage.forEachString {
-            runCatching { builder.addAllowedApplication(it) }
-        }
-        options.excludePackage.forEachString {
-            runCatching { builder.addDisallowedApplication(it) }
-        }
-
-        // Without this the app's own subscription refreshes would be routed into the tunnel that
-        // is still coming up.
-        runCatching { builder.addDisallowedApplication(packageName) }
-
-        if (options.isHTTPProxyEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setHttpProxy(
-                ProxyInfo.buildDirectProxy(options.httpProxyServer, options.httpProxyServerPort),
-            )
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
-
-        val descriptor = builder.establish()
-            ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
-        // The core dups whatever descriptor it is handed ("dup tun file descriptor"), so this side
-        // keeps ownership of the original and has to close it. On a reload openTun runs again while
-        // the previous one is still open — without this, every server switch leaked a descriptor
-        // and left the old interface half-alive.
-        runCatching { tunDescriptor?.close() }
-        tunDescriptor = descriptor
-        return descriptor.fd
-    }
-
-    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-
-    override fun autoDetectInterfaceControl(fd: Int) {
-        // Sockets the core opens itself must bypass the tunnel or they would loop back into it.
-        if (!protect(fd)) throw IllegalStateException(strings.get(R.string.error_protect_failed, fd))
-    }
-
-    override fun useProcFS(): Boolean = false
-
-    override fun findConnectionOwner(
-        ipProtocol: Int,
-        sourceAddress: String,
-        sourcePort: Int,
-        destinationAddress: String,
-        destinationPort: Int,
-    ): ConnectionOwner {
-        // API 29. The core calls this because useProcFS() says no, and on Android 8 and 9 the
-        // method simply does not exist — the call would be a NoSuchMethodError raised inside a JNI
-        // callback from Go, which takes the process down rather than surfacing as an exception.
-        // This method is declared to throw, so refusing is the supported answer.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            throw UnsupportedOperationException(strings.get(R.string.error_no_connection_owner))
-        }
-
-        val uid = connectivityManager.getConnectionOwnerUid(
-            ipProtocol,
-            InetSocketAddress(parseAddress(sourceAddress), sourcePort),
-            InetSocketAddress(parseAddress(destinationAddress), destinationPort),
-        )
-        if (uid == -1) throw IllegalStateException(strings.get(R.string.error_no_connection_owner))
-
-        val packages = packageManager.getPackagesForUid(uid).orEmpty()
-        return ConnectionOwner().apply {
-            userId = uid
-            userName = packages.firstOrNull().orEmpty()
-            setAndroidPackageNames(packages.toList().toStringIterator())
-        }
-    }
-
-    /**
-     * Enumerates the host's interfaces for the core.
-     *
-     * Read straight from `java.net.NetworkInterface` and nothing else. An earlier version merged
-     * in `ConnectivityManager` metadata (transport type, metered, per-network DNS) to help the
-     * core pick a default network; that is more information, but it also made this method depend
-     * on three Android APIs agreeing about interface names, and none of it is required by the
-     * core's own contract. When the tunnel is aborting at startup, the correct trade is fewer
-     * moving parts.
-     */
-    override fun getInterfaces(): NetworkInterfaceIterator {
-        val interfaces = JavaNetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-            .mapNotNull { nif ->
-                runCatching {
-                    io.nekohasekai.libbox.NetworkInterface().apply {
-                        name = nif.name
-                        index = nif.index
-                        mtu = nif.mtu
-                        addresses = nif.interfaceAddresses
-                            .mapNotNull {
-                                // Zone suffixes must be stripped here — see [interfaceCidr];
-                                // handing one to the core panics Go and kills the process.
-                                interfaceCidr(it.address.hostAddress, it.networkPrefixLength.toInt())
-                            }
-                            .toStringIterator()
-                        flags = nif.linuxFlags()
-                    }
-                }.getOrNull()
-            }
-        // The core reports "no available network interface" without saying what it was offered,
-        // so what we hand it gets logged. This is the only view of that hand-off.
-        android.util.Log.i(
-            NATIVE_TAG,
-            "getInterfaces -> " + interfaces.joinToString { "${it.name}#${it.index} flags=${it.flags}" },
-        )
-        return interfaces.toInterfaceIterator()
-    }
 
     /**
      * Watches the system's default network and reports it to the core.
@@ -1071,20 +798,17 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * `CHANGE_NETWORK_STATE`; `requestNetwork`, which would, is avoided. See the registration for
      * the failure this cost.
      *
-     * And the current network is reported through [Handler.post] instead of inline. The core calls
-     * this method and waits; calling `listener.updateDefaultInterface` before returning re-enters
-     * Go while it is still inside that call, before the listener it just handed us is necessarily
-     * installed. `updateDefaultInterface` is not declared to throw, so anything that goes wrong on
-     * the Go side of that re-entry surfaces as a panic — a native SIGABRT with no Java stack,
-     * which is exactly the symptom being chased. Posting keeps the seed but lets the core finish
-     * first.
+     * And the current network is seeded through [Handler.post] rather than inline. That began as a
+     * defence against re-entering Go while the old core was still inside this call, and it outlived
+     * the core that needed it: the seed still has to run after the callbacks are registered rather
+     * than in the middle of registering them.
      */
-    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+    private fun startDefaultInterfaceMonitor() {
         // Registering without unregistering first leaked a callback on every server switch, because
         // reloading the core starts a fresh monitor. Android caps a process at 100 registered
         // callbacks and then throws, so the leak had a crash at the end of it.
         stopDefaultInterfaceMonitor()
-        interfaceListener = listener
+        val generation = ++monitorGeneration
 
         fun notify(network: Network) {
             val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return
@@ -1147,7 +871,6 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             lastReportedExpensive = expensive
             logs.trace(NATIVE_TAG, "defaultInterface -> $name#$index expensive=$expensive")
             setUnderlying(network)
-            runCatching { listener.updateDefaultInterface(name, index, expensive, false) }
 
             // Telling the core about the new interface does not rescue the connections that were
             // pinned to the old one — those are already dead, and nothing else reaps them. The
@@ -1209,7 +932,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 val confirm = Runnable {
                     pendingInterfaceLoss = null
                     // A reload may have installed a newer monitor while this was queued.
-                    if (interfaceListener != listener) return@Runnable
+                    if (generation != monitorGeneration) return@Runnable
 
                     // A replacement that came up without a callback of its own still counts.
                     val current = connectivityManager.activeNetwork
@@ -1227,7 +950,6 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     _transport.value = NetworkTransport.None
                     logs.trace(NATIVE_TAG, "defaultInterface -> (none)")
                     setUnderlying(null)
-                    runCatching { listener.updateDefaultInterface("", -1, false, false) }
                 }
                 pendingInterfaceLoss = confirm
                 interfaceHandler.postDelayed(confirm, INTERFACE_LOSS_GRACE_MILLIS)
@@ -1269,17 +991,9 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         handler.post {
             // Not if a reload has installed a newer monitor in the meantime: the seed would then
             // be reporting to a listener the core has already discarded.
-            if (interfaceListener != listener) return@post
+            if (generation != monitorGeneration) return@post
             connectivityManager.activeNetwork?.let(::notify)
         }
-    }
-
-    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-        // Only the monitor that is actually current. During a reload the core closes the outgoing
-        // service's monitor, and it is free to do so after the incoming one has been installed;
-        // unregistering then would leave the new core with no default interface at all.
-        if (listener != interfaceListener) return
-        stopDefaultInterfaceMonitor()
     }
 
     private fun stopDefaultInterfaceMonitor() {
@@ -1290,7 +1004,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         interfaceWasLost = false
         networkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
         networkCallback = null
-        interfaceListener = null
+        monitorGeneration++
         reportedInterface = null
         lastReportedInterfaceName = null
     }
@@ -1329,15 +1043,14 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         val idle = getSystemService(PowerManager::class.java)?.isDeviceIdleMode
                         // Told to the core either way, which is the point of listening at all.
                         //
-                        // Going idle, the core is asked to pause: its own timers and keepalives
-                        // are about to fire into a network the system has suspended, and every
-                        // one of those is a wakeup spent to accomplish nothing. Coming out, it is
-                        // asked to wake — and that is the half that matters for the user, because
-                        // connections that died quietly during the night are re-dialled then
-                        // rather than at whatever moment the core next happens to notice.
-                        runCatching {
-                            if (idle == true) commandServer?.pause() else commandServer?.wake()
-                        }
+                        // sing-box could be told to pause its timers going into Doze and to
+                        // re-dial coming out of it. Xray has no such call, so the first half is
+                        // simply lost — its keepalives will fire into a suspended network and
+                        // accomplish nothing, which costs wakeups but breaks nothing.
+                        //
+                        // The half that mattered to the user is not lost: connections that died
+                        // quietly during the night are still re-dialled on the way out, because
+                        // the wakeup emitted below sends the watchdog to look at the tunnel.
                         logs.trace(NATIVE_TAG, "device idle mode -> ${idle == true}")
                         if (idle == true) return
                         _wakeups.tryEmit(Unit)
@@ -1391,7 +1104,7 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * and the person holding the phone is experiencing that as the app being broken.
      */
     private fun noteCoreGeneration(message: String, level: LogEntry.Level) {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         val line = coreGenerations.observe(message, now)
 
         // Written whole and outside the budget, because this file exists for exactly these lines
@@ -1458,13 +1171,26 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * exposes exactly this on its command server, and it is what the upstream client calls in the
      * same situation.
      *
-     * `resetNetwork` is declared without `throws`, which on a gomobile binding means the Go side
-     * will not turn an exception into an error — so nothing may escape into it, and nothing here
-     * may escape out of it either.
+     * sing-box exposed exactly this on its command server. Xray has no equivalent — there is no
+     * method on `core.Instance` that drops its connections — so the tunnel is rebuilt instead: the
+     * core is stopped and started again on the *same* descriptor, which takes about as long as a
+     * server switch and is invisible from outside because the interface never goes down.
+     *
+     * Rebuilding does more than the old call did: it also re-reads the configuration. That is
+     * harmless here, and it is why this is a restart rather than a reconnect.
      */
     private fun resetCoreNetwork() {
-        runCatching { commandServer?.resetNetwork() }
-            .onFailure { logs.trace(NATIVE_TAG, "resetNetwork failed: ${it.message}") }
+        val descriptor = tunDescriptor ?: return
+        val config = runningConfig ?: return
+        scope.launch {
+            tunnelLock.withLock {
+                if (!XrayCore.running) return@withLock
+                runCatching {
+                    XrayCore.stop()
+                    XrayCore.start(config.json, descriptor.fd, config.pinnedTag, ::protectSocket)
+                }.onFailure { logs.trace(NATIVE_TAG, "core restart after handover failed: ${it.message}") }
+            }
+        }
     }
 
     /**
@@ -1484,81 +1210,149 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         runCatching { setUnderlyingNetworks(network?.let { arrayOf(it) }) }
     }
 
-    override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(notification.title)
-            .setContentText(notification.body)
-            .setAutoCancel(true)
-        getSystemService(NotificationManager::class.java)
-            ?.notify(coreNotificationId(notification.identifier), builder.build())
-    }
+
+    // ------------------------------------------------------------- The core
 
     /**
-     * Takes back a notification the core sent earlier.
+     * Builds the platform tunnel.
      *
-     * `typeID` groups notifications on platforms that have such a concept; Android identifies them
-     * by the integer passed to `notify`, so the identifier alone decides which one this is and the
-     * type is ignored. It has to derive the id exactly the way [sendNotification] did — hence
-     * [coreNotificationId] rather than the hash written out twice.
+     * This used to be `openTun`, and the core decided what went into it: sing-box was told the
+     * addresses, routes and per-app rules in its own configuration and handed them back through the
+     * platform interface. Xray asks for none of that — it is handed a descriptor — so the decisions
+     * are made here, from the same settings the document was built from.
+     *
+     * The IPv6 address is unconditional, and that is the whole fix for a leak rather than a
+     * preference. A VpnService captures only the routes it is given, and a route can only be given
+     * for a family the interface has an address in. With no v6 address there is no `::/0` route, so
+     * Android leaves the *physical* interface as the default gateway for every IPv6 packet — on any
+     * dual-stack Wi-Fi or carrier network that is the real address of the phone, in the clear,
+     * while the app shows a connected tunnel. "IPv6 off" has to mean "no IPv6 leaves this phone";
+     * what happens to the captured traffic is then decided in the routing rules.
      */
-    override fun cancelNotification(identifier: String?, typeID: Int) {
-        if (identifier.isNullOrEmpty()) return
-        getSystemService(NotificationManager::class.java)?.cancel(coreNotificationId(identifier))
+    private fun establishTunnel(): ParcelFileDescriptor {
+        val settings = (application as MyDropApplication).container.settings.value
+        val builder = Builder()
+        builder.setSession(nodeName.ifEmpty { "Yumi" })
+        builder.setMtu(settings.mtu)
+
+        builder.addAddress(TUN_ADDRESS_V4, TUN_PREFIX_V4)
+        builder.addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
+        builder.addRoute("0.0.0.0", 0)
+        builder.addRoute("::", 0)
+
+        // Any address will do: with DNS hijacking on, the core answers whatever is asked of port 53
+        // regardless of who it was addressed to. What matters is that applications are handed a
+        // resolver inside the tunnel rather than the one the physical network advertises.
+        builder.addDnsServer(TUN_DNS_V4)
+
+        when (settings.splitTunnelMode) {
+            SplitTunnelMode.Off -> Unit
+            // An allow-list with nothing in it does not mean "allow nothing" to VpnService — it
+            // means everything, because a list it never receives is a list it never applies. The
+            // screen promises the opposite, so an empty selection is left as the mode being off.
+            SplitTunnelMode.AllowList -> settings.splitTunnelPackages.sorted().forEach {
+                runCatching { builder.addAllowedApplication(it) }
+            }
+            SplitTunnelMode.BlockList -> settings.splitTunnelPackages.sorted().forEach {
+                runCatching { builder.addDisallowedApplication(it) }
+            }
+        }
+
+        // Without this the subscription refreshes and latency probes the app makes would be routed
+        // into the tunnel that is still coming up — and the speed test would measure the connection
+        // of the phone rather than the server it is supposed to be rating.
+        runCatching { builder.addDisallowedApplication(packageName) }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+
+        val descriptor = builder.establish()
+            ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
+        tunDescriptor = descriptor
+        return descriptor
     }
 
     /**
-     * The core names its notifications with a string; Android wants an int. Kept away from
-     * [NOTIFICATION_ID] so a colliding hash cannot take down the foreground notification and with
-     * it the tunnel.
+     * Excludes a socket the core opened from the tunnel the core is serving.
+     *
+     * Called from Go, on whatever thread opened the socket. Returning false fails that dial, which
+     * is the right answer: an unprotected socket loops its traffic back into the tunnel it came
+     * from and hangs there with no error anywhere.
      */
-    private fun coreNotificationId(identifier: String): Int {
-        val hashed = identifier.hashCode()
-        return if (hashed == NOTIFICATION_ID) hashed + 1 else hashed
+    private fun protectSocket(fd: Int): Boolean = protect(fd)
+
+    /**
+     * Reads the byte counters of the core once a second.
+     *
+     * sing-box pushed a status message and this side only had to listen. Xray keeps counters and
+     * answers when asked, so the asking lives here. The rates are differences rather than numbers
+     * the core reports, and the totals carry across a core restart — see the banking in
+     * [startTunnel] for why that matters.
+     */
+    private fun startTrafficPolling() {
+        stopTrafficPolling()
+        trafficJob = scope.launch {
+            var previousUp = 0L
+            var previousDown = 0L
+            var previousAt = SystemClock.elapsedRealtime()
+            while (isActive) {
+                delay(TRAFFIC_POLL_MILLIS)
+                if (!XrayCore.running) continue
+
+                val up = XrayCore.uploadBytes
+                val down = XrayCore.downloadBytes
+                val now = SystemClock.elapsedRealtime()
+                val seconds = (now - previousAt).coerceAtLeast(1L) / 1000.0
+
+                lastUploadBytes = up
+                lastDownloadBytes = down
+                _traffic.value = TrafficStats(
+                    uploadBytes = carriedUploadBytes + up,
+                    downloadBytes = carriedDownloadBytes + down,
+                    // Clamped at zero because a restarted core counts again from nothing, and a
+                    // negative speed on the connect screen is worse than a missed tick.
+                    uploadBytesPerSecond = ((up - previousUp) / seconds).toLong().coerceAtLeast(0),
+                    downloadBytesPerSecond = ((down - previousDown) / seconds).toLong()
+                        .coerceAtLeast(0),
+                    // Xray keeps no count of open connections and there is no honest number to put
+                    // here, so the connect screen loses one figure. Zero rather than a guess.
+                    activeConnections = 0,
+                )
+                previousUp = up
+                previousDown = down
+                previousAt = now
+            }
+        }
     }
 
-    override fun localDNSTransport(): LocalDNSTransport? = null
+    private fun stopTrafficPolling() {
+        trafficJob?.cancel()
+        trafficJob = null
+    }
 
-    override fun readWIFIState(): WIFIState? = null
+    /**
+     * One line from the core, delivered on a Go thread.
+     *
+     * Everything the old status handler did with a log line happens here. The generation counter
+     * reads every line, because the count of live cores is the reason the budget exists and reading
+     * it off a sample of the evidence would be reading it off the symptom; the budget then decides
+     * what reaches the journal.
+     */
+    private fun writeCoreLine(level: LogEntry.Level, message: String) {
+        noteCoreGeneration(message, level)
+        val verdict = coreChatter.admit(SystemClock.elapsedRealtime())
+        if (verdict.suppressed > 0) logs.warn(R.string.log_core_flood, verdict.suppressed)
+        if (!verdict.write) return
 
-    override fun clearDNSCache() = Unit
-
-    override fun includeAllNetworks(): Boolean = false
-
-    override fun underNetworkExtension(): Boolean = false
-
-    override fun registerMyInterface(interfaceName: String?) = Unit
-
-    override fun startNeighborMonitor(listener: NeighborUpdateListener?) = Unit
-
-    override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = Unit
-
-    override fun tailscaleHostname(): String = ""
-
-    override fun usePlatformBridge(): Boolean = false
-
-    override fun usePlatformShell(): Boolean = false
-
-    override fun checkPlatformShell() = throw UnsupportedOperationException("platform shell")
-
-    override fun createBridge(options: BridgeOptions?): BridgeSession =
-        throw UnsupportedOperationException("bridge")
-
-    override fun lookupSFTPServer(): String = throw UnsupportedOperationException("sftp")
-
-    override fun lookupUser(name: String?): PlatformUser =
-        throw UnsupportedOperationException("platform user")
-
-    override fun openShellSession(
-        user: PlatformUser?,
-        command: String?,
-        args: StringIterator?,
-        term: String?,
-        width: Int,
-        height: Int,
-    ): ShellSession = throw UnsupportedOperationException("shell session")
-
-    override fun readSystemSSHHostKey(): String = throw UnsupportedOperationException("ssh key")
+        logs.log(level, message)
+        // Mirrored to logcat as well as the in-app journal. The journal is an in-memory ring buffer
+        // that dies with the process, so when the core misbehaves there is otherwise nothing to
+        // read from a development machine.
+        when (level) {
+            LogEntry.Level.Error -> android.util.Log.e(NATIVE_TAG, message)
+            LogEntry.Level.Warn -> android.util.Log.w(NATIVE_TAG, message)
+            else -> android.util.Log.i(NATIVE_TAG, message)
+        }
+    }
 
     // ------------------------------------------------------- Notification
 
@@ -1629,57 +1423,4 @@ class MyDropVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             ?.notify(NOTIFICATION_ID, buildNotification())
     }
 
-    // ----------------------------------------------------------- Helpers
-
-    private fun parseAddress(value: String) =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            InetAddresses.parseNumericAddress(value)
-        } else {
-            @Suppress("DEPRECATION")
-            java.net.InetAddress.getByName(value)
-        }
-
-    private inline fun io.nekohasekai.libbox.RoutePrefixIterator.forEachPrefix(
-        action: (io.nekohasekai.libbox.RoutePrefix) -> Unit,
-    ) {
-        while (hasNext()) action(next())
-    }
-
-    private inline fun StringIterator.forEachString(action: (String) -> Unit) {
-        while (hasNext()) action(next())
-    }
-
-    private fun List<String>.toStringIterator(): StringIterator = object : StringIterator {
-        private var index = 0
-        override fun hasNext(): Boolean = index < size
-        override fun len(): Int = size
-        override fun next(): String = this@toStringIterator[index++]
-    }
-
-    private fun List<io.nekohasekai.libbox.NetworkInterface>.toInterfaceIterator():
-        NetworkInterfaceIterator = object : NetworkInterfaceIterator {
-        private var index = 0
-        override fun hasNext(): Boolean = index < size
-        override fun next(): io.nekohasekai.libbox.NetworkInterface =
-            this@toInterfaceIterator[index++]
-    }
-
-    /**
-     * Linux IFF_* flags, read from the interface itself rather than inferred from Android's
-     * network capabilities. An interface that is up is up regardless of whether the system
-     * currently considers it to have internet.
-     */
-    private fun JavaNetworkInterface.linuxFlags(): Int {
-        var flags = 0
-        runCatching { if (isUp) flags = flags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING }
-        runCatching { if (isLoopback) flags = flags or OsConstants.IFF_LOOPBACK }
-        runCatching { if (isPointToPoint) flags = flags or OsConstants.IFF_POINTOPOINT }
-        runCatching { if (supportsMulticast()) flags = flags or OsConstants.IFF_MULTICAST }
-        runCatching {
-            if (interfaceAddresses.any { it.broadcast != null && it.address is Inet4Address }) {
-                flags = flags or OsConstants.IFF_BROADCAST
-            }
-        }
-        return flags
-    }
 }

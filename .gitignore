@@ -14,7 +14,9 @@ logs/
 
 # Ядро sing-box: 117 МБ на архитектуру, выше лимита GitHub в 100 МБ на файл.
 # Собирается по инструкции в DEVELOPMENT.md и кладётся сюда руками.
-app/libs/*.aar
+# The whole directory, not just the .aar: gomobile writes a sources jar beside it, and a
+# mask that names one extension lets the other into a commit.
+app/libs/
 
 __pycache__/
 

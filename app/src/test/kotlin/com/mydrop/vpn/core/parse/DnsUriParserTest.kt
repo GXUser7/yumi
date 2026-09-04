@@ -31,9 +31,13 @@ class DnsUriParserTest {
     }
 
     @Test
-    fun `dot and doq keep their scheme`() {
-        assertEquals("DoT", DnsUriParser.parse("tls://xbox-dns.ru")?.kind)
-        assertEquals("DoQ", DnsUriParser.parse("quic://dns.example.com")?.kind)
+    fun `dot and doq are refused rather than downgraded`() {
+        // This core has no DNS-over-TLS at all, and DoQ only in a local form that cannot be routed
+        // through the tunnel. Accepting either would mean quietly resolving in the clear — handing
+        // the ISP the very list of names an encrypted resolver was chosen to hide.
+        assertNull(DnsUriParser.parse("tls://xbox-dns.ru"))
+        assertNull(DnsUriParser.parse("quic://dns.example.com"))
+        assertNull(DnsUriParser.parse("h3://dns.example.com"))
     }
 
     @Test
@@ -45,7 +49,7 @@ class DnsUriParserTest {
 
     @Test
     fun `a name after the hash becomes the title`() {
-        assertEquals("Мой DNS", DnsUriParser.parse("tls://dns.example.com#Мой%20DNS")?.name)
+        assertEquals("Мой DNS", DnsUriParser.parse("https://dns.example.com/dns-query#Мой%20DNS")?.name)
     }
 
     @Test
@@ -55,8 +59,11 @@ class DnsUriParserTest {
     }
 
     @Test
-    fun `dot stamp decodes to a tls url`() {
-        assertEquals("tls://dns.adguard.com", DnsUriParser.parse(stamp(0x03, "1.2.3.4:853", "dns.adguard.com"))?.url)
+    fun `a dot stamp is refused, the same as a dot url`() {
+        // The stamp is a second road to the same resolver, and it has to meet the same gate. It did
+        // not: decoding happened before the scheme check, so a stamp produced a `tls://` profile
+        // that a plainly written one could not.
+        assertNull(DnsUriParser.parse(stamp(0x03, "1.2.3.4:853", "dns.adguard.com")))
     }
 
     @Test
@@ -80,11 +87,14 @@ class DnsUriParserTest {
             Для шифрованного DNS (DoH/DoT):
             tls://xbox-dns.ru
             https://xbox-dns.ru/dns-query
-            tls://xbox-dns.ru
+            9.9.9.9
+            https://xbox-dns.ru/dns-query
         """.trimIndent()
 
+        // The DoT line is dropped rather than counted: what a page offers and what this core can
+        // query are two different lists.
         assertEquals(
-            listOf("tls://xbox-dns.ru", "https://xbox-dns.ru/dns-query"),
+            listOf("https://xbox-dns.ru/dns-query", "9.9.9.9"),
             DnsUriParser.parseAll(page).map { it.url },
         )
     }

@@ -6,8 +6,14 @@ import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.parse.SubscriptionBody
 import com.mydrop.vpn.core.parse.ProxyUriParser
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.core.parse.SubscriptionParser
+import com.mydrop.vpn.core.model.ProbeEndpoint
+import java.net.Authenticator
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.PasswordAuthentication
+import java.net.Proxy
 import java.net.URL
 import java.util.Base64
 import java.util.zip.GZIPInputStream
@@ -51,9 +57,19 @@ class SubscriptionService(
     private val strings: Strings,
     private val userAgent: String = "Yumi/0.2.0 (Android)",
     private val identity: () -> DeviceIdentity? = { null },
+    /**
+     * How to reach the running tunnel from inside this process, or null when there is none.
+     *
+     * A lambda rather than the value: the endpoint changes with every tunnel and this class
+     * outlives all of them.
+     */
+    private val probeEndpoint: () -> ProbeEndpoint? = { null },
 ) {
 
     private companion object {
+        /** The tunnel publishes its inbound here and nowhere else. */
+        private const val LOOPBACK = "127.0.0.1"
+
         const val CONNECT_TIMEOUT_MILLIS = 15_000
         const val READ_TIMEOUT_MILLIS = 30_000
         const val MAX_REDIRECTS = 5
@@ -72,7 +88,19 @@ class SubscriptionService(
     }
 
     private fun fetchInternal(subscription: Subscription): SubscriptionUpdate {
-        val response = get(subscription.url, subscription)
+        // Direct first, through the tunnel second, and the order is not arbitrary.
+        //
+        // The app excludes itself from its own tunnel, which is what makes its probes describe the
+        // phone's real network rather than the proxy's. The cost of that shows up under an
+        // allow-list regime, where only approved domains resolve and connect: the tunnel is up and
+        // carrying the user's traffic while the app itself cannot reach its own provider, so the
+        // subscription silently stops updating exactly when it matters most. Observed on a
+        // Russian carrier: `Failed to connect to sub.example.com` with a healthy tunnel alongside.
+        //
+        // So a refusal is retried through the loopback inbound the tunnel already publishes. Only
+        // on failure — the direct road is faster, needs no tunnel, and keeps working when the
+        // provider is reachable and the proxy is not.
+        val response = fetch(subscription.url, subscription)
 
         if (response.code !in 200..299) {
             return SubscriptionUpdate.Failure(
@@ -113,11 +141,26 @@ class SubscriptionService(
                     )
                 }
 
+                // Refused here rather than left to fail at connect time. A protocol the core
+                // cannot speak makes a row that looks like every other row, pings like every other
+                // row and carries nothing — and the user is left comparing servers to work out
+                // which of them is the broken one.
+                val refused = body.nodes.mapNotNull(XrayConfigFactory::unsupported)
+                val carried = body.nodes.filter { XrayConfigFactory.unsupported(it) == null }
+
                 logs.info(
                     R.string.log_subscription_received,
                     subscription.name,
-                    strings.plural(R.plurals.servers, body.nodes.size),
+                    strings.plural(R.plurals.servers, carried.size),
                 )
+
+                if (refused.isNotEmpty()) {
+                    logs.warn(
+                        R.string.log_skipped_unsupported_protocol,
+                        refused.size,
+                        refused.distinct().sorted().joinToString(", "),
+                    )
+                }
 
                 // Named rather than hidden. A server the provider lists and the app refuses is
                 // worth a line: without one the count simply comes up short, which reads as a
@@ -141,7 +184,7 @@ class SubscriptionService(
                         lastUpdatedEpochMillis = System.currentTimeMillis(),
                         lastError = null,
                     ),
-                    nodes = body.nodes,
+                    nodes = carried,
                     addedCount = 0,
                     removedCount = 0,
                 )
@@ -189,20 +232,90 @@ class SubscriptionService(
      * origin for the same reason: the credentials would go out in the clear.
      */
     private fun sameOrigin(a: URL, b: URL): Boolean =
-        a.protocol.equals(b.protocol, ignoreCase = true) &&
-            a.host.equals(b.host, ignoreCase = true) &&
-            effectivePort(a) == effectivePort(b)
+        a.host.equals(b.host, ignoreCase = true) &&
+            effectivePort(a) == effectivePort(b) &&
+            notDowngraded(a, b)
+
+    /**
+     * The scheme test, which used to be plain equality and cost more than it defended.
+     *
+     * Refusing a downgrade is the whole point: https → http would put the login and the device id
+     * on the wire in the clear. The reverse is the opposite of a risk, and equality refused it
+     * anyway — so a subscription written `http://` that redirects to `https://`, which is what a
+     * panel that has since fixed its certificate does, silently lost its credentials and started
+     * answering 401.
+     */
+    private fun notDowngraded(from: URL, to: URL): Boolean =
+        to.protocol.equals("https", ignoreCase = true) ||
+            from.protocol.equals(to.protocol, ignoreCase = true)
 
     private fun effectivePort(url: URL): Int =
         if (url.port != -1) url.port else url.defaultPort
 
-    private fun get(url: String, subscription: Subscription): Response {
+    /**
+     * The subscription body, from wherever it can be had.
+     *
+     * @throws java.io.IOException when neither road works; the caller turns that into the message
+     *   the user sees.
+     */
+    private fun fetch(url: String, subscription: Subscription): Response = try {
+        get(url, subscription, through = null)
+    } catch (direct: java.io.IOException) {
+        val probe = probeEndpoint()
+        if (probe == null) throw direct
+        logs.debug(R.string.log_subscription_via_tunnel, subscription.name)
+        try {
+            get(url, subscription, through = probe)
+        } catch (viaTunnel: java.io.IOException) {
+            // The direct failure is the one worth reporting: it names the provider rather than a
+            // loopback port the user has never heard of.
+            direct.addSuppressed(viaTunnel)
+            throw direct
+        }
+    }
+
+    /**
+     * Hands the loopback inbound its credentials, and nothing else.
+     *
+     * `Authenticator` is process-wide, which is why this checks the requestor before answering: it
+     * must never offer these to a real proxy the user has configured, and it has nothing to say
+     * about server authentication — the link's own credentials travel as a header, under the
+     * same-origin rule above.
+     */
+    private fun installProbeAuthenticator() {
+        Authenticator.setDefault(object : Authenticator() {
+            override fun getPasswordAuthentication(): PasswordAuthentication? {
+                val probe = probeEndpoint() ?: return null
+                // Not filtered by requestor type: an HTTP proxy asks as PROXY and Java's SOCKS
+                // client asks as SERVER, and the inbound below answers both. The address is what
+                // makes this safe — these credentials are only ever offered to our own loopback.
+                if (requestingHost != LOOPBACK || requestingPort != probe.port) return null
+                return PasswordAuthentication(probe.username, probe.password.toCharArray())
+            }
+        })
+    }
+
+    private fun get(url: String, subscription: Subscription, through: ProbeEndpoint?): Response {
         val origin = URL(url)
         var current = url
         repeat(MAX_REDIRECTS) {
             val target = URL(current)
             val trusted = sameOrigin(origin, target)
-            val connection = (target.openConnection() as HttpURLConnection).apply {
+            val opened = if (through == null) {
+                target.openConnection()
+            } else {
+                installProbeAuthenticator()
+                // SOCKS rather than HTTP, and the difference is where the proxy sits. Java
+                // implements SOCKS underneath the socket, so TLS and everything above it are
+                // carried without knowing about it; the HTTP form has to be understood by the
+                // connection itself, and Android's implementation quietly declined to use it —
+                // the request went straight out and failed exactly as it had without a proxy.
+                // The inbound speaks both, so this costs nothing.
+                target.openConnection(
+                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, through.port)),
+                )
+            }
+            val connection = (opened as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MILLIS
                 readTimeout = READ_TIMEOUT_MILLIS
@@ -215,7 +328,9 @@ class SubscriptionService(
                 // and then never sends them, which reads as a subscription that returns 401 for
                 // no reason at all.
                 target.userInfo?.takeIf { it.isNotEmpty() && trusted }?.let { credentials ->
-                    val decoded = java.net.URLDecoder.decode(credentials, "UTF-8")
+                    // The shared decoder, not URLDecoder: a password with a `+` in it is a
+                    // password with a `+` in it, not one with a space.
+                    val decoded = com.mydrop.vpn.core.parse.urlDecode(credentials)
                     val encoded = Base64.getEncoder().encodeToString(decoded.toByteArray())
                     setRequestProperty("Authorization", "Basic $encoded")
                 }

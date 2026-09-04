@@ -5,6 +5,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import com.mydrop.vpn.R
+import com.mydrop.vpn.core.model.NodeIdMigration
+import com.mydrop.vpn.core.model.VpnState
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Manual dependency graph. The object count here is small enough that a DI framework would add
@@ -93,6 +97,7 @@ class AppContainer(context: Context) {
     val subscriptionService = SubscriptionService(
         logs = logs,
         strings = strings,
+        probeEndpoint = { tunnelConfigs.probe.value },
         // Named like every other client does it — version, platform, model. Panels read the agent
         // to decide which format to emit, and the caching front-ends in front of them key on it
         // too, so a bare "Yumi (Android)" shares one cache entry with every other install and can
@@ -108,6 +113,10 @@ class AppContainer(context: Context) {
         logs = logs,
         selectedDns = { profiles.selectedDnsProfile()?.url },
         switchableGroup = ::switchableGroup,
+        // A lambda, so the two can depend on each other: the store needs the tunnel's loopback
+        // inbound to download through, and the builder needs to know whether the files are there.
+        // Neither is asked until a configuration is actually being built.
+        geoAvailable = { geoAssets.available() },
     )
 
     /**
@@ -148,15 +157,51 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * The real sing-box tunnel. [SimulatedTunnelController] is kept around deliberately: it is
-     * the only way to exercise the connect screen's states without a working server, and
-     * swapping it back in is a one-line change.
+     * The real Xray tunnel. [SimulatedTunnelController] is kept around deliberately: it is the
+     * only way to exercise the connect screen's states without a working server, and swapping it
+     * back in is a one-line change.
      */
-    val tunnel: TunnelController = SingBoxTunnelController(
+    init {
+        // The other half of the id move. The servers live in the profile store and the two lists
+        // the user curated live in the settings store, and only this class holds both — so the
+        // mapping is computed there and applied here, before anything reads either.
+        val moved = profiles.nodeIdMigration
+        if (moved.isNotEmpty()) {
+            settings.update { current ->
+                current.copy(
+                    failoverNodeIds = NodeIdMigration.follow(current.failoverNodeIds, moved),
+                    mobileNodeIds = NodeIdMigration.follow(current.mobileNodeIds, moved),
+                )
+            }
+            logs.debug(R.string.log_node_ids_migrated, moved.size)
+        }
+    }
+
+    val tunnel: TunnelController = XrayTunnelController(
         context = context.applicationContext,
         configs = tunnelConfigs,
         logs = logs,
     )
+
+    /**
+     * Fetches the geo databases the first time a tunnel comes up, and never again while running.
+     *
+     * After a connection rather than at startup, and the reason is the whole design of the store:
+     * the files live on GitHub, the networks that make this app worth having are the ones where
+     * GitHub does not answer, and the only road that works there is the tunnel itself. Until it is
+     * up there is nothing to fall back to.
+     *
+     * A failure is not retried in a loop and not surfaced beyond the journal. Without the databases
+     * the routing rules that name them are simply left out of the configuration, which the factory
+     * already does — the tunnel comes up either way, carrying everything through the proxy.
+     */
+    val geoAssets: GeoAssetStore =
+        GeoAssetStore(context.applicationContext, logs) { tunnelConfigs.probe.value }
+
+    private val geoOnFirstConnection = applicationScope.launch {
+        tunnel.state.first { it is VpnState.Connected }
+        if (!geoAssets.available()) geoAssets.refresh()
+    }
 
     /**
      * Shared by every entry point that can raise the tunnel: the UI, the Quick Settings tile,
