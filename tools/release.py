@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -38,7 +39,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_GRADLE = ROOT / "app/build.gradle.kts"
-APK_DIR = ROOT / "app/build/outputs/apk/release"
+TV_BUILD_GRADLE = ROOT / "tv/build.gradle.kts"
+APK_DIRS = {
+    "yumi": ROOT / "app/build/outputs/apk/release",
+    "yumi-tv": ROOT / "tv/build/outputs/apk/release",
+}
+RELEASE_DIR = ROOT / "build/release"
 
 # Same override the Gradle build honours, and for the same reason: the default is a guess about
 # the machine rather than about the project, and the credentials do not have to live on C:.
@@ -53,7 +59,7 @@ KEYSTORE_PROPS = SIGNING_DIR / "keystore.properties"
 # time someone runs this without arguments, and the announcement goes out to a channel.
 RELEASE_NOTES = """## Yumi {version}
 
-Android-клиент VPN на Material 3 Expressive с ядром sing-box.
+Android- и Android TV-клиенты VPN на Material 3 Expressive с ядром Xray.
 """
 
 # Appended to every release body. The APKs are installed from "unknown sources" with nothing
@@ -71,7 +77,7 @@ CHECKSUMS_SECTION = """
 
 ANNOUNCEMENT = """<b>Yumi {version}</b>
 
-Новая сборка Android-клиента."""
+Новые сборки Yumi для Android и Android TV."""
 
 
 # This script prints arrows and Russian, and on a Windows console the default encoding is cp1251,
@@ -112,7 +118,25 @@ def read_version() -> tuple[str, int]:
     code = re.search(r"versionCode\s*=\s*(\d+)", text)
     if not name or not code:
         die("could not read versionName/versionCode from app/build.gradle.kts")
-    return name.group(1), int(code.group(1))
+    version = name.group(1), int(code.group(1))
+    tv_text = TV_BUILD_GRADLE.read_text(encoding="utf-8")
+    tv_name = re.search(r'versionName\s*=\s*"([^"]+)"', tv_text)
+    tv_code = re.search(r"versionCode\s*=\s*(\d+)", tv_text)
+    if not tv_name or not tv_code or (tv_name.group(1), int(tv_code.group(1))) != version:
+        die("app and tv versionName/versionCode must stay synchronized")
+    return version
+
+
+def collect_apks() -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    for product, directory in APK_DIRS.items():
+        module = "tv" if product == "yumi-tv" else "app"
+        result.extend(
+            (product, path)
+            for path in sorted(directory.glob(f"{module}-*-release.apk"))
+            if "unsigned" not in path.name
+        )
+    return result
 
 
 def resolve_repo(token: str, configured: str | None) -> str:
@@ -159,7 +183,7 @@ def resolve_repo(token: str, configured: str | None) -> str:
     return repo
 
 
-def build() -> list[Path]:
+def build() -> list[tuple[str, Path]]:
     if not KEYSTORE_PROPS.is_file():
         die(f"{KEYSTORE_PROPS} not found — the release would be unsigned and refuse to install")
 
@@ -174,22 +198,27 @@ def build() -> list[Path]:
     # `gradlew` is a shell script and Windows cannot execute one: CreateProcess refuses it with
     # "not a Win32 application". The wrapper ships both, so pick by platform rather than by hope.
     wrapper = "gradlew.bat" if os.name == "nt" else "gradlew"
-    subprocess.run([str(ROOT / wrapper), ":app:assembleRelease"], cwd=ROOT, env=env, check=True)
+    subprocess.run(
+        [str(ROOT / wrapper), ":app:assembleRelease", ":tv:assembleRelease"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
 
-    apks = sorted(APK_DIR.glob("*-release.apk"))
+    apks = collect_apks()
     if not apks:
-        die(f"no APKs in {APK_DIR}; did the build actually produce a signed release?")
+        die("no mobile or TV APKs were produced; did the signed release build finish?")
     # An unsigned artifact is the one failure mode that only shows up on the friend's phone.
-    for apk in apks:
+    for _, apk in apks:
         if "unsigned" in apk.name:
             die(f"{apk.name} is unsigned — check ~/.mydrop-signing/keystore.properties")
     return apks
 
 
-def existing_apks() -> list[Path]:
-    apks = sorted(p for p in APK_DIR.glob("*.apk") if "unsigned" not in p.name)
+def existing_apks() -> list[tuple[str, Path]]:
+    apks = collect_apks()
     if not apks:
-        die(f"no APKs in {APK_DIR} — drop --skip-build to build them")
+        die("no APKs in app/tv build outputs — drop --skip-build to build them")
     return apks
 
 
@@ -324,7 +353,8 @@ def post(args, env, version: str, links: dict) -> None:
     lines = [announcement.strip(), ""]
     for name, url in sorted(links.items()):
         abi = "arm64" if "arm64" in name else "arm 32-бит"
-        lines.append(f'<a href="{url}">Скачать · {abi}</a>')
+        product = "Android TV" if name.startswith("yumi-tv-") else "Android"
+        lines.append(f'<a href="{url}">Скачать {product} · {abi}</a>')
     lines += ["", "<i>Почти всем нужен arm64 — 32-битная сборка только для очень старых телефонов.</i>"]
 
     sent = telegram(
@@ -360,7 +390,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-build",
         action="store_true",
-        help="взять APK, которые уже лежат в app/build/outputs/apk/release",
+        help="взять APK, которые уже лежат в app/tv build/outputs/apk/release",
     )
     parser.add_argument("--chats", action="store_true", help="показать чаты, доступные боту")
     parser.add_argument(
@@ -419,12 +449,25 @@ def main() -> None:
     tag = f"v{version}"
     apks = existing_apks() if args.skip_build else build()
 
+    RELEASE_DIR.mkdir(parents=True, exist_ok=True)
     renamed: list[Path] = []
-    for apk in apks:
-        abi = re.sub(r"^app-|^yumi-[\d.]+-|-release\.apk$|\.apk$", "", apk.name)
-        target = apk.with_name(f"yumi-{version}-{abi}.apk")
-        apk.replace(target)
+    seen: set[tuple[str, str]] = set()
+    for product, apk in apks:
+        abi_match = re.search(r"(arm64-v8a|armeabi-v7a)", apk.name)
+        if not abi_match:
+            die(f"could not determine ABI from {apk.name}")
+        abi = abi_match.group(1)
+        if (product, abi) in seen:
+            die(f"duplicate {product} artifact for {abi}")
+        seen.add((product, abi))
+        target = RELEASE_DIR / f"{product}-{version}-{abi}.apk"
+        shutil.copy2(apk, target)
         renamed.append(target)
+
+    expected = {(product, abi) for product in APK_DIRS for abi in ("arm64-v8a", "armeabi-v7a")}
+    missing = expected - seen
+    if missing:
+        die("missing release APKs: " + ", ".join(f"{product}/{abi}" for product, abi in sorted(missing)))
 
     print(f"\n{tag} (versionCode {code})")
     for apk in renamed:

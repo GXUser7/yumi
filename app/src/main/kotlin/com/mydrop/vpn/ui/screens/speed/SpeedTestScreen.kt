@@ -46,7 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.ValueAndUnit
 import com.mydrop.vpn.core.model.SpeedPhase
 import com.mydrop.vpn.core.model.SpeedTestState
@@ -176,8 +176,10 @@ fun SpeedTestScreen(
 private fun pathDescription(state: SpeedTestState): String = when {
     state.phase == SpeedPhase.Failed ->
         state.message ?: stringResource(R.string.speed_phase_failed)
-    state.throughTunnel && state.serverName != null ->
-        stringResource(R.string.speed_through_server, state.serverName)
+    state.throughTunnel && state.serverName != null -> {
+        val serverName = state.serverName.orEmpty()
+        stringResource(R.string.speed_through_server, serverName)
+    }
     state.throughTunnel -> stringResource(R.string.speed_through_tunnel)
     else -> stringResource(R.string.speed_direct)
 }

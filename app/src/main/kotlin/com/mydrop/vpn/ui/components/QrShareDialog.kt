@@ -22,7 +22,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 
 /**
  * Hands a server or subscription to someone standing next to you.

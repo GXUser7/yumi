@@ -39,7 +39,7 @@ jobs:
         id: core-cache
         uses: actions/cache/restore@v4
         with:
-          path: app/libs/libyumi.aar
+          path: shared/libs/libyumi.aar
           key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
 
       # Unconditional: the configuration check below builds the Xray CLI whether or not the core
@@ -78,7 +78,7 @@ jobs:
             "platforms;android-24" "ndk;${NDK_VERSION}" > /dev/null
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
 
-          mkdir -p app/libs
+          mkdir -p shared/libs
           cd core-xray
 
           # -checklinkname=0 because github.com/wlynxg/anet — pulled in transitively, and the
@@ -93,7 +93,7 @@ jobs:
             -androidapi 26 \
             -ldflags="-checklinkname=0" \
             -javapkg=com.mydrop.vpn.xray \
-            -o "$GITHUB_WORKSPACE/app/libs/libyumi.aar" \
+            -o "$GITHUB_WORKSPACE/shared/libs/libyumi.aar" \
             .
 
       # Immediately, while the thing exists. Everything after this is cheap by comparison and can
@@ -102,7 +102,7 @@ jobs:
         if: steps.core-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: app/libs/libyumi.aar
+          path: shared/libs/libyumi.aar
           key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
 
       - uses: actions/setup-java@v4
@@ -113,10 +113,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest
+        run: ./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest :tv:testDebugUnitTest
 
       - name: Lint
-        run: ./gradlew :app:lintRelease
+        run: ./gradlew :app:lintRelease :tv:lintRelease
 
       - name: Check the generated configurations against the real core
         run: |
@@ -153,12 +153,12 @@ jobs:
           # the directory exactly as it was — empty on a fresh runner, or full of stale documents
           # from a previous revision. Both make this step a lie: the first checks nothing and
           # passes, the second checks the wrong thing.
-          rm -rf app/build/xray-configs app/build/xray-matrix
-          ./gradlew :app:testDebugUnitTest \
+          rm -rf shared/build/xray-configs shared/build/xray-matrix
+          ./gradlew :shared:testDebugUnitTest \
             --tests '*XrayConfigDumpTest*' --tests '*XrayMatrixDumpTest*' --rerun
 
           shopt -s nullglob
-          configs=(app/build/xray-configs/*.json app/build/xray-matrix/*.json)
+          configs=(shared/build/xray-configs/*.json shared/build/xray-matrix/*.json)
           # A hundred is well under what the two dumps write and well over anything a broken run
           # could produce by accident. Without a floor this step passes loudest when it checks
           # nothing at all.
@@ -177,10 +177,12 @@ jobs:
           echo "the core accepted all ${#configs[@]}"
 
       - name: Assemble debug
-        run: ./gradlew :app:assembleDebug
+        run: ./gradlew :app:assembleDebug :tv:assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
           name: yumi-debug-apks
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            tv/build/outputs/apk/debug/*.apk
           if-no-files-found: error

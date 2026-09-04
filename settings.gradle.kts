@@ -19,3 +19,6 @@ dependencyResolutionManagement {
 // cannot be updated in place. Everything the user or a developer actually reads says Yumi.
 rootProject.name = "Yumi"
 include(":app")
+include(":shared")
+include(":design")
+include(":tv")

@@ -138,12 +138,13 @@ Updates install over the top; servers and settings are kept.
 
 ```bash
 export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
-./gradlew :app:assembleDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug          # phone
+./gradlew :tv:assembleDebug           # television
+./gradlew :shared:testDebugUnitTest   # the tests live here; :app and :tv hold none
 ```
 
 **The core is not in the repository.** Xray publishes no mobile binding, so this one lives here:
-the `core-xray/` module, out of which `gomobile bind` produces `app/libs/libyumi.aar`. That file is
+the `core-xray/` module, out of which `gomobile bind` produces `shared/libs/libyumi.aar`. That file is
 over GitHub's 100 MB per-file limit, so you have to build it yourself and drop it in by hand —
 nothing compiles without it, tests included. The build command, and everything else worth knowing
 about the internals, is in [DEVELOPMENT.md](DEVELOPMENT.md): why the TUN stack is gvisor, how core

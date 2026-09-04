@@ -8,7 +8,7 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.mydrop.vpn.MainActivity
 import com.mydrop.vpn.MyDropApplication
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.data.ConnectOutcome
 import kotlinx.coroutines.CoroutineScope

@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.ByteScale
 import com.mydrop.vpn.core.format.Elapsed
 import com.mydrop.vpn.core.format.ValueAndUnit

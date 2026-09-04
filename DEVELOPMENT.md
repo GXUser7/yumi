@@ -7,7 +7,7 @@ TUN ядру. Симулятор туннеля оставлен в коде —
 подключения без рабочего сервера, и возвращается одной строкой в `AppContainer`.
 
 Привязки для мобильных платформ Xray не публикует, поэтому она живёт здесь же: модуль
-`core-xray/`, из которого `gomobile bind` собирает `app/libs/libyumi.aar`. Всё, что Kotlin знает
+`core-xray/`, из которого `gomobile bind` собирает `shared/libs/libyumi.aar`. Всё, что Kotlin знает
 о ядре, проходит через этот файл.
 
 ## Что уже работает
@@ -137,7 +137,7 @@ ui/screens     connect, servers, subscriptions, settings, logs, apps
 ```
 
 `core/*` не зависит от Android — поэтому и парсеры, и генератор конфигурации покрываются обычными
-JVM-тестами (`./gradlew :app:testDebugUnitTest`).
+JVM-тестами (`./gradlew :shared:testDebugUnitTest`).
 
 Ключевой шов — интерфейс
 [`TunnelController`](app/src/main/kotlin/com/mydrop/vpn/data/TunnelController.kt). Сейчас его
@@ -175,7 +175,7 @@ v2fly, проверяет SHA-256 и переименовывает готовы
 ```bash
 export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
 ./gradlew :app:assembleDebug          # APK по одному на архитектуру
-./gradlew :app:testDebugUnitTest      # тесты парсеров и генератора конфига
+./gradlew :shared:testDebugUnitTest   # тесты парсеров и генератора конфига
 adb install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 ```
 
@@ -388,7 +388,7 @@ wrapper находит его локально и в сеть не ходит. �
 
 Xray не публикует привязки для мобильных платформ — есть библиотека на Go и CLI, и всё. Поэтому
 привязка живёт здесь: модуль `core-xray/` из одного файла
-[`yumi.go`](core-xray/yumi.go), из которого `gomobile bind` собирает `app/libs/libyumi.aar`.
+[`yumi.go`](core-xray/yumi.go), из которого `gomobile bind` собирает `shared/libs/libyumi.aar`.
 Поверхность намеренно узкая. Всё, ради чего она существует:
 
 | Функция | Что делает |
@@ -432,7 +432,7 @@ Kotlin молча.
 настоящий бинарник ядра:
 
 ```bash
-./gradlew :app:testDebugUnitTest --tests '*XrayConfigDumpTest*' --tests '*XrayMatrixDumpTest*' --rerun
+./gradlew :shared:testDebugUnitTest --tests '*XrayConfigDumpTest*' --tests '*XrayMatrixDumpTest*' --rerun
 (cd core-xray && CGO_ENABLED=0 go build -o /tmp/xray github.com/xtls/xray-core/main)
 export XRAY_LOCATION_ASSET=/путь/к/geoip.dat-и-geosite.dat
 for f in app/build/xray-configs/*.json app/build/xray-matrix/*.json; do /tmp/xray run -test -c "$f"; done
@@ -463,7 +463,7 @@ gomobile bind \
   -androidapi 26 \
   -ldflags="-checklinkname=0" \
   -javapkg=com.mydrop.vpn.xray \
-  -o ../app/libs/libyumi.aar \
+  -o ../shared/libs/libyumi.aar \
   .
 ```
 

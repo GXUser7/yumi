@@ -17,6 +17,7 @@ logs/
 # The whole directory, not just the .aar: gomobile writes a sources jar beside it, and a
 # mask that names one extension lets the other into a commit.
 app/libs/
+shared/libs/
 
 __pycache__/
 
@@ -30,5 +31,6 @@ PROJECT.md
 PROJECT_AUDIT_AND_BUGS.md
 NETWORK_STABILITY_AUDIT.md
 AGENTS.md
+CODEX.md
 VPN_DISCONNECTION_ANALYSIS.md
 FIXES_DESCRIPTION.md

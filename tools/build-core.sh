@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Builds the Xray core into app/libs/libyumi.aar, which the app module cannot compile without.
+# Builds the Xray core into shared/libs/libyumi.aar, which both products use.
 #
 # Xray, unlike sing-box, ships no mobile binding of its own — there is no `build_libbox` to run and
 # no published .aar to depend on. So `core-xray/` is our own gomobile module, and this script is the
 # only supported way to turn it into something Gradle can consume.
 #
-#   tools/build-core.sh              # both ABIs, into app/libs/libyumi.aar
+#   tools/build-core.sh              # both ABIs, into shared/libs/libyumi.aar
 #   tools/build-core.sh arm64        # just arm64-v8a, which is every modern phone and half the wait
 #
 # Four pins below are load-bearing. Each one cost an afternoon to find, so none of them are
@@ -36,7 +36,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="$REPO/core-xray"
-OUT="$REPO/app/libs/libyumi.aar"
+OUT="$REPO/shared/libs/libyumi.aar"
 
 # Matches the app's minSdk. gomobile defaults to something older, and the mismatch surfaces at
 # install time on a real phone rather than here.

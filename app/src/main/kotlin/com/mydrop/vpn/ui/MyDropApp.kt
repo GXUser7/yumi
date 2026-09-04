@@ -49,8 +49,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.ui.components.ImportConfirmDialog
+import com.mydrop.vpn.ui.components.PairingSendDialog
 import com.mydrop.vpn.ui.components.PillNavigationBar
 import com.mydrop.vpn.ui.screens.apps.SplitTunnelScreen
 import com.mydrop.vpn.ui.screens.connect.ConnectScreen
@@ -106,6 +107,8 @@ fun MyDropApp(viewModel: MainViewModel) {
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
 
     val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
+    val pairingInvite by viewModel.pairingInvite.collectAsStateWithLifecycle()
+    val pairingSending by viewModel.pairingSending.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Routes.CONNECT
@@ -318,6 +321,16 @@ fun MyDropApp(viewModel: MainViewModel) {
                 showAddSheet = false
                 navController.navigate(Routes.SCAN)
             },
+        )
+    }
+
+    pairingInvite?.let { invite ->
+        PairingSendDialog(
+            invite = invite,
+            subscriptions = state.subscriptions,
+            sending = pairingSending,
+            onSend = viewModel::sendSubscriptionToTv,
+            onDismiss = viewModel::dismissPairingInvite,
         )
     }
 }

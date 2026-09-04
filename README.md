@@ -132,12 +132,13 @@ Google они не уезжают ни через бэкап, ни при пер
 
 ```bash
 export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
-./gradlew :app:assembleDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug          # телефон
+./gradlew :tv:assembleDebug           # телевизор
+./gradlew :shared:testDebugUnitTest   # тесты живут здесь, в :app и :tv их нет
 ```
 
 **Ядра в репозитории нет.** Xray не публикует привязку для мобильных платформ, поэтому она живёт
-здесь же — модуль `core-xray/`, из которого `gomobile bind` собирает `app/libs/libyumi.aar`.
+здесь же — модуль `core-xray/`, из которого `gomobile bind` собирает `shared/libs/libyumi.aar`.
 Файл больше лимита GitHub в 100 МБ, так что собрать его нужно самому и положить туда руками;
 без него не компилируется ничего, включая тесты. Команда сборки и всё остальное, что стоит знать
 о внутренностях, — в [DEVELOPMENT.md](DEVELOPMENT.md): почему стек TUN именно gvisor, как ловятся

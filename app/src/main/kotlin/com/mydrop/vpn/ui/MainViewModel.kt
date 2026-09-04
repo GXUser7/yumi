@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mydrop.vpn.core.model.UpdateState
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
@@ -28,6 +28,8 @@ import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.ConnectOutcome
 import com.mydrop.vpn.data.describe
+import com.mydrop.vpn.pairing.PairingInvite
+import com.mydrop.vpn.pairing.SubscriptionTransfer
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -94,6 +96,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val _pendingImport = MutableStateFlow<PendingImport?>(null)
     val pendingImport: StateFlow<PendingImport?> = _pendingImport.asStateFlow()
 
+    private val _pairingInvite = MutableStateFlow<PairingInvite?>(null)
+    val pairingInvite: StateFlow<PairingInvite?> = _pairingInvite.asStateFlow()
+    private val _pairingSending = MutableStateFlow(false)
+    val pairingSending: StateFlow<Boolean> = _pairingSending.asStateFlow()
+
     /** Snackbars are user-facing text, so they follow the chosen language like the screens do. */
     private val strings = container.strings
 
@@ -140,9 +147,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         transient,
     ) { profiles, settings, vpnState, traffic, transient ->
         MainUiState(
-            nodes = profiles.nodes,
+            nodes = profiles.visibleNodes,
             subscriptions = profiles.subscriptions,
-            selectedNode = profiles.nodes.firstOrNull { it.id == profiles.selectedNodeId },
+            selectedNode = profiles.visibleNodes.firstOrNull { it.id == profiles.selectedNodeId },
             latencies = profiles.latencies,
             vpnState = vpnState,
             traffic = traffic,
@@ -502,7 +509,50 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      * Text the user put in themselves: pasted into the add sheet, or read off a QR code they
      * pointed the camera at. They asked for it, so it applies straight away.
      */
-    fun importText(raw: String) = applyImport(DeepLinkParser.parse(raw))
+    fun importText(raw: String) {
+        PairingInvite.decode(raw)?.let {
+            _pairingInvite.value = it
+            return
+        }
+        applyImport(DeepLinkParser.parse(raw))
+    }
+
+    fun dismissPairingInvite() {
+        if (!_pairingSending.value) _pairingInvite.value = null
+    }
+
+    fun sendSubscriptionToTv(subscriptionId: String) {
+        val invite = _pairingInvite.value ?: return
+        val subscription = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId } ?: return
+        if (_pairingSending.value) return
+        viewModelScope.launch {
+            _pairingSending.value = true
+            runCatching {
+                container.pairingClient.send(
+                    invite,
+                    SubscriptionTransfer(
+                        name = subscription.name,
+                        url = subscription.url,
+                        userAgentOverride = subscription.userAgentOverride,
+                        // The TV must get its own per-installation identity. A provider header
+                        // entered manually may contain x-hwid, so strip it even though ordinary
+                        // Yumi subscriptions keep that identity outside this map.
+                        headers = subscription.headers.filterKeys { !it.equals("x-hwid", ignoreCase = true) },
+                    ),
+                )
+            }.onSuccess { result ->
+                if (result.accepted) {
+                    _pairingInvite.value = null
+                    emit(R.string.pairing_sent, result.subscriptionName ?: subscription.name)
+                } else {
+                    emit(R.string.pairing_rejected)
+                }
+            }.onFailure {
+                emit(R.string.pairing_failed)
+            }
+            _pairingSending.value = false
+        }
+    }
 
     /**
      * Text that arrived from outside — a `happ://` link tapped in a browser, a share from another

@@ -141,7 +141,8 @@ dependencies {
     //
     // sing-box's libbox.aar stood here until the port. It was 118 MB against this one's 21, and
     // carrying both would have made every user download two cores to run one.
-    implementation(files("libs/libyumi.aar"))
+    implementation(project(":shared"))
+    implementation(project(":design"))
 
     implementation(platform(libs.compose.bom))
 

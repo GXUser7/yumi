@@ -1,0 +1,589 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Default locale: English. Russian lives in values-ru.
+
+  English is the default rather than Russian so that a phone set to any language the app does not
+  ship gets something readable instead of a language its owner may not read at all. A Russian
+  phone resolves values-ru; everything else lands here.
+-->
+<resources>
+    <string name="app_name" translatable="false">Yumi</string>
+
+    <!-- ============================================================ Common -->
+
+    <string name="action_back">Back</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_add">Add</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_scan">Scan</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_close">Close</string>
+    <string name="action_allow">Allow</string>
+    <string name="action_expand">Expand</string>
+    <string name="action_collapse">Collapse</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_sort">Sort</string>
+    <string name="action_retry">Retry</string>
+
+    <string name="unit_millis">ms</string>
+
+    <!-- Byte scales, binary (1024). -->
+    <string name="unit_bytes">B</string>
+    <string name="unit_kibibytes">KB</string>
+    <string name="unit_mebibytes">MB</string>
+    <string name="unit_gibibytes">GB</string>
+    <string name="unit_tebibytes">TB</string>
+    <string name="unit_pebibytes">PB</string>
+
+    <string name="unit_bytes_per_second">B/s</string>
+    <string name="unit_kibibytes_per_second">KB/s</string>
+    <string name="unit_mebibytes_per_second">MB/s</string>
+    <string name="unit_gibibytes_per_second">GB/s</string>
+    <string name="unit_tebibytes_per_second">TB/s</string>
+
+    <string name="unit_megabits_per_second">Mbps</string>
+
+    <string name="time_never">never</string>
+    <string name="time_just_now">just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_hours_ago">%1$d h ago</string>
+    <string name="time_days_ago">%1$d d ago</string>
+    <string name="time_long_ago">a long time ago</string>
+
+    <plurals name="servers">
+        <item quantity="one">%1$d server</item>
+        <item quantity="other">%1$d servers</item>
+    </plurals>
+    <plurals name="sources">
+        <item quantity="one">%1$d source</item>
+        <item quantity="other">%1$d sources</item>
+    </plurals>
+    <plurals name="core_lines">
+        <item quantity="one">%1$d line</item>
+        <item quantity="other">%1$d lines</item>
+    </plurals>
+
+    <!-- ========================================================= Navigation -->
+
+    <string name="nav_tunnel">Tunnel</string>
+    <string name="nav_servers">Servers</string>
+    <string name="nav_subscriptions">Subscriptions</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- ============================================================= Models -->
+
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <string name="language_system">System</string>
+    <string name="language_russian" translatable="false">Русский</string>
+    <string name="language_english" translatable="false">English</string>
+
+    <string name="routing_global">Global</string>
+    <string name="routing_global_description">Everything goes through the proxy</string>
+    <string name="routing_rules">By rules</string>
+    <string name="routing_rules_description">Local and Russian addresses go direct, the rest through the proxy</string>
+    <string name="routing_direct">Direct</string>
+    <string name="routing_direct_description">No proxy: traffic leaves from your own address, but names are resolved by the chosen DNS</string>
+
+    <string name="split_tunnel_off">Off</string>
+    <string name="split_tunnel_allow_list">Selected only</string>
+    <string name="split_tunnel_block_list">All but selected</string>
+
+    <string name="ping_tcp">TCP</string>
+    <string name="ping_tcp_description">A single TCP handshake. Fast, and fine for long lists</string>
+    <string name="ping_tls">TLS</string>
+    <string name="ping_tls_description">A full TLS handshake: a couple of round trips more, in exchange for proof that the node really answers with encryption rather than just holding a port open</string>
+    <string name="ping_median">Median</string>
+    <string name="ping_median_description">Three probes, the middle one wins. Slower, but the number stops dancing</string>
+
+    <string name="add_kind_auto">Detect</string>
+    <string name="add_kind_subscription">Subscription</string>
+    <string name="add_kind_server">Server</string>
+    <string name="add_kind_dns">DNS</string>
+
+    <string name="phase_starting">Starting the core</string>
+    <string name="phase_handshaking">Handshake</string>
+    <string name="phase_establishing_tunnel">Raising the tunnel</string>
+    <string name="phase_testing">Checking the connection</string>
+
+    <string name="speed_phase_idle">Ready to measure</string>
+    <string name="speed_phase_latency">Response</string>
+    <string name="speed_phase_download">Download</string>
+    <string name="speed_phase_upload">Upload</string>
+    <string name="speed_phase_done">Measurement complete</string>
+    <string name="speed_phase_failed">Measurement failed</string>
+
+    <!-- ====================================================== Connect screen -->
+
+    <string name="connect_logs">Journal</string>
+    <string name="connect_speed_test">Speed test</string>
+    <string name="connect_session">This session</string>
+    <string name="connect_protected">Protected</string>
+    <string name="connect_raising">Raising</string>
+    <string name="connect_tunnel_word">tunnel</string>
+    <string name="connect_stopping">Stopping</string>
+    <string name="connect_failed_primary">Could not</string>
+    <string name="connect_failed_secondary">connect</string>
+    <string name="connect_tunnel_primary">Tunnel</string>
+    <string name="connect_tunnel_secondary">is off</string>
+    <string name="connect_pull_to_return">Pull down to go back to the flow</string>
+    <string name="connect_connecting_with">%1$s with %2$s</string>
+    <string name="connect_the_server">the server</string>
+    <string name="connect_tunnel_active">Tunnel active</string>
+    <string name="connect_direct_with_standby">Traffic goes direct · %1$s standing by</string>
+    <string name="connect_no_server">No server chosen — open the Servers tab</string>
+    <string name="connect_stream_warming">stream warming up</string>
+    <string name="connect_stream_empty">stream idle</string>
+    <string name="connect_rate_download">Download</string>
+    <string name="connect_rate_upload">Upload</string>
+    <string name="connect_received">Received %1$s</string>
+    <string name="connect_sent">Sent %1$s</string>
+    <string name="connect_button_disconnect">Disconnect</string>
+    <string name="connect_button_connecting">Connecting</string>
+    <string name="connect_button_disconnecting">Disconnecting</string>
+    <string name="connect_button_connect">Connect</string>
+    <string name="connect_simulated">Demo mode: the core is not running, no traffic goes anywhere</string>
+    <string name="connect_mobile_server">mobile</string>
+    <string name="connect_state_connected">Connected</string>
+    <string name="connect_state_error">Error</string>
+
+    <!-- ====================================================== Servers screen -->
+
+    <string name="servers_title">Servers</string>
+    <string name="servers_sort_default">In order</string>
+    <string name="servers_sort_latency">By latency</string>
+    <string name="servers_sort_name">By name</string>
+    <string name="servers_sort_protocol">By protocol</string>
+    <string name="servers_subtitle">%1$s · %2$s</string>
+    <string name="servers_group_manual">Added by hand</string>
+    <string name="servers_search_placeholder">Find a server</string>
+    <string name="servers_actions">Actions</string>
+    <string name="servers_measure_latency">Measure latency</string>
+    <string name="servers_verify_certificate">Verify the certificate</string>
+    <string name="servers_skip_certificate">Skip certificate checks</string>
+    <string name="servers_show_qr">Show QR code</string>
+    <string name="servers_delete">Delete server</string>
+    <string name="servers_empty_filtered">Nothing found</string>
+    <string name="servers_empty">No servers yet</string>
+    <string name="servers_empty_filtered_hint">Try a different query</string>
+    <string name="servers_empty_hint">Add a subscription or paste a server link</string>
+    <string name="servers_ping_all">Measure all</string>
+    <string name="servers_latency_failed">none</string>
+    <string name="servers_latency_value">%1$d ms</string>
+
+    <!-- ================================================ Subscriptions screen -->
+
+    <string name="subscriptions_title">Subscriptions</string>
+    <string name="subscriptions_empty">No subscriptions</string>
+    <string name="subscriptions_empty_hint">Add a link from your provider — the servers will follow</string>
+    <string name="subscriptions_show_qr">Show QR code</string>
+    <string name="subscriptions_delete">Delete subscription</string>
+    <string name="subscriptions_no_quota">The provider publishes no traffic quota</string>
+    <string name="subscriptions_updated">%1$s · updated %2$s</string>
+    <string name="subscriptions_used_of">%1$s of %2$s</string>
+    <string name="subscriptions_days_left">%1$d d left</string>
+    <string name="subscriptions_expired">expired</string>
+
+    <string name="add_sheet_title">Add</string>
+    <string name="add_sheet_hint">A link from a provider, a happ:// link, a server itself (vless://, vmess://, trojan://, ss://, hysteria2://, tuic://…) or a DNS address (tls://, sdns://, a DoH URL)</string>
+    <string name="add_sheet_link_label">Link</string>
+    <string name="add_sheet_name_label">Name (optional)</string>
+
+    <!-- =================================================== Speed test screen -->
+
+    <string name="speed_title">Speed</string>
+    <string name="speed_through_server">Through “%1$s”</string>
+    <string name="speed_through_tunnel">Through the tunnel</string>
+    <string name="speed_direct">Direct — the tunnel is off, this is the phone\'s own link</string>
+    <string name="speed_latency_chip">Response %1$d ms</string>
+    <string name="speed_jitter_chip">Jitter %1$d ms</string>
+    <string name="speed_download_chip">Download %1$s</string>
+    <string name="speed_interrupted">Interrupted</string>
+    <string name="speed_stop">Stop</string>
+    <string name="speed_again">Again</string>
+    <string name="speed_start">Measure</string>
+
+    <!-- ===================================================== Failover screen -->
+
+    <string name="mobile_nodes_title">Servers for\nmobile data</string>
+    <string name="mobile_nodes_off">Off: one list for every network</string>
+    <string name="mobile_nodes_explanation">When the phone moves to a cellular network the tunnel moves onto a server from this list and stays within it: a replacement for a failure is taken from here too. While the list is empty nothing changes and every network shares one list. What counts is the cellular network itself, not a metered one — a temporarily unmetered 5G plan and a home Wi-Fi marked as limited both stay out of it. Put two or three servers here at least; from one there is nowhere to go.</string>
+    <string name="mobile_nodes_clear">Clear and stop separating networks</string>
+
+    <string name="settings_mobile_nodes">Servers for mobile data</string>
+    <string name="settings_mobile_nodes_off">Not separated: one list everywhere</string>
+    <string name="settings_mobile_nodes_chosen">Chosen: %1$d</string>
+    <string name="settings_restore_wifi">Restore the previous server</string>
+    <string name="settings_restore_wifi_subtitle">Coming back to Wi-Fi puts the tunnel on the server it left, instead of choosing again</string>
+    <string name="failover_title">Server\nfailover</string>
+    <string name="failover_automatic">Chosen automatically</string>
+    <string name="failover_chosen">%1$s chosen</string>
+    <string name="failover_explanation">While the tunnel is up, the app probes the current server every 20 seconds. If it fails to answer twice in a row, the servers chosen here are measured afresh: the ones that do not answer drop out, so do the ones that are slow next to the rest, and one of the survivors is picked at random. At random rather than fastest, so that a popular server going down does not send everybody to the same replacement. At most %1$d servers take part, the current one included.</string>
+    <string name="failover_clear_selection">Clear the selection and decide automatically</string>
+    <string name="failover_no_servers">Add some servers first — there is nothing to fail over to</string>
+
+    <!-- ========================================================= Logs screen -->
+
+    <string name="logs_title">Journal</string>
+    <string name="logs_subtitle">%1$d of %2$d lines</string>
+    <string name="logs_empty">No entries</string>
+
+    <!-- ================================================= Split tunnel screen -->
+
+    <string name="split_tunnel_title">Split\ntunnelling</string>
+    <string name="split_tunnel_off_hint">Every app goes through the tunnel</string>
+    <string name="split_tunnel_allow_hint">Only the checked apps will go through the tunnel</string>
+    <string name="split_tunnel_block_hint">The checked apps will bypass the tunnel</string>
+    <string name="split_tunnel_search">Find an app</string>
+
+    <!-- ========================================================= Scan screen -->
+
+    <string name="scan_permission_rationale">Reading a QR code needs the camera. Frames are not stored and not sent anywhere — they are decoded on the device.</string>
+
+    <!-- ===================================================== Settings screen -->
+
+    <string name="settings_title">Settings</string>
+
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_visualizer">Connected figure</string>
+    <string name="visualizer_waves">Waves</string>
+    <string name="visualizer_planet">Planet</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_dynamic_color">Dynamic colours</string>
+    <string name="settings_dynamic_color_subtitle">Palette from the system wallpaper (Android 12+)</string>
+    <string name="settings_amoled">AMOLED black</string>
+    <string name="settings_amoled_subtitle">Pure black background in the dark theme</string>
+
+    <string name="settings_routing">Routing</string>
+    <string name="settings_bypass_lan">Local network direct</string>
+    <string name="settings_bypass_lan_subtitle">Do not route 192.168.x.x and friends into the tunnel</string>
+    <string name="settings_block_ads">Block ads</string>
+    <string name="settings_block_ads_subtitle">Drop requests to known advertising domains</string>
+    <string name="settings_block_quic">Block QUIC</string>
+    <string name="settings_block_quic_subtitle">Makes browsers fall back to TLS over TCP. Helps where UDP is throttled</string>
+    <string name="settings_split_tunnel">Split tunnelling</string>
+    <string name="settings_split_tunnel_off">Every app through the VPN</string>
+    <string name="settings_split_tunnel_allow">Selected only: %1$d</string>
+    <string name="settings_split_tunnel_block">Apps excluded: %1$d</string>
+
+    <string name="settings_tunnel">Tunnel</string>
+    <string name="settings_ipv6_subtitle">Raise an IPv6 address on the interface</string>
+    <string name="settings_hijack_dns">DNS hijacking</string>
+    <string name="settings_hijack_dns_subtitle">Route queries to port 53 into our own resolver</string>
+    <string name="settings_mtu_hint">From 1280 to 9000</string>
+    <string name="settings_mtu_error">Allowed range is 1280 to 9000</string>
+
+    <string name="settings_dns">DNS</string>
+    <string name="settings_remote_dns">DNS through the proxy</string>
+    <string name="settings_remote_dns_hint">Used for proxied domains</string>
+    <string name="settings_direct_dns">Direct DNS</string>
+    <string name="settings_direct_dns_hint">For domains that bypass the proxy</string>
+    <string name="settings_dns_empty_error">The address cannot be empty</string>
+    <string name="settings_dns_resolvers">Added resolvers</string>
+    <string name="settings_dns_fallback">Fallback resolver</string>
+    <string name="settings_dns_fallback_subtitle">If a resolver you chose stops answering, switch to 1.1.1.1 until the next reconnection. The built-in default is left alone</string>
+    <string name="settings_dns_from_settings">From settings</string>
+
+    <string name="settings_latency">Latency probe</string>
+    <string name="settings_quic_note">Hysteria2 and TUIC run over QUIC and have no TCP port — a UDP probe always checks them, whatever is chosen above.</string>
+
+    <string name="settings_behaviour">Behaviour</string>
+    <string name="settings_boot">Connect on boot</string>
+    <string name="settings_boot_subtitle">Raise the tunnel after the phone restarts</string>
+    <string name="settings_fastest">Pick the fastest server</string>
+    <string name="settings_fastest_subtitle">Take the lowest-latency server before connecting</string>
+    <string name="settings_failover_section">Server replacement</string>
+    <string name="settings_failover">Leave a dead server</string>
+    <string name="settings_failover_subtitle">Probe the current server and move to a live one if it dies</string>
+    <string name="action_copy_logs">Copy the log</string>
+    <string name="action_save_logs">Save the journal file</string>
+    <string name="logs_saved_title">Journal saved</string>
+    <string name="logs_saved_text">“%1$s” is in your Downloads folder.
+
+Send it here: %2$s</string>
+    <string name="logs_saved_open_telegram">Open Telegram</string>
+    <string name="logs_save_failed">Could not save the file to Downloads</string>
+    <string name="logs_send_nothing">There is no journal file yet — it is only kept in debug builds</string>
+    <string name="logs_copied">Log copied: %1$d lines</string>
+    <string name="logs_nothing_to_copy">Nothing to copy</string>
+    <string name="settings_return_home">Return to my server</string>
+    <string name="settings_return_home_subtitle">Go back once the server you chose answers again, instead of staying where the tunnel moved</string>
+    <string name="settings_failover_servers">Servers to fail over to</string>
+    <string name="settings_failover_auto">Chosen automatically from the current subscription</string>
+    <string name="settings_failover_manual">Chosen by hand: %1$d</string>
+    <string name="settings_auto_update">Refresh subscriptions</string>
+    <string name="settings_auto_update_subtitle">Re-read the server list from time to time</string>
+    <string name="settings_interval">How often</string>
+    <string name="settings_interval_note">Refreshing happens while the app is running — an alarm clock for the sake of re-reading a server list is not worth the battery</string>
+    <string name="settings_interval_30m">30 min</string>
+    <string name="settings_interval_1h">1 hour</string>
+    <string name="settings_interval_3h">3 hours</string>
+    <string name="settings_interval_6h">6 hours</string>
+    <string name="settings_interval_12h">12 hours</string>
+    <string name="settings_interval_1d">Once a day</string>
+
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_geo">Routing databases</string>
+    <string name="settings_geo_ready">Databases are in place</string>
+    <string name="settings_geo_missing">Databases not downloaded</string>
+    <string name="settings_geo_size">%1$s on disk — country and category rules work</string>
+    <string name="settings_geo_missing_subtitle">Until they are, everything goes through the proxy: rules by country and the ad blocker are left out</string>
+    <string name="settings_geo_update">Update</string>
+    <string name="settings_geo_download">Download</string>
+    <string name="settings_logs">Journal</string>
+    <string name="settings_alerts">Notify me about faults</string>
+    <string name="settings_alerts_subtitle">When a server or resolver is replaced, or a new version is out</string>
+    <string name="settings_alerts_section">Notifications</string>
+    <string name="settings_alert_server">Server replaced</string>
+    <string name="settings_alert_server_subtitle">A server stopped answering and the tunnel moved — or had nowhere to move to</string>
+    <string name="settings_alert_dns">Resolver replaced</string>
+    <string name="settings_alert_dns_subtitle">The resolver stopped answering and the fallback took over</string>
+    <string name="settings_alert_lists">A list went empty</string>
+    <string name="settings_alert_lists_subtitle">A subscription refresh took away every server on the failover or mobile list</string>
+    <string name="settings_alert_update">New version</string>
+    <string name="settings_alert_update_subtitle">An update to the app is out</string>
+    <string name="settings_logs_subtitle">Core and subscription logs</string>
+
+    <string name="settings_about">About</string>
+    <string name="settings_about_subtitle">Material 3 Expressive · traffic carried by sing-box</string>
+    <string name="settings_speed_beta">Speed testing is in beta: the measurement runs through the chosen server, and the numbers are still being tuned.</string>
+    <string name="settings_telegram">Telegram channel</string>
+    <string name="settings_telegram_subtitle">t.me/MaterialYouCloud — builds and news</string>
+    <string name="settings_tile">Quick settings tile</string>
+    <string name="settings_tile_subtitle">Add a tunnel toggle to the quick settings</string>
+    <string name="settings_tile_manual">Added by hand: shade → pencil → drag “Yumi” in</string>
+
+    <!-- ================================================== Snackbar / messages -->
+
+    <string name="message_no_vpn_permission">Without VPN permission the tunnel cannot come up</string>
+    <string name="message_no_server_after_consent">Permission granted, but the server it was for is gone — pick one and connect again</string>
+    <string name="message_routing_applied">“%1$s” mode applied</string>
+    <string name="message_certificate_skipped">“%1$s”: the certificate is not checked</string>
+    <string name="message_certificate_verified">“%1$s”: certificate checking is on</string>
+    <string name="message_latency_done">Latency check finished</string>
+    <string name="message_measure_first">Measure the latencies first</string>
+    <string name="message_selected">%1$s selected</string>
+    <string name="message_subscription_exists">That subscription is already added</string>
+    <string name="message_subscription_removed">Subscription removed</string>
+    <string name="message_not_a_subscription">A subscription is an http:// or https:// link</string>
+    <string name="message_not_a_server">That does not look like a server — the link did not parse</string>
+    <string name="message_not_a_dns">That does not look like a DNS address</string>
+    <string name="message_servers_added">Servers added: %1$d</string>
+    <string name="message_dns_added">DNS added: %1$s</string>
+    <string name="message_dns_added_many">DNS entries added: %1$d</string>
+    <string name="message_dns_applied">DNS applied: %1$s</string>
+    <string name="message_dns_from_settings">from settings</string>
+    <string name="message_default_subscription_name">Subscription</string>
+
+    <!-- =========================================== Deep link / parser reasons -->
+
+    <string name="reason_empty_link">Empty link</string>
+    <string name="reason_bad_dns">Could not read the DNS address</string>
+    <string name="reason_no_payload">The link carries no data</string>
+    <string name="reason_unknown_link">Unknown link format</string>
+    <string name="reason_unsupported_action">Action “%1$s” is not supported</string>
+    <string name="reason_not_recognised">Recognised neither as a server nor as a subscription</string>
+    <string name="reason_empty_response">Empty response from the server</string>
+    <string name="reason_links_unreadable">The links did not parse</string>
+    <string name="reason_not_base64">Neither base64 nor a list of links</string>
+    <string name="reason_no_supported_servers">The subscription holds no supported servers</string>
+
+    <!-- ============================================================= Journal -->
+
+    <string name="log_servers_imported">Servers imported: %1$d</string>
+    <string name="log_dns_imported">DNS entries imported: %1$d</string>
+
+    <string name="log_system_start_no_server">System start: no server chosen</string>
+    <string name="log_system_start_no_permission">System start: no VPN permission</string>
+    <string name="log_system_start">System tunnel start: %1$s</string>
+    <string name="log_permission_revoked">VPN permission revoked by the system</string>
+    <string name="log_core_line">Core: %1$s</string>
+    <string name="log_tunnel_switched">Tunnel switched to %1$s</string>
+    <string name="log_tunnel_up">Tunnel up: %1$s</string>
+    <string name="log_switch_failed">Switching: %1$s</string>
+    <string name="log_start_failed">Starting the core: %1$s</string>
+    <string name="log_status_subscribe_failed">Could not subscribe to core status: %1$s</string>
+    <string name="log_no_traffic_accounting">The core is not accounting for traffic — the counters will stay empty</string>
+    <string name="log_core_reload_requested">The core asked for a reload</string>
+    <string name="log_tunnel_stopping">Stopping the tunnel</string>
+    <string name="log_connecting_to">Connecting to %1$s (%2$s, %3$s)</string>
+
+    <string name="log_boot_connected">Auto-connect after boot: %1$s</string>
+    <string name="log_boot_no_permission">Auto-connect cancelled: no VPN permission. Connect once by hand to grant it</string>
+    <string name="log_boot_rejected">Auto-connect cancelled: %1$s</string>
+
+    <string name="log_subscription_message">Subscription “%1$s”: %2$s</string>
+    <string name="log_subscription_received">Subscription “%1$s”: %2$s received</string>
+    <string name="log_subscription_via_tunnel">Provider unreachable directly — fetching «%1$s» through the tunnel</string>
+    <string name="log_auto_update">Auto-refresh: %1$s</string>
+    <string name="log_auto_update_failed">Subscription auto-refresh: %1$s</string>
+
+    <string name="log_failover_home_back">“%1$s” answers again — going back to it</string>
+    <string name="log_failover_no_answer">“%1$s” did not answer (%2$d/%3$d)</string>
+    <string name="log_failover_no_traffic">“%1$s” answers but carries nothing (%2$d/%3$d)</string>
+    <string name="log_failover_nothing_to_swap">“%1$s” is not answering, and there is nothing to replace it with</string>
+    <string name="log_mobile_switch">Cellular network — moving to “%1$s” (%2$s ms)</string>
+    <string name="log_mobile_back">Wi-Fi is back — moving to “%1$s” (%2$s ms)</string>
+    <string name="log_mobile_none_answered">Cellular, but no server on the mobile list answered after %1$d tries — staying</string>
+    <string name="log_cellular_ordinary_dead">Ordinary servers stopped answering on cellular — falling back to the mobile list (%1$d)</string>
+    <string name="settings_prefer_ordinary_cellular">Ordinary servers first on cellular</string>
+    <string name="settings_prefer_ordinary_cellular_description">Use the mobile list only once the ordinary ones stop answering. Checks the whole list, which costs traffic</string>
+    <string name="log_mobile_none_left">On cellular, but not one server from the mobile list is left — staying put</string>
+    <string name="log_failover_probing">“%1$s” is not answering — checking %2$d spares</string>
+    <string name="log_failover_all_dead">No spare server answered — staying on “%1$s”</string>
+    <string name="log_core_flood">Core wrote %1$s too fast to keep — hidden so the journal survives</string>
+    <string name="log_cores_alive">%1$d cores are running at once — the oldest has been up for %2$d min. Connections are being cut between them; please send the journal</string>
+    <string name="log_failover_core_blind">“%1$s” is still gone, but the core has not confirmed a live spare %2$d times running — holding rather than trusting a bare handshake again</string>
+    <string name="log_failover_switching">Switching to “%1$s” (%2$s ms)</string>
+    <string name="log_failover_pruned_all">The spare servers vanished from the subscription (%1$d) — the choice is automatic again</string>
+    <string name="log_mobile_pruned">Servers that no longer exist were removed from the mobile list: %1$d</string>
+    <string name="log_mobile_pruned_all">The mobile servers vanished from the subscription (%1$d) — the mobile list is empty again</string>
+    <string name="log_selection_followed">%1$d chosen servers moved to new addresses — followed them</string>
+    <string name="log_failover_pruned">Servers that no longer exist were removed from the spares list: %1$d</string>
+
+    <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>
+    <string name="log_settings_reapplied">Settings changed — rebuilding the tunnel</string>
+    <string name="log_dns_dead">Resolver “%1$s” stopped answering; the fallback is switched off</string>
+    <string name="log_dns_fallback_also_dead">The fallback resolver (%1$s) is not answering either — the fault is probably elsewhere</string>
+
+    <string name="log_autoselect">Auto-select: %1$s</string>
+    <string name="log_autoselect_measuring">Auto-select: measuring latencies (%1$d)</string>
+
+    <string name="log_georules_missing">Geo rules unavailable (%1$s) — routing without them</string>
+    <string name="log_geo_missing">Geo databases not downloaded yet — routing everything through the proxy until they are</string>
+    <string name="log_node_ids_migrated">Server identity updated for %1$d entries after the transport fix</string>
+    <string name="log_geo_downloaded">Geo database %1$s is ready</string>
+    <string name="log_geo_failed">Could not fetch %1$s (%2$s) — routing without it</string>
+    <string name="log_tls_verification_forced">%1$s asked for the certificate check to be skipped, which this core cannot do — it will be verified</string>
+    <string name="log_probe_port">Speed test port: %1$d</string>
+    <string name="log_config_failed">Could not assemble the configuration: %1$s</string>
+
+    <string name="log_speed_summary">Speed test %1$s: download %2$s Mbps, upload %3$s Mbps, response %4$d ms</string>
+    <string name="log_speed_through_tunnel">through the tunnel</string>
+    <string name="log_speed_direct">direct</string>
+    <string name="log_speed_failed">Speed test: %1$s</string>
+
+    <string name="subscription_added_removed">%1$s, +%2$d new, -%3$d gone</string>
+    <string name="subscription_added">%1$s, +%2$d new</string>
+    <string name="subscription_removed_only">%1$s, -%2$d gone</string>
+
+    <!-- ============================================ Errors surfaced to the UI -->
+
+    <string name="error_empty_config">Empty configuration</string>
+    <string name="error_core_rejected_config">The core rejected the configuration: %1$s</string>
+    <string name="error_core_no_reason">no explanation given</string>
+    <string name="error_core_start_failed">Could not start the core</string>
+    <string name="error_establish_null">VpnService.establish() returned null: no permission</string>
+    <string name="error_protect_failed">protect(%1$d) failed</string>
+    <string name="error_no_connection_owner">Connection owner not found</string>
+    <string name="error_network">Network error</string>
+    <string name="error_http">HTTP %1$d</string>
+    <string name="error_device_limit">Device limit reached — unbind the extras at your subscription provider</string>
+    <string name="error_panel_notice">Panel: %1$s</string>
+    <string name="error_unsupported_format">Format %1$s is not supported yet</string>
+    <string name="error_too_many_redirects">Too many redirects</string>
+    <string name="error_no_server_selected">Choose a server first</string>
+
+    <string name="error_speed_no_connection">no connection</string>
+    <string name="error_speed_no_length">response without a body length</string>
+    <string name="error_speed_core_refused">the core refused the request: %1$s</string>
+    <string name="error_speed_server_said">the measuring server answered: %1$s</string>
+    <string name="error_speed_nothing">nothing</string>
+    <string name="error_speed_cancelled">measurement stopped</string>
+
+    <!-- =========================================================== Tile / VPN -->
+
+    <string name="vpn_channel_name">Tunnel state</string>
+    <string name="vpn_channel_description">A persistent notification while the VPN is connected</string>
+    <string name="notification_tunnel_active">Tunnel active</string>
+    <string name="notification_connecting">Connecting…</string>
+    <string name="notification_stopping">Stopping…</string>
+    <string name="notification_disconnect">Disconnect</string>
+
+    <string name="tile_connecting">Connecting…</string>
+    <string name="tile_disconnecting">Disconnecting…</string>
+    <string name="tile_error">Error</string>
+    <string name="tile_off">Off</string>
+    <string name="tile_connected">Connected</string>
+
+    <!-- ============================================ External import prompt -->
+
+    <string name="import_confirm_title">Add from another app?</string>
+    <string name="import_confirm_explain">This link was opened by another app or a web page, not typed here. Adding it puts servers your traffic can be routed through into the list.</string>
+    <string name="import_confirm_subscription">Subscription from %1$s</string>
+    <string name="import_confirm_servers">Servers: %1$d</string>
+    <string name="import_confirm_dns">DNS resolvers: %1$d</string>
+    <string name="import_confirm_insecure">%1$d of them ask for certificate checking to be turned off</string>
+    <string name="error_body_too_large">The subscription is too large to read</string>
+    <string name="log_store_write_failed">Could not save to disk: %1$s</string>
+    <string name="message_imported_insecure">%1$d of the added servers do not check certificates</string>
+    <string name="log_imported_insecure">Added servers with certificate checking off: %1$d</string>
+    <string name="speed_metered_title">Measure over mobile data?</string>
+    <string name="speed_metered_body">The test opens several streams and can move a few hundred megabytes each way. On a metered plan that is charged.</string>
+    <string name="log_failover_home_abandoned">“%1$s” keeps dropping out — staying on the replacement</string>
+    <string name="log_skipped_unsupported_transport">Skipped %1$d servers: the core cannot carry %2$s</string>
+    <string name="log_skipped_unsupported_protocol">Skipped %1$d server(s) this core cannot carry: %2$s</string>
+
+    <!-- Notifications for things the app would otherwise handle in silence. -->
+    <string name="alert_channel_name">Faults</string>
+    <string name="alert_channel_description">A server or resolver stopped working, and the app did something about it</string>
+    <string name="alert_server_dead_title">Server stopped answering</string>
+    <string name="alert_server_dead_text">“%1$s” stopped carrying traffic. The tunnel moved to “%2$s”.</string>
+    <string name="alert_server_stranded_title">Server stopped answering</string>
+    <string name="alert_server_stranded_text">“%1$s” stopped carrying traffic and there was nothing to replace it with.</string>
+    <string name="alert_dns_dead_title">DNS stopped answering</string>
+    <string name="alert_dns_replaced_text">%1$s stopped resolving names. Switched to %2$s until the next reconnection.</string>
+    <string name="alert_dns_dead_text">%1$s stopped resolving names. The fallback is switched off, so names will not resolve.</string>
+
+    <!-- Updating the app itself, which nothing else does: it is distributed outside any store. -->
+    <string name="settings_updates">Updates</string>
+    <string name="settings_update_auto">Check automatically</string>
+    <string name="settings_update_auto_subtitle">Ask GitHub for a newer release every 12 hours</string>
+    <string name="settings_update_check">Check now</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_none">%1$s is the latest version</string>
+    <string name="settings_update_available">Version %1$s is available</string>
+    <string name="settings_update_download">Download</string>
+    <string name="settings_update_download_sized">Download (%1$s MB)</string>
+    <string name="settings_update_later">Later</string>
+    <string name="settings_update_downloading">Downloading %1$s…</string>
+    <string name="settings_update_ready">Version %1$s is ready to install</string>
+    <string name="settings_update_install">Install</string>
+    <string name="settings_update_retry">Try again</string>
+
+    <string name="alert_list_emptied_title">A server list is empty</string>
+    <string name="alert_list_emptied_failover">A subscription refresh took away every failover server. Replacements are chosen automatically again, from the whole subscription.</string>
+    <string name="alert_list_emptied_mobile">A subscription refresh took away every mobile server. The networks are no longer separated: one list everywhere again.</string>
+    <string name="alert_cores_title">%1$d cores running at once</string>
+    <string name="alert_cores_text">They are cutting connections out from under each other. Oldest has been alive %1$d min — please send the journal, yumi-cores.log included</string>
+    <string name="alert_update_title">Version %1$s is out</string>
+    <string name="alert_update_text">Open Settings to download and install it</string>
+
+    <string name="log_update_available">A new version is available: %1$s</string>
+    <string name="log_update_none">No update: %1$s is the latest version</string>
+    <string name="log_update_downloaded">Version %1$s downloaded and ready to install</string>
+    <string name="log_update_failed">Update check: %1$s</string>
+
+    <string name="error_update_unreadable">Could not read the release information</string>
+    <string name="error_update_no_asset">The release has no build for this architecture (%1$s)</string>
+    <string name="error_update_download">Download failed (%1$s)</string>
+    <string name="error_update_truncated">Download stopped early: %1$d bytes of %2$d</string>
+    <string name="error_update_not_an_apk">the downloaded file is not an installable package</string>
+    <string name="error_update_wrong_package">the package inside is %1$s, not this app</string>
+    <string name="error_update_wrong_signature">it is signed by a different key</string>
+    <string name="error_update_rejected">Update refused: %1$s</string>
+    <string name="log_update_rejected">Downloaded update refused: %1$s</string>
+
+    <string name="pairing_send_title">Send subscription to TV</string>
+    <string name="pairing_send_target">Choose one subscription for %1$s. The TV receives the private link and headers.</string>
+    <string name="pairing_no_subscriptions">There are no subscriptions to send.</string>
+    <string name="pairing_send_action">Send</string>
+    <string name="pairing_sent">Subscription “%1$s” was sent to TV</string>
+    <string name="pairing_rejected">The TV rejected the subscription</string>
+    <string name="pairing_failed">Could not reach the TV. Check that both devices are on the same Wi-Fi and client isolation is disabled.</string>
+</resources>

@@ -62,7 +62,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.R
+import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.daysUntil
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.Subscription
