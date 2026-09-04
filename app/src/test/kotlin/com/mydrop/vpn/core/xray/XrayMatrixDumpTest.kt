@@ -34,6 +34,24 @@ class XrayMatrixDumpTest {
 
     private val outputDir = File("build/xray-matrix")
 
+    /**
+     * A key of the right shape, built rather than written down.
+     *
+     * WireGuard and Shadowsocks-2022 both want exactly thirty-two bytes of base64, and a literal of
+     * that shape in a public repository is indistinguishable from a real key — to a reader, and to
+     * the secret scanners watching the repository, which flagged the version of this file that
+     * spelled them out. Generating them says plainly that there is nothing here to leak.
+     */
+    private fun fakeKey(seed: Int): String =
+        java.util.Base64.getEncoder().encodeToString(ByteArray(32) { (it + seed).toByte() })
+
+    /** REALITY wants raw URL-safe base64 without padding; same reasoning as [fakeKey]. */
+    private fun fakeRealityKey(): String =
+        java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(ByteArray(32) { (it * 7).toByte() })
+
+
+    /** The placeholder every proxy client's documentation uses; not a credential. */
     private val uuid = "11111111-2222-3333-4444-555555555555"
 
     private val protocols: List<Pair<String, ProxySettings>> = listOf(
@@ -49,7 +67,7 @@ class XrayMatrixDumpTest {
         ),
         "ss-2022" to ProxySettings.Shadowsocks(
             method = "2022-blake3-aes-256-gcm",
-            password = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            password = fakeKey(0),
         ),
         "socks" to ProxySettings.Socks(username = "user", password = "pass"),
         "socks-open" to ProxySettings.Socks(),
@@ -78,7 +96,7 @@ class XrayMatrixDumpTest {
             serverName = "decoy.example.com",
             fingerprint = "chrome",
             reality = RealityOptions(
-                publicKey = "Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyMDA",
+                publicKey = fakeRealityKey(),
                 shortId = "0123456789abcdef",
                 spiderX = "/",
             ),
@@ -165,14 +183,14 @@ class XrayMatrixDumpTest {
         // WireGuard: no stream layer, and the one protocol that wants host and port in one string.
         listOf(
             "wireguard-plain" to ProxySettings.WireGuard(
-                privateKey = "aGVsbG93b3JsZGhlbGxvd29ybGRoZWxsb3dvcmxkMD0=",
-                peerPublicKey = "d29ybGRoZWxsb3dvcmxkaGVsbG93b3JsZGhlbGxvMD0=",
+                privateKey = fakeKey(1),
+                peerPublicKey = fakeKey(2),
                 localAddresses = listOf("10.2.0.2/32"),
             ),
             "wireguard-warp" to ProxySettings.WireGuard(
-                privateKey = "aGVsbG93b3JsZGhlbGxvd29ybGRoZWxsb3dvcmxkMD0=",
-                peerPublicKey = "d29ybGRoZWxsb3dvcmxkaGVsbG93b3JsZGhlbGxvMD0=",
-                preSharedKey = "cHJlc2hhcmVka2V5cHJlc2hhcmVka2V5cHJlczA9",
+                privateKey = fakeKey(1),
+                peerPublicKey = fakeKey(2),
+                preSharedKey = fakeKey(3),
                 localAddresses = listOf("10.2.0.2/32", "fd01:5ca1:ab1e::2/128"),
                 mtu = 1280,
                 reserved = listOf(1, 2, 3),
