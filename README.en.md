@@ -3,7 +3,7 @@
 *Read this in [Russian](README.md).*
 
 A VPN client for Android: subscriptions, servers from a link or a QR code, DNS resolvers, a tunnel
-on the [sing-box](https://github.com/SagerNet/sing-box) core and a Material 3 Expressive interface.
+on the [Xray](https://github.com/XTLS/Xray-core) core and a Material 3 Expressive interface.
 
 **[Download the latest release](https://github.com/GXUser7/yumi/releases/latest)** ·
 [Telegram channel](https://t.me/MaterialYouCloud)
@@ -19,20 +19,31 @@ phones; if you are not sure which one you have, take arm64. Android 8.0 or newer
 ## What it can do
 
 **You can add almost anything.** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`,
-`hysteria://`, `tuic://`, `anytls://`, `wireguard://`, `ssh://`, `socks://` and `http://` links —
-by pasting or by QR code; everything except `http://` is also caught when you tap such a link in
-another app. Subscriptions are read in any of the formats panels hand them out in: a list of links
-(base64 or plain text), **Clash YAML**, **sing-box JSON**, **Xray/v2ray JSON** and **SIP008**. When adding something you can say outright what you are
+`wireguard://`, `socks://` and `http://` links — by pasting or by QR code; everything except
+`http://` is also caught when you tap such a link in another app. Subscriptions are read in any of
+the formats panels hand them out in: a list of links (base64 or plain text), **Clash YAML**,
+**Xray/v2ray JSON** and **SIP008**. When adding something you can say outright what you are
 pasting — a subscription, a server or a DNS resolver — or leave the detection to the app.
 
-sing-box configurations travel **verbatim**: whatever the app's own model cannot express —
-chains, multiplexing, ECH — reaches the core untouched.
+**Transports:** TCP/RAW, WebSocket, gRPC, HTTPUpgrade, **XHTTP** (also known as splithttp), mKCP
+and QUIC — with TLS, REALITY, Vision and browser-fingerprint mimicry (uTLS). XHTTP arrived in 2.0
+along with the change of core: panels hand out such nodes more and more often, and the previous
+core could not speak it — the server sat in the list, showed a healthy ping, brought the tunnel up,
+and carried not one connection.
 
-**DNS resolvers** are objects just like servers: added by a link (`tls://`, `quic://`, a DoH
-address or an `sdns://` stamp), stored as a list and switched with a single tap, including on a
-live tunnel. The "Direct" mode together with a chosen resolver gives you "no VPN, but the DNS I
-want" — traffic leaves from your ordinary address while names are resolved by the service you
-picked.
+What the core **cannot** do: TUIC, AnyTLS, ShadowTLS, Hysteria v1, SSH, and subscriptions in the
+sing-box JSON format. Such nodes are filtered out when they are added and written to the journal,
+rather than sitting in the list quietly not working.
+
+**DNS resolvers** are objects just like servers: added by a link (a DoH address, `tcp://`,
+`udp://`, a bare address or an `sdns://` stamp), stored as a list and switched with a single tap,
+including on a live tunnel. DNS-over-TLS and DNS-over-QUIC are not implemented in this core, so
+`tls://` and `quic://` are refused when added rather than quietly downgraded to plain UDP: handing
+your ISP the list of names you look up is the one thing an encrypted resolver was chosen to
+prevent.
+
+The "Direct" mode together with a chosen resolver gives you "no VPN, but the DNS I want" — traffic
+leaves from your ordinary address while names are resolved by the service you picked.
 
 **Latency and speed.** Latency is measured three ways: a TCP handshake, a full TLS handshake (for
 REALITY that is the difference between "the port is open" and "the disguise works") and the median
@@ -41,9 +52,12 @@ selected server** rather than past the tunnel, and reports download, upload, res
 jitter with a dial gauge and a live chart.
 
 **Routing.** Three modes: everything through the tunnel, everything direct, or by rules — Russian
-sites and addresses go around the VPN. The geo rules ship inside the app, so connecting never waits
-for lists to be downloaded. Separately: local network bypass, ad-domain blocking and per-app split
-tunnelling.
+sites and addresses go around the VPN. The routing databases (`geoip.dat` and `geosite.dat`, some
+24 MB together) are fetched on their own after the first connection; settings carry a section
+showing whether they are on disk, and a button to refresh them. Until they are there the rules that
+name them are simply left out of the configuration — worth showing, because from the outside such a
+tunnel looks perfectly healthy. Separately: local network bypass, ad-domain blocking and per-app
+split tunnelling.
 
 **Changing servers on a live tunnel** does not break the connection: the servers live in the
 configuration as a group, and moving between them is a pointer swap inside the core. The tunnel,
@@ -102,6 +116,11 @@ servers and — if you start it — measuring speed through `speed.cloudflare.co
 around the tunnel: otherwise the measurement would be measuring itself, and a subscription refresh
 would travel through the very server it hands out.
 
+One exception, and it is needed where the internet is handed out by allow-list: when a subscription
+will not open directly, the app repeats the request through its own tunnel. Without that it cannot
+be refreshed on such a network at all — the app excludes itself from the tunnel it serves, so its
+requests hit the same block as everything else.
+
 Panels that bind to a device receive an `x-hwid` identifier. It is **random and generated once at
 install time**: a real device identifier would become a marker by which every panel the user has
 ever subscribed to could recognise them.
@@ -123,21 +142,28 @@ export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
 ./gradlew :app:testDebugUnitTest
 ```
 
-**The core is not in the repository.** `app/libs/libbox.aar` weighs 117 MB — more than GitHub's
-100 MB per-file limit — so you have to build it yourself and drop it in by hand. The build command,
-and everything else worth knowing about the internals, is in [DEVELOPMENT.md](DEVELOPMENT.md): why
-the TUN stack is gvisor, how core failures are caught, where the geo rules come from, and how all
-of it is checked without a device.
+**The core is not in the repository.** Xray publishes no mobile binding, so this one lives here:
+the `core-xray/` module, out of which `gomobile bind` produces `app/libs/libyumi.aar`. That file is
+over GitHub's 100 MB per-file limit, so you have to build it yourself and drop it in by hand —
+nothing compiles without it, tests included. The build command, and everything else worth knowing
+about the internals, is in [DEVELOPMENT.md](DEVELOPMENT.md): why the TUN stack is gvisor, how core
+failures are caught, where the geo rules come from, and how all of it is checked without a device.
 
 ## Acknowledgements
 
-The core is [sing-box](https://github.com/SagerNet/sing-box) by SagerNet. The geo rules come from
-its own `sing-geosite` and `sing-geoip` repositories.
+The core is [Xray-core](https://github.com/XTLS/Xray-core) by XTLS. The routing databases come
+from [v2fly/geoip](https://github.com/v2fly/geoip) and
+[v2fly/domain-list-community](https://github.com/v2fly/domain-list-community).
 
 ## License
 
 [GNU GPL v3 or later](LICENSE). Copyright © 2026 GXUser7.
 
-The choice was not a free one: sing-box is distributed under GPLv3 and `libbox.aar` is linked
-straight into the app, so the app as a whole has to be GPLv3 as well. In practice that means
-anyone handing out a built APK owes the source alongside it, under the same licence.
+Still not a free choice, though the reason changed along with the core. Xray-core itself is
+MPL-2.0, and that alone would have allowed any licence at all. But Xray's Shadowsocks-2022
+implementation is built on [`sagernet/sing`](https://github.com/SagerNet/sing), which is GPLv3 or
+later, and `libyumi.aar` links it straight into the app along with everything else. So the app as a
+whole has to be GPLv3 as well.
+
+In practice that means anyone handing out a built APK owes the source alongside it, under the same
+licence.
