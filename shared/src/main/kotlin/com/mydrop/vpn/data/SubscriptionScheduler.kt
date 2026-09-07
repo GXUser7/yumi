@@ -26,6 +26,16 @@ class SubscriptionScheduler(
     private val refresher: SubscriptionRefresher,
     private val logs: LogRepository,
     private val scope: CoroutineScope,
+    /**
+     * Whether opening the app is itself a reason to refresh.
+     *
+     * On for the television, where the app is opened to watch something and the server list has
+     * usually been sitting untouched since the last time somebody did — an interval measured in
+     * hours means the first thing the set does is connect through a list that may no longer
+     * exist. Off on the phone, whose process is up most of the day anyway, so "startup" there
+     * would mean whenever Android happened to kill it.
+     */
+    private val refreshOnStart: Boolean = false,
 ) {
 
     /**
@@ -38,6 +48,14 @@ class SubscriptionScheduler(
 
     fun start() {
         scope.launch {
+            // Before the first tick rather than after it. The list is at its stalest exactly when
+            // the app opens, and a minute of waiting is a minute spent offering servers that may
+            // have been withdrawn — on a television, that minute is the whole of somebody's
+            // patience for why the film has not started.
+            if (refreshOnStart) {
+                runCatching { refreshDue(startup = true) }
+                    .onFailure { logs.warn(R.string.log_auto_update_failed, it.message.orEmpty()) }
+            }
             while (isActive) {
                 delay(TICK_MILLIS)
                 runCatching { refreshDue() }
@@ -46,7 +64,7 @@ class SubscriptionScheduler(
         }
     }
 
-    private suspend fun refreshDue() {
+    private suspend fun refreshDue(startup: Boolean = false) {
         val current = settings.value
         if (!current.subscriptionAutoUpdate) return
         val interval = current.subscriptionUpdateMinutes.takeIf { it > 0 } ?: return
@@ -56,7 +74,7 @@ class SubscriptionScheduler(
         attempts.keys.retainAll(subscriptions.map { it.id }.toSet())
 
         subscriptions
-            .filter { it.enabled && it.isDue(interval) }
+            .filter { it.enabled && it.isDue(interval, startup) }
             .forEach { subscription ->
                 val before = subscription.lastUpdatedEpochMillis
                 logs.info(R.string.log_auto_update, refresher.refresh(subscription))
@@ -74,8 +92,12 @@ class SubscriptionScheduler(
             }
     }
 
-    private fun Subscription.isDue(intervalMinutes: Int): Boolean {
+    private fun Subscription.isDue(intervalMinutes: Int, startup: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
+        // Opening the app overrides the interval, but not the floor. Without one, a set that
+        // crash-loops, or a user closing and reopening the app while a subscription refuses to
+        // load, would fetch as fast as the process can restart.
+        if (startup) return now - (lastUpdatedEpochMillis ?: 0L) >= STARTUP_FLOOR_MILLIS
         // A subscription that has never answered has no timestamp to count from. Treating it as
         // due keeps a first fetch that failed from waiting out the whole interval, and the
         // backoff below is what stops that turning into a retry every ten minutes forever.
@@ -104,6 +126,7 @@ class SubscriptionScheduler(
 
     private companion object {
         const val TICK_MILLIS = 60_000L
+        const val STARTUP_FLOOR_MILLIS = 2 * 60_000L
         const val RETRY_COOLDOWN_MILLIS = 10 * 60_000L
         const val MAX_RETRY_COOLDOWN_MILLIS = 60 * 60_000L
         const val MAX_BACKOFF_DOUBLINGS = 3

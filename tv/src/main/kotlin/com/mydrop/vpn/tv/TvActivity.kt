@@ -61,7 +61,11 @@ class TvActivity : ComponentActivity() {
             }
             MyDropTheme(
                 themeMode = state.settings.themeMode,
+                // A television has one launcher background and every set shows the same one, so
+                // there is nothing personal to take colours from. The palettes are what stands in
+                // for the phone's wallpaper here.
                 dynamicColor = false,
+                palette = state.settings.palette,
                 amoled = false,
             ) {
                 YumiTvApp(viewModel)

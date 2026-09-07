@@ -10,6 +10,8 @@ import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.mydrop.vpn.pairing.PairingClient
+import com.mydrop.vpn.remote.RemoteClient
+import com.mydrop.vpn.remote.RemoteProbe
 
 /**
  * Manual dependency graph. The object count here is small enough that a DI framework would add
@@ -90,6 +92,42 @@ class AppContainer(context: Context) {
     val tunnelHealth = TunnelHealthCheck(logs)
     val speedTester = SpeedTester(logs, strings)
     val pairingClient = PairingClient(appContext)
+
+    /**
+     * What this device calls itself on the local network.
+     *
+     * The set says so out loud — it is the thing being looked for, and "Yumi TV" beside the model
+     * is what somebody picks out of a list on their phone. The phone answers with its model alone,
+     * because the only place that name is ever shown is the television's own list of remotes.
+     */
+    /** Which of the two apps this process is. The remote's two halves are the only users. */
+    private val isTelevision = appContext.packageName.startsWith("com.mydrop.vpn.tv")
+
+    private val remoteDeviceName: String =
+        if (isTelevision) {
+            "Yumi TV · ${android.os.Build.MODEL}"
+        } else {
+            android.os.Build.MODEL.orEmpty().ifBlank { "Phone" }
+        }
+
+    /** Both halves of the remote control live here; only one of them is ever used per app. */
+    val remote = RemoteRepository(
+        directory = context.filesDir,
+        scope = applicationScope,
+        deviceName = { remoteDeviceName },
+        onWriteFailure = writeFailure,
+    )
+    val remoteClient = RemoteClient(appContext)
+    val remoteProbe = RemoteProbe(appContext)
+
+    /** The phone's end. On a television it is built and never started. */
+    val remoteConsole = RemoteConsole(
+        scope = applicationScope,
+        store = remote,
+        client = remoteClient,
+        probe = remoteProbe,
+        deviceName = { remoteDeviceName },
+    )
 
     /**
      * Identity handed to panels that count devices. Created on first use and kept in settings, so
@@ -219,6 +257,22 @@ class AppContainer(context: Context) {
     )
 
     /**
+     * The television's end of the remote control, and nothing at all on a phone.
+     *
+     * Here rather than in the screen's view model on purpose. The activity dies when somebody
+     * presses Home; a running tunnel keeps the process alive through its own foreground service,
+     * and this is what lets the phone still switch the set off after the app has been left.
+     */
+    val remoteHost: RemoteHost? = if (!isTelevision) null else RemoteHost(
+        context = appContext,
+        scope = applicationScope,
+        store = remote,
+        profiles = profiles,
+        tunnel = tunnel,
+        launcher = tunnelLauncher,
+    )
+
+    /**
      * Moves the tunnel off a server that has stopped answering. Runs for the life of the process
      * and does nothing until a tunnel is up and the setting is on.
      */
@@ -268,13 +322,14 @@ class AppContainer(context: Context) {
         strings = strings,
     )
 
-    /** Re-reads server lists on the cadence chosen in settings. */
+    /** Re-reads server lists on the cadence chosen in settings, and once on opening a set. */
     val subscriptionScheduler = SubscriptionScheduler(
         profiles = profiles,
         settings = settings,
         refresher = subscriptionRefresher,
         logs = logs,
         scope = applicationScope,
+        refreshOnStart = isTelevision,
     )
 
     /** Hands a running tunnel a new configuration when a setting it was built from changes. */
@@ -306,6 +361,7 @@ class AppContainer(context: Context) {
         reportWriteFailure = { error ->
             logs.error(R.string.log_store_write_failed, error.message ?: error::class.simpleName.orEmpty())
         }
+        remoteHost?.start()
         failoverWatchdog.start()
         staleSelectionPruner.start()
         tunnelSettingsApplier.start()

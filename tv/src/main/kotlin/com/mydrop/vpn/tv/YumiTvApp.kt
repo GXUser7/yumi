@@ -90,6 +90,9 @@ fun YumiTvApp(viewModel: TvViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val pairing by viewModel.pairing.collectAsStateWithLifecycle()
     val updates by viewModel.updates.collectAsStateWithLifecycle()
+    val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
+    val remoteInvite by viewModel.remoteInvite.collectAsStateWithLifecycle()
+    val remotePeers by viewModel.remotePeers.collectAsStateWithLifecycle()
     var destination by rememberSaveable {
         mutableStateOf(
             if (state.subscriptions.isEmpty()) TvDestination.Subscriptions else TvDestination.Connect,
@@ -153,6 +156,7 @@ fun YumiTvApp(viewModel: TvViewModel) {
                     TvDestination.Subscriptions -> TvSubscriptionsScreen(
                         state = state,
                         pairing = pairing,
+                        refreshing = refreshing,
                         onStartPairing = viewModel::startPairing,
                         onStopPairing = viewModel::stopPairing,
                         onManualAdd = viewModel::addManualSubscription,
@@ -163,10 +167,16 @@ fun YumiTvApp(viewModel: TvViewModel) {
                     TvDestination.Settings -> TvSettingsScreen(
                         state = state,
                         updates = updates,
+                        remoteInvite = remoteInvite,
+                        remotePeers = remotePeers,
                         onUpdateSettings = viewModel::updateSettings,
                         onCheckUpdate = viewModel::checkForUpdate,
                         onDownloadUpdate = viewModel::downloadUpdate,
                         onInstallUpdate = { viewModel.installUpdate(it) },
+                        onDismissUpdate = viewModel::dismissUpdate,
+                        onStartRemotePairing = viewModel::startRemotePairing,
+                        onStopRemotePairing = viewModel::stopRemotePairing,
+                        onForgetRemote = viewModel::forgetRemote,
                     )
                 }
             }
@@ -340,7 +350,7 @@ private fun TvFlowFigure(
                     seaColor = MaterialTheme.colorScheme.primaryContainer,
                     landColor = MaterialTheme.colorScheme.primary,
                     gapColor = container,
-                    markerColor = MaterialTheme.colorScheme.tertiary,
+                    markerColor = semantic.marker,
                 )
             }
         }

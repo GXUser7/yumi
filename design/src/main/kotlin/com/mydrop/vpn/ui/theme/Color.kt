@@ -4,6 +4,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
+import kotlin.math.abs
 
 /*
  * One accent, spent in one place.
@@ -161,6 +162,8 @@ data class MyDropSemanticColors(
     val latencyDead: Color,
     val download: Color,
     val upload: Color,
+    /** The cookie turning over the pixel planet; see [markerAccent]. */
+    val marker: Color,
 )
 
 /**
@@ -190,4 +193,50 @@ fun ColorScheme.toSemanticColors(dark: Boolean): MyDropSemanticColors = MyDropSe
     // any Material scheme guarantees.
     download = primary,
     upload = tertiary,
+    marker = markerAccent(),
 )
+
+/**
+ * The marker on the pixel planet: the one thing in the figure that is not the map.
+ *
+ * The accent's own hue taken to the top of its lightness range — near white, still unmistakably
+ * the colour the rest of the app is painted in. Not a role from the scheme, because no role
+ * promises what this needs: the map is drawn in `primary` and `primaryContainer`, the two ends of
+ * the accent ramp, and anything the scheme offers in between is a tone that will match one of them
+ * in some theme.
+ *
+ * Two wrong answers came before this one, and both are worth remembering. Picking whichever accent
+ * stood furthest away on the colour wheel put a cold blue cookie on warm sand — loud, and reading
+ * as something from another application that had landed on the planet by mistake. Then
+ * `inversePrimary`, which is the accent at the *opposite* lightness to the land: correct against
+ * the land by construction, and on a dark theme that means a dark shape, which vanished the moment
+ * it crossed the sea.
+ *
+ * Brighter than both is the answer that holds. In a dark scheme the land is light and the sea is
+ * deep, and this is lighter than the land. In a light scheme the land is dark, so it is lighter
+ * still, and only the pale sea comes close — which is what the shadow under it is for.
+ */
+private fun ColorScheme.markerAccent(): Color {
+    val red = primary.red
+    val green = primary.green
+    val blue = primary.blue
+    val high = maxOf(red, green, blue)
+    val low = minOf(red, green, blue)
+    val span = high - low
+    // A grey accent has no hue to keep, and asking for one would invent a colour the theme does
+    // not contain. Monochrome wallpaper schemes are the real case.
+    if (span < 0.0001f) return Color(MARKER_LIGHTNESS, MARKER_LIGHTNESS, MARKER_LIGHTNESS)
+    val lightness = (high + low) / 2f
+    val hue = when (high) {
+        red -> (green - blue) / span + if (green < blue) 6f else 0f
+        green -> (blue - red) / span + 2f
+        else -> (red - green) / span + 4f
+    } * 60f
+    val saturation = span / (1f - abs(2f * lightness - 1f))
+    // Capped, because a fully saturated tint at this lightness is a highlighter rather than a
+    // marker, and the shape is small enough that the colour is all of it.
+    return Color.hsl(hue, saturation.coerceIn(0f, 0.85f), MARKER_LIGHTNESS)
+}
+
+/** As light as a colour can be and still carry its hue. */
+private const val MARKER_LIGHTNESS = 0.93f

@@ -33,6 +33,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.ui.components.ImportConfirmDialog
 import com.mydrop.vpn.ui.components.PairingSendDialog
@@ -58,6 +60,7 @@ import com.mydrop.vpn.ui.screens.connect.ConnectScreen
 import com.mydrop.vpn.ui.screens.failover.NodePickerKind
 import com.mydrop.vpn.ui.screens.failover.NodePickerScreen
 import com.mydrop.vpn.ui.screens.logs.LogsScreen
+import com.mydrop.vpn.ui.screens.remote.RemoteScreen
 import com.mydrop.vpn.ui.screens.scan.ScanScreen
 import com.mydrop.vpn.ui.screens.servers.PingAllButtonContent
 import com.mydrop.vpn.ui.screens.servers.ServersScreen
@@ -77,6 +80,7 @@ object Routes {
     const val SCAN = "scan"
     const val FAILOVER = "failover"
     const val MOBILE_NODES = "mobile-nodes"
+    const val REMOTE = "remote"
 }
 
 private enum class TopLevel(
@@ -106,6 +110,7 @@ fun MyDropApp(viewModel: MainViewModel) {
 
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
 
+    val remote by viewModel.remoteState.collectAsStateWithLifecycle()
     val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
     val pairingInvite by viewModel.pairingInvite.collectAsStateWithLifecycle()
     val pairingSending by viewModel.pairingSending.collectAsStateWithLifecycle()
@@ -180,6 +185,12 @@ fun MyDropApp(viewModel: MainViewModel) {
             popExitTransition = { lateralExit(movingForward()) },
         ) {
             composable(Routes.CONNECT) {
+                // One broadcast, and only while there is nothing linked yet: a phone that already
+                // knows a television shows the door regardless, and shouting at the network every
+                // time somebody comes back to this tab would buy nothing.
+                LaunchedEffect(remote.bonds.isEmpty()) {
+                    if (remote.bonds.isEmpty()) viewModel.lookForTelevisions()
+                }
                 ConnectScreen(
                     state = state,
                     onToggleConnection = viewModel::toggleConnection,
@@ -187,7 +198,29 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onRoutingModeChange = viewModel::setRoutingMode,
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenSpeedTest = { navController.navigate(Routes.SPEED) },
+                    onOpenRemote = { navController.navigate(Routes.REMOTE) },
+                    remoteAvailable = remote.bonds.isNotEmpty() || remote.sightings.isNotEmpty(),
                     modifier = Modifier.padding(contentPadding),
+                )
+            }
+
+            composable(Routes.REMOTE) {
+                // Opened with the screen and closed with it. The console itself outlives both, so
+                // what is kept between visits is the bond and whatever was last heard on the
+                // network — not a socket held open behind a screen nobody is looking at.
+                DisposableEffect(Unit) {
+                    viewModel.openRemote()
+                    onDispose(viewModel::closeRemote)
+                }
+                RemoteScreen(
+                    state = remote,
+                    onBack = { navController.popBackStack() },
+                    onScan = { navController.navigate(Routes.SCAN) },
+                    onConnect = { viewModel.sendToRemote(RemoteCommand.Connect) },
+                    onDisconnect = { viewModel.sendToRemote(RemoteCommand.Disconnect) },
+                    onSelect = { viewModel.sendToRemote(RemoteCommand.Select(it)) },
+                    onForget = viewModel::forgetRemote,
+                    contentPadding = contentPadding,
                 )
             }
 

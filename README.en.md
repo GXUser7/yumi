@@ -18,8 +18,12 @@ phones; if you are not sure which one you have, take arm64. Android 8.0 or newer
 
 ### On a television
 
-A separate Android TV app — the **yumi-tv** file in the same release. Driven from the remote, and
-the subscription travels over from the phone by QR code.
+A separate Android TV app — the **yumi-tv** file in the same release. Driven from the TV remote,
+and the subscription travels over from the phone by QR code. The same way, the set pairs with a
+phone as a **remote control**: scan the code in Settings → Phone remote once, and from then on the
+phone finds the television on the network by itself and can switch the tunnel on and off and change
+the server — a remote button appears on the tunnel screen. Seven built-in palettes, as on the
+desktop, and subscriptions refresh as soon as the app opens.
 
 | | |
 |:-:|:-:|

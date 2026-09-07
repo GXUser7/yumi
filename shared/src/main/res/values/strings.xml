@@ -78,6 +78,14 @@
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
 
+    <string name="palette_glacier">Glacier</string>
+    <string name="palette_rose">Rose</string>
+    <string name="palette_lilac">Lilac</string>
+    <string name="palette_mint">Mint</string>
+    <string name="palette_peach">Peach</string>
+    <string name="palette_sand">Sand</string>
+    <string name="palette_sea">Sea</string>
+
     <string name="language_system">System</string>
     <string name="language_russian" translatable="false">Русский</string>
     <string name="language_english" translatable="false">English</string>
@@ -586,4 +594,23 @@ Send it here: %2$s</string>
     <string name="pairing_sent">Subscription “%1$s” was sent to TV</string>
     <string name="pairing_rejected">The TV rejected the subscription</string>
     <string name="pairing_failed">Could not reach the TV. Check that both devices are on the same Wi-Fi and client isolation is disabled.</string>
+
+    <!-- ======================================================= TV remote -->
+
+    <string name="remote_title">Remote</string>
+    <string name="remote_open">TV remote</string>
+    <string name="remote_off">TV is off</string>
+    <string name="remote_not_linked">No TV linked</string>
+    <string name="remote_not_linked_hint">On the TV open Settings → Phone remote and scan the code shown there. After that this phone finds the TV by itself.</string>
+    <string name="remote_scan">Scan the code</string>
+    <string name="remote_found">%1$s found on this network</string>
+    <string name="remote_forget">Unlink the TV</string>
+    <string name="remote_searching">Looking for the TV on this network…</string>
+    <string name="remote_connecting">Connecting to the TV…</string>
+    <string name="remote_offline">The TV is not answering. It must be on the same network with Yumi open.</string>
+    <string name="remote_servers">Servers on the TV</string>
+    <string name="remote_no_servers">The TV has no servers yet</string>
+    <string name="remote_needs_consent">Confirm the VPN request on the TV screen</string>
+    <string name="remote_paired">Remote linked to %1$s</string>
+    <string name="remote_pair_failed">Could not link the TV. Check that both devices are on the same Wi-Fi.</string>
 </resources>

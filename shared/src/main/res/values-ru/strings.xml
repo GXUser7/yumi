@@ -78,6 +78,14 @@
     <string name="theme_light">Светлая</string>
     <string name="theme_dark">Тёмная</string>
 
+    <string name="palette_glacier">Ледник</string>
+    <string name="palette_rose">Роза</string>
+    <string name="palette_lilac">Сирень</string>
+    <string name="palette_mint">Мята</string>
+    <string name="palette_peach">Персик</string>
+    <string name="palette_sand">Песок</string>
+    <string name="palette_sea">Море</string>
+
     <string name="language_system">Системный</string>
 
     <string name="routing_global">Глобально</string>
@@ -584,4 +592,23 @@
     <string name="pairing_sent">Подписка «%1$s» передана на ТВ</string>
     <string name="pairing_rejected">Телевизор отклонил подписку</string>
     <string name="pairing_failed">Не удалось связаться с ТВ. Проверьте общую сеть Wi‑Fi и отключите изоляцию клиентов на роутере.</string>
+
+    <!-- ======================================================= Пульт ТВ -->
+
+    <string name="remote_title">Пульт</string>
+    <string name="remote_open">Пульт телевизора</string>
+    <string name="remote_off">Телевизор выключен</string>
+    <string name="remote_not_linked">Телевизор не привязан</string>
+    <string name="remote_not_linked_hint">На телевизоре откройте Настройки → Пульт с телефона и отсканируйте код. Дальше телефон найдёт телевизор сам.</string>
+    <string name="remote_scan">Отсканировать код</string>
+    <string name="remote_found">В сети найден %1$s</string>
+    <string name="remote_forget">Отвязать телевизор</string>
+    <string name="remote_searching">Ищем телевизор в сети…</string>
+    <string name="remote_connecting">Подключаемся к телевизору…</string>
+    <string name="remote_offline">Телевизор не отвечает. Он должен быть в той же сети, с открытым Yumi.</string>
+    <string name="remote_servers">Серверы телевизора</string>
+    <string name="remote_no_servers">На телевизоре пока нет серверов</string>
+    <string name="remote_needs_consent">Подтвердите запрос VPN на экране телевизора</string>
+    <string name="remote_paired">Пульт привязан к %1$s</string>
+    <string name="remote_pair_failed">Не удалось привязать телевизор. Проверьте, что оба устройства в одной Wi-Fi сети.</string>
 </resources>

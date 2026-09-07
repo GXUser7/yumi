@@ -84,6 +84,15 @@ data class AppSettings(
     // Off by default: wallpaper colours replace the ice accent, and the tunnel screen leans on
     // that accent meaning "protected". Still a switch — the choice belongs to the user.
     val dynamicColor: Boolean = false,
+    /**
+     * The built-in accent, used wherever wallpaper colours are not.
+     *
+     * [Palette.Glacier] is the app's own ice blue and the default everywhere, so this changes
+     * nothing until somebody chooses otherwise. It exists mainly for the television, which has no
+     * wallpaper to take a scheme from; on a phone with dynamic colour on, the wallpaper wins and
+     * this is not read at all.
+     */
+    val palette: Palette = Palette.Glacier,
     val amoled: Boolean = false,
     val language: AppLanguage = AppLanguage.System,
 

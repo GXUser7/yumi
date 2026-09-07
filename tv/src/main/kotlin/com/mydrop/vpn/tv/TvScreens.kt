@@ -1,7 +1,12 @@
 package com.mydrop.vpn.tv
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -26,17 +31,24 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Autorenew
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -56,7 +68,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LatencyResult
+import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.Subscription
@@ -72,8 +87,12 @@ import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.pairing.PairingReceiverState
+import com.mydrop.vpn.remote.RemoteInvite
+import com.mydrop.vpn.remote.RemotePeer
 import com.mydrop.vpn.ui.components.QrCode
+import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
+import com.mydrop.vpn.ui.theme.scheme
 import com.mydrop.vpn.ui.theme.MonoStyle
 
 /**
@@ -281,6 +300,8 @@ private fun TvLatencyReadout(latency: LatencyResult?) {
 fun TvSubscriptionsScreen(
     state: TvUiState,
     pairing: PairingReceiverState,
+    /** Subscriptions being fetched right now, by id — manually or on the app's own schedule. */
+    refreshing: Set<String>,
     onStartPairing: () -> Unit,
     onStopPairing: () -> Unit,
     onManualAdd: (String) -> Unit,
@@ -310,6 +331,25 @@ fun TvSubscriptionsScreen(
                         stringResource(R.string.tv_subscriptions_title),
                         style = MaterialTheme.typography.displayMedium,
                     )
+                    Spacer(Modifier.width(18.dp))
+                    // The set refreshes its lists the moment it is opened, which is exactly when
+                    // nobody is looking for a spinner — so the spinner comes to the title rather
+                    // than hiding on a row, and leaves the width it took with it.
+                    AnimatedVisibility(
+                        visible = refreshing.isNotEmpty(),
+                        enter = fadeIn() + expandHorizontally(),
+                        exit = fadeOut() + shrinkHorizontally(),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ShapeSpinner(MaterialTheme.colorScheme.primary, size = 26.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                stringResource(R.string.tv_refreshing),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                     Spacer(Modifier.weight(1f))
                     Button(onClick = { showPairing = true; onStartPairing() }) {
                         Icon(Icons.Rounded.Add, null)
@@ -323,7 +363,13 @@ fun TvSubscriptionsScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(state.subscriptions, key = { it.id }) { subscription ->
-                        TvSubscriptionRow(subscription, onRefresh, onRemove, onEnabled)
+                        TvSubscriptionRow(
+                            subscription = subscription,
+                            busy = subscription.id in refreshing,
+                            onRefresh = onRefresh,
+                            onRemove = onRemove,
+                            onEnabled = onEnabled,
+                        )
                     }
                 }
             }
@@ -402,6 +448,7 @@ private fun TvPairingPanel(
 @Composable
 private fun TvSubscriptionRow(
     subscription: Subscription,
+    busy: Boolean,
     onRefresh: (Subscription) -> Unit,
     onRemove: (Subscription) -> Unit,
     onEnabled: (Subscription, Boolean) -> Unit,
@@ -442,7 +489,11 @@ private fun TvSubscriptionRow(
                 Switch(subscription.enabled, onCheckedChange = null)
             }
             TvRowAction(onClick = { onRefresh(subscription) }) {
-                Icon(Icons.Rounded.Autorenew, stringResource(R.string.tv_refresh))
+                // The button becomes the progress rather than growing a second indicator beside
+                // it: the thing that was pressed is the thing that is working, and the row keeps
+                // exactly the three stops the D-pad already knows about.
+                if (busy) ShapeSpinner(MaterialTheme.colorScheme.primary, size = 26.dp)
+                else Icon(Icons.Rounded.Autorenew, stringResource(R.string.tv_refresh))
             }
             TvRowAction(onClick = { onRemove(subscription) }) {
                 Icon(Icons.Rounded.Delete, stringResource(R.string.tv_delete))
@@ -484,15 +535,22 @@ private fun ManualUrlDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
 fun TvSettingsScreen(
     state: TvUiState,
     updates: UpdateState,
+    remoteInvite: RemoteInvite?,
+    remotePeers: List<RemotePeer>,
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
     onInstallUpdate: (android.content.Context) -> Unit,
+    onDismissUpdate: () -> Unit,
+    onStartRemotePairing: () -> Unit,
+    onStopRemotePairing: () -> Unit,
+    onForgetRemote: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var editing by rememberSaveable { mutableStateOf<EditableSetting?>(null) }
     var editedValue by rememberSaveable { mutableStateOf("") }
+    var showRemote by rememberSaveable { mutableStateOf(false) }
     Column(modifier.fillMaxSize().padding(SectionInset, SectionInset, SectionInset, SectionBottomInset)) {
         Text(stringResource(R.string.tv_settings_title), style = MaterialTheme.typography.displayMedium)
         Spacer(Modifier.height(22.dp))
@@ -523,6 +581,17 @@ fun TvSettingsScreen(
                     onUpdateSettings { it.copy(language = it.language.next()) }
                 }
             }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                TvPaletteRow(
+                    selected = state.settings.palette,
+                    dark = when (state.settings.themeMode) {
+                        ThemeMode.System -> isSystemInDarkTheme()
+                        ThemeMode.Dark -> true
+                        ThemeMode.Light -> false
+                    },
+                    onSelect = { chosen -> onUpdateSettings { it.copy(palette = chosen) } },
+                )
+            }
 
             sectionHeader(R.string.tv_section_behaviour)
             item {
@@ -539,6 +608,25 @@ fun TvSettingsScreen(
                 ToggleSetting(stringResource(R.string.tv_auto_subscriptions), state.settings.subscriptionAutoUpdate) {
                     onUpdateSettings { s -> s.copy(subscriptionAutoUpdate = !s.subscriptionAutoUpdate) }
                 }
+            }
+            item {
+                CycleSetting(
+                    stringResource(R.string.tv_subscription_interval),
+                    updateIntervalLabel(state.settings.subscriptionUpdateMinutes),
+                ) {
+                    onUpdateSettings { s ->
+                        s.copy(subscriptionUpdateMinutes = s.subscriptionUpdateMinutes.nextUpdateInterval())
+                    }
+                }
+            }
+
+            sectionHeader(R.string.tv_section_remote)
+            item {
+                ValueSetting(
+                    stringResource(R.string.tv_remote),
+                    if (remotePeers.isEmpty()) stringResource(R.string.tv_remote_none)
+                    else stringResource(R.string.tv_remote_paired, remotePeers.size),
+                ) { showRemote = true }
             }
 
             sectionHeader(R.string.tv_section_network)
@@ -594,22 +682,25 @@ fun TvSettingsScreen(
             }
 
             sectionHeader(R.string.tv_section_updates)
-            item {
-                val label = when (updates) {
-                    is UpdateState.Available -> stringResource(R.string.tv_update_available, updates.release.version)
-                    is UpdateState.Ready -> stringResource(R.string.tv_install)
-                    is UpdateState.Downloading -> stringResource(R.string.tv_download)
-                    else -> stringResource(R.string.tv_check_update)
-                }
-                CycleSetting(stringResource(R.string.tv_updates), label) {
-                    when (updates) {
-                        is UpdateState.Available -> onDownloadUpdate()
-                        is UpdateState.Ready -> onInstallUpdate(context)
-                        else -> onCheckUpdate()
-                    }
-                }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                TvUpdatePanel(
+                    state = updates,
+                    onCheck = onCheckUpdate,
+                    onDownload = onDownloadUpdate,
+                    onInstall = { onInstallUpdate(context) },
+                    onDismiss = onDismissUpdate,
+                )
             }
         }
+    }
+    if (showRemote) {
+        TvRemoteDialog(
+            invite = remoteInvite,
+            peers = remotePeers,
+            onShowCode = onStartRemotePairing,
+            onForget = onForgetRemote,
+            onClose = { showRemote = false; onStopRemotePairing() },
+        )
     }
     editing?.let { field ->
         AlertDialog(
@@ -657,6 +748,347 @@ fun TvSettingsScreen(
         )
     }
 }
+
+/**
+ * The palettes, shown as what they are.
+ *
+ * Named tiles would make somebody read seven words with a D-pad and then guess which one is the
+ * pale green. A swatch answers the question it is asked, and each one is painted in its own
+ * scheme's accent rather than in the current one — the row is the choice, not a label for it.
+ *
+ * Across both columns rather than inside one, because a row of seven circles is one control and
+ * chopping it in half would make it two. The focused swatch grows and takes a ring in the
+ * foreground colour: on a television the one thing that must never be in doubt is where the
+ * cursor is, and the chosen swatch already spends the tick on saying it is chosen.
+ */
+@Composable
+private fun TvPaletteRow(selected: Palette, dark: Boolean, onSelect: (Palette) -> Unit) {
+    Column(Modifier.padding(start = 8.dp, top = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            stringResource(R.string.tv_palette) + " · " + stringResource(selected.labelRes),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Palette.entries.forEach { option ->
+                val scheme = remember(option, dark) { option.scheme(dark) }
+                TvPaletteSwatch(
+                    accent = scheme.primary,
+                    tick = scheme.onPrimary,
+                    chosen = option == selected,
+                    label = stringResource(option.labelRes),
+                    onClick = { onSelect(option) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvPaletteSwatch(
+    accent: Color,
+    tick: Color,
+    chosen: Boolean,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val scale by animateFloatAsState(if (focused) 1.14f else 1f, label = "palette-focus")
+    Surface(
+        onClick = onClick,
+        interactionSource = interaction,
+        modifier = Modifier.size(56.dp).scale(scale).testTag("palette-$label"),
+        shape = CircleShape,
+        color = accent,
+        contentColor = tick,
+        border = when {
+            focused -> BorderStroke(3.dp, MaterialTheme.colorScheme.onSurface)
+            chosen -> BorderStroke(2.dp, MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> null
+        },
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (chosen) Icon(Icons.Rounded.Check, label, Modifier.size(24.dp))
+        }
+    }
+}
+
+/**
+ * The remote, set up once.
+ *
+ * A dialog rather than a screen of its own, because there is nothing to come back to: the code is
+ * shown, a phone reads it, and the panel's whole remaining job is to list what is linked so that
+ * it can be unlinked. Everything the phone can then do happens on the television's normal screens.
+ */
+@Composable
+private fun TvRemoteDialog(
+    invite: RemoteInvite?,
+    peers: List<RemotePeer>,
+    onShowCode: () -> Unit,
+    onForget: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = {
+            Button(onClick = onClose) { Text(stringResource(R.string.tv_cancel)) }
+        },
+        title = { Text(stringResource(R.string.tv_remote_title)) },
+        text = {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(28.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        stringResource(R.string.tv_remote_hint),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (invite != null) {
+                        Text(
+                            stringResource(R.string.tv_remote_waiting),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Button(onClick = onShowCode) { Text(stringResource(R.string.tv_remote_show)) }
+                    }
+                    if (peers.isEmpty()) {
+                        Text(
+                            stringResource(R.string.tv_remote_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        peers.forEach { peer ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Text(
+                                    peer.name,
+                                    Modifier.weight(1f),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                OutlinedButton(onClick = { onForget(peer.id) }) {
+                                    Text(stringResource(R.string.tv_remote_forget))
+                                }
+                            }
+                        }
+                    }
+                }
+                // Same rounding as the subscription code, and for the same reason: it stays well
+                // inside the quiet zone, so the corners soften without the code ceasing to scan.
+                Box(Modifier.size(260.dp), contentAlignment = Alignment.Center) {
+                    if (invite != null) {
+                        QrCode(invite.encode(), Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)))
+                    } else {
+                        Icon(Icons.Rounded.QrCode2, null, Modifier.size(84.dp))
+                    }
+                }
+            }
+        },
+    )
+}
+
+/**
+ * How often subscriptions are re-read, as a value to step through rather than a number to type.
+ *
+ * Half an hour to a day, which is the whole range anybody has a use for: below it the provider is
+ * being asked more often than it changes, above it the list is older than the evening it is being
+ * used in.
+ */
+private val UpdateIntervals = listOf(30, 60, 180, 360, 720, 1440)
+
+private fun Int.nextUpdateInterval(): Int {
+    val at = UpdateIntervals.indexOfFirst { it >= this }.takeIf { it >= 0 } ?: UpdateIntervals.lastIndex
+    return UpdateIntervals[(at + 1) % UpdateIntervals.size]
+}
+
+@Composable
+private fun updateIntervalLabel(minutes: Int): String = when {
+    minutes % 60 == 0 -> stringResource(R.string.tv_every_hours, minutes / 60)
+    else -> stringResource(R.string.tv_every_minutes, minutes)
+}
+
+/**
+ * Updating the television, with the same six states the phone has.
+ *
+ * It was one tile that changed its own label and cycled: press to check, press to download, press
+ * to install. Every state fitted in three words because there was room for three words, so the
+ * version was never shown, release notes were never shown, a download reported no progress at all,
+ * and a failure said "check for update" again — the one wording that guarantees somebody presses
+ * it a second time and watches it fail identically. On a set nobody reaches for the phone to find
+ * out what the television is doing.
+ *
+ * Across both columns, because what has to be read here is a paragraph rather than a value. Two
+ * D-pad stops at most: the action, and "later" where there is something to put off.
+ */
+@Composable
+private fun TvUpdatePanel(
+    state: UpdateState,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val busy = state is UpdateState.Checking || state is UpdateState.Downloading
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(26.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.tv_updates),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    when (state) {
+                        is UpdateState.Available -> stringResource(R.string.tv_update_available, state.release.version)
+                        is UpdateState.Checking -> stringResource(R.string.tv_update_checking)
+                        is UpdateState.Downloading -> stringResource(R.string.tv_update_downloading, state.release.version)
+                        is UpdateState.Ready -> stringResource(R.string.tv_update_ready, state.release.version)
+                        is UpdateState.UpToDate -> stringResource(R.string.tv_update_uptodate, state.version)
+                        is UpdateState.Failed -> stringResource(R.string.tv_update_failed)
+                        UpdateState.Idle -> stringResource(R.string.tv_update_idle)
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (state is UpdateState.Failed) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+                // What the button has no room for: the notes, the reason, the megabytes.
+                when (state) {
+                    is UpdateState.Available -> if (state.release.notes.isNotBlank()) Text(
+                        state.release.notes,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    is UpdateState.Failed -> Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    is UpdateState.Downloading -> {
+                        // Indeterminate when the size is unknown: a bar parked at zero because
+                        // there is nothing to divide by reads as a download that has stalled.
+                        if (state.total > 0) {
+                            LinearProgressIndicator(
+                                progress = { (state.downloaded.toFloat() / state.total).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.tv_update_progress,
+                                    megabytes(state.downloaded),
+                                    megabytes(state.total),
+                                ),
+                                style = MonoStyle,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    else -> Unit
+                }
+            }
+
+            // Across the whole panel rather than in a column beside the text, and the reason is
+            // the D-pad. A focus search downwards prefers a candidate that overlaps the current
+            // one horizontally, and a button parked over the right-hand column overlaps nothing in
+            // the left one: from "Direct DNS" the search found nothing below and gave up, so the
+            // button could be pressed with a mouse and never with a remote. Full width overlaps
+            // both columns and cannot be arrived at from only one of them.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                TvFocusedSurface(
+                    onClick = {
+                        when (state) {
+                            is UpdateState.Available -> onDownload()
+                            is UpdateState.Ready -> onInstall()
+                            else -> onCheck()
+                        }
+                    },
+                    modifier = Modifier.weight(1f).height(96.dp).testTag("update-action"),
+                    shape = RoundedCornerShape(24.dp),
+                ) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        if (busy) {
+                            ShapeSpinner(MaterialTheme.colorScheme.primary, size = 26.dp)
+                        } else {
+                            Icon(
+                                when (state) {
+                                    is UpdateState.Available -> Icons.Rounded.Download
+                                    is UpdateState.Ready -> Icons.Rounded.SystemUpdateAlt
+                                    is UpdateState.Failed -> Icons.Rounded.ErrorOutline
+                                    else -> Icons.Rounded.Autorenew
+                                },
+                                null,
+                                Modifier.size(26.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            when (state) {
+                                is UpdateState.Available -> if (state.release.sizeBytes > 0) {
+                                    stringResource(R.string.tv_update_download_sized, megabytes(state.release.sizeBytes))
+                                } else {
+                                    stringResource(R.string.tv_download)
+                                }
+
+                                is UpdateState.Checking -> stringResource(R.string.tv_update_checking)
+                                is UpdateState.Downloading -> stringResource(R.string.tv_download)
+                                is UpdateState.Ready -> stringResource(R.string.tv_install)
+                                is UpdateState.Failed -> stringResource(R.string.tv_update_retry)
+                                else -> stringResource(R.string.tv_check_update)
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // Only where there is something to put off. "Later" under a check button would be
+                // an instruction to do nothing.
+                if (state is UpdateState.Available) {
+                    TvFocusedSurface(
+                        onClick = onDismiss,
+                        modifier = Modifier.width(240.dp).height(96.dp),
+                        shape = RoundedCornerShape(24.dp),
+                    ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(stringResource(R.string.tv_update_later), style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun megabytes(bytes: Long): String = ((bytes * 10 / (1024 * 1024)) / 10.0).toString()
 
 /** A heading across the full width of the settings grid. Not focusable: there is nothing to do. */
 private fun LazyGridScope.sectionHeader(@StringRes title: Int) {

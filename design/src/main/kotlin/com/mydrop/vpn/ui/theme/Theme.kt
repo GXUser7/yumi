@@ -13,6 +13,7 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.ThemeMode
 
 val LocalSemanticColors: ProvidableCompositionLocal<MyDropSemanticColors> =
@@ -22,6 +23,11 @@ val LocalSemanticColors: ProvidableCompositionLocal<MyDropSemanticColors> =
 fun MyDropTheme(
     themeMode: ThemeMode = ThemeMode.System,
     dynamicColor: Boolean = true,
+    /**
+     * The built-in accent, used when wallpaper colours are not. [Palette.Glacier] is the scheme
+     * this app was drawn in, so the default leaves everything exactly as it was.
+     */
+    palette: Palette = Palette.Glacier,
     /** Pure-black surfaces for OLED panels; only meaningful when the resolved theme is dark. */
     amoled: Boolean = false,
     content: @Composable () -> Unit,
@@ -38,11 +44,12 @@ fun MyDropTheme(
     val baseScheme: ColorScheme = when {
         dynamicColor && supportsDynamic && dark -> dynamicDarkColorScheme(context)
         dynamicColor && supportsDynamic -> dynamicLightColorScheme(context)
-        dark -> MyDropDarkColors
-        else -> MyDropLightColors
+        // Glacier returns the hand-tuned scheme untouched, so this is the same two constants it
+        // used to be until somebody picks another palette.
+        else -> palette.scheme(dark)
     }
 
-    val scheme = if (dark && amoled) baseScheme.toAmoled() else baseScheme
+    val scheme = if (dark && amoled) baseScheme.toAmoled(palette.hue) else baseScheme
 
     CompositionLocalProvider(
         LocalSemanticColors provides scheme.toSemanticColors(dark),
@@ -59,16 +66,21 @@ fun MyDropTheme(
 }
 
 /**
- * Collapses the elevation ramp onto true black. Container tones are kept slightly apart so
- * cards and sheets remain distinguishable from the background instead of merging into a void.
+ * Collapses the elevation ramp onto true black.
+ *
+ * Container tones are kept slightly apart so cards and sheets remain distinguishable from the
+ * background instead of merging into a void — and they keep the palette's hue while they do it.
+ * Falling back to neutral greys here would mean that switching AMOLED on quietly cancelled the
+ * palette, which is not what a switch about the backlight is for. A hue-less palette — the
+ * original ice, and every dynamic scheme — keeps the hand-picked greys it always had.
  */
-private fun ColorScheme.toAmoled(): ColorScheme = copy(
+private fun ColorScheme.toAmoled(hue: Float?): ColorScheme = copy(
     background = Color.Black,
     surface = Color.Black,
     surfaceDim = Color.Black,
     surfaceContainerLowest = Color.Black,
-    surfaceContainerLow = Color(0xFF0A0A0C),
-    surfaceContainer = Color(0xFF121215),
-    surfaceContainerHigh = Color(0xFF1B1B1F),
-    surfaceContainerHighest = Color(0xFF242429),
+    surfaceContainerLow = hue?.let { Color.hsl(it, 0.30f, 0.042f) } ?: Color(0xFF0A0A0C),
+    surfaceContainer = hue?.let { Color.hsl(it, 0.28f, 0.072f) } ?: Color(0xFF121215),
+    surfaceContainerHigh = hue?.let { Color.hsl(it, 0.26f, 0.108f) } ?: Color(0xFF1B1B1F),
+    surfaceContainerHighest = hue?.let { Color.hsl(it, 0.24f, 0.145f) } ?: Color(0xFF242429),
 )

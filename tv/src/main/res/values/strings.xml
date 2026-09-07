@@ -41,6 +41,7 @@
     <string name="tv_visualizer_planet">Planet</string>
     <string name="tv_visualizer_waves">Waves</string>
     <string name="tv_theme">Theme</string>
+    <string name="tv_palette">Palette</string>
     <string name="tv_language">Language</string>
     <string name="tv_auto_connect">Connect after startup</string>
     <string name="tv_auto_fastest">Automatically select fastest server</string>
@@ -69,4 +70,29 @@
     <string name="tv_section_behaviour">Behaviour</string>
     <string name="tv_section_network">Network</string>
     <string name="tv_section_updates">Updates</string>
+    <string name="tv_section_remote">Remote control</string>
+    <string name="tv_remote">Phone remote</string>
+    <string name="tv_remote_none">Not set up</string>
+    <string name="tv_remote_paired">Phones: %1$d</string>
+    <string name="tv_remote_title">Control this TV from your phone</string>
+    <string name="tv_remote_hint">Open Yumi on your phone and scan this code. After that the phone finds this TV by itself and can switch the tunnel on and off and change the server.</string>
+    <string name="tv_remote_waiting">Waiting for phone…</string>
+    <string name="tv_remote_show">Show code</string>
+    <string name="tv_remote_forget">Unlink</string>
+    <string name="tv_remote_no_network">No Wi-Fi or Ethernet connection</string>
+    <string name="tv_remote_empty">No phone is linked yet</string>
+    <string name="tv_subscription_interval">Refresh subscriptions</string>
+    <string name="tv_every_minutes">Every %1$d min</string>
+    <string name="tv_every_hours">Every %1$d h</string>
+    <string name="tv_refreshing">Updating…</string>
+    <string name="tv_update_checking">Checking…</string>
+    <string name="tv_update_downloading">Downloading %1$s</string>
+    <string name="tv_update_ready">Version %1$s is ready to install</string>
+    <string name="tv_update_uptodate">Version %1$s is the latest there is</string>
+    <string name="tv_update_failed">Update failed</string>
+    <string name="tv_update_idle">Yumi checks for updates by itself twice a day</string>
+    <string name="tv_update_retry">Try again</string>
+    <string name="tv_update_later">Later</string>
+    <string name="tv_update_download_sized">Download · %1$s MB</string>
+    <string name="tv_update_progress">%1$s / %2$s MB</string>
 </resources>

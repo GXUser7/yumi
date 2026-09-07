@@ -41,6 +41,7 @@
     <string name="tv_visualizer_planet">Планета</string>
     <string name="tv_visualizer_waves">Волны</string>
     <string name="tv_theme">Тема</string>
+    <string name="tv_palette">Палитра</string>
     <string name="tv_language">Язык</string>
     <string name="tv_auto_connect">Подключаться после запуска</string>
     <string name="tv_auto_fastest">Автоматически выбирать быстрый сервер</string>
@@ -69,4 +70,29 @@
     <string name="tv_section_behaviour">Поведение</string>
     <string name="tv_section_network">Сеть</string>
     <string name="tv_section_updates">Обновления</string>
+    <string name="tv_section_remote">Пульт</string>
+    <string name="tv_remote">Пульт с телефона</string>
+    <string name="tv_remote_none">Не настроен</string>
+    <string name="tv_remote_paired">Телефонов: %1$d</string>
+    <string name="tv_remote_title">Управление телевизором с телефона</string>
+    <string name="tv_remote_hint">Откройте Yumi на телефоне и отсканируйте код. Дальше телефон найдёт телевизор сам и сможет включать туннель и менять сервер.</string>
+    <string name="tv_remote_waiting">Ждём телефон…</string>
+    <string name="tv_remote_show">Показать код</string>
+    <string name="tv_remote_forget">Отвязать</string>
+    <string name="tv_remote_no_network">Нет подключения по Wi-Fi или Ethernet</string>
+    <string name="tv_remote_empty">Ни один телефон пока не привязан</string>
+    <string name="tv_subscription_interval">Обновлять подписки</string>
+    <string name="tv_every_minutes">Каждые %1$d мин</string>
+    <string name="tv_every_hours">Каждые %1$d ч</string>
+    <string name="tv_refreshing">Обновление…</string>
+    <string name="tv_update_checking">Проверяем…</string>
+    <string name="tv_update_downloading">Загружаем %1$s</string>
+    <string name="tv_update_ready">Версия %1$s готова к установке</string>
+    <string name="tv_update_uptodate">Версия %1$s — самая свежая</string>
+    <string name="tv_update_failed">Обновить не вышло</string>
+    <string name="tv_update_idle">Yumi сам проверяет обновления дважды в день</string>
+    <string name="tv_update_retry">Повторить</string>
+    <string name="tv_update_later">Позже</string>
+    <string name="tv_update_download_sized">Скачать · %1$s МБ</string>
+    <string name="tv_update_progress">%1$s / %2$s МБ</string>
 </resources>

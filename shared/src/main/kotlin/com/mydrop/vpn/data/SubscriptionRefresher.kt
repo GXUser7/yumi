@@ -3,6 +3,10 @@ package com.mydrop.vpn.data
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * Fetching a subscription and writing the result down, in one place.
@@ -20,8 +24,29 @@ class SubscriptionRefresher(
     private val strings: Strings,
 ) {
 
+    private val _running = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Which subscriptions are being fetched right now, by id.
+     *
+     * Kept here rather than in the screen because the screen is not the only thing that starts a
+     * refresh: the scheduler does it on its own clock and on opening the app, and a spinner that
+     * only knew about button presses would leave the television looking idle while it was in fact
+     * downloading three hundred servers.
+     */
+    val running: StateFlow<Set<String>> = _running.asStateFlow()
+
     /** A sentence describing what happened, suitable for a snackbar or the journal. */
-    suspend fun refresh(subscription: Subscription): String =
+    suspend fun refresh(subscription: Subscription): String {
+        _running.update { it + subscription.id }
+        return try {
+            fetch(subscription)
+        } finally {
+            _running.update { it - subscription.id }
+        }
+    }
+
+    private suspend fun fetch(subscription: Subscription): String =
         when (val result = service.fetch(subscription)) {
             is SubscriptionUpdate.Success -> {
                 val (added, removed) = profiles.applySubscriptionUpdate(

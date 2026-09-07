@@ -55,16 +55,16 @@ fun PixelPlanet(
     markerColor: Color,
     modifier: Modifier = Modifier,
 ) {
-    val seconds by rememberFrameSeconds()
+    val tick by rememberPlanetTicks()
 
     val strip = remember(mask, seaColor, landColor, gapColor) {
-        bakeStrip(mask, seaColor.toArgb(), landColor.toArgb(), gapColor.toArgb())
+        Planet.strip(mask, seaColor, landColor, gapColor)
     }
     // Held across frames rather than rebuilt in each one: sixty allocations a second of things
     // that are written before they are read is garbage for nothing.
     val paint = remember { Paint().apply { isFilterBitmap = false; isAntiAlias = false } }
     val destination = remember { RectF() }
-    val camera = remember { MapCamera() }
+    val camera = Planet.camera
     // The one smooth thing on a planet made of squares, and deliberately so. Bounds are measured
     // rather than assumed, because where MaterialShapes centres its polygons is its business.
     val marker = remember { MaterialShapes.Cookie4Sided.toPath() }
@@ -72,19 +72,28 @@ fun PixelPlanet(
     val markerScratch = remember { Path() }
     val markerMatrix = remember { Matrix() }
     val markerPaint = remember { Paint().apply { isAntiAlias = true } }
+    val markerShadow = remember { Paint().apply { isAntiAlias = true; color = MARKER_SHADOW_ARGB } }
 
     Canvas(modifier.fillMaxSize()) {
-        // Advanced here rather than in a coroutine writing to state, because `seconds` already
-        // recomposes this every frame and a second frame-rate state would only add a recomposition
-        // carrying the same numbers. The clock is monotonic, so the result is the same either way.
-        camera.advance(seconds, size.width, size.height, connected, warming, latitude, longitude)
+        // Reading `tick` here is what keeps the figure moving, and it has to be read *inside* the
+        // draw: Compose repeats a draw when something it read has changed, and everything else
+        // this one touches lives in [Planet], outside the snapshot system. Declaring the tick and
+        // never reading it drew the planet once and left it there.
+        //
+        // Advanced here rather than in the frame callback, because only the draw knows how big
+        // the figure is — and the springs are integrated in pixels. The step is taken once per
+        // frame however many times this runs; see [PlanetState.takeStep].
+        camera.advance(Planet.stepAt(tick), size.width, size.height, connected, warming, latitude, longitude)
         // Painted under the strip so that scrolling past the top of the map reads as more ocean
         // rather than as a hole. Above the eighty-first parallel it very nearly is.
         drawRect(color = seaColor)
         drawStrip(camera, strip, destination, paint)
         if (connected && latitude != null && longitude != null) {
             markerPaint.color = markerColor.toArgb()
-            drawMarker(seconds, camera, marker, markerBounds, markerScratch, markerMatrix, markerPaint)
+            drawMarker(
+                Planet.markerDegrees, camera, marker, markerBounds,
+                markerScratch, markerMatrix, markerPaint, markerShadow,
+            )
         }
     }
 }
@@ -164,10 +173,16 @@ private class MapCamera {
     private var scrollSpeed = 0.0
     private var zoom = 1.0
     private var zoomSpeed = 0.0
-    private var lastSeconds = Float.NaN
 
+    /**
+     * [step] is seconds since the previous frame, already clamped by [PlanetState]. It arrives as
+     * an interval rather than as a reading off a clock because this object now outlives the screen
+     * it is drawn on: an absolute time would have to be measured against one taken before the user
+     * left, and the answer — however long they spent on another tab — is a step that flings the
+     * springs across the whole world.
+     */
     fun advance(
-        seconds: Float,
+        step: Double,
         width: Float,
         height: Float,
         connected: Boolean,
@@ -175,11 +190,6 @@ private class MapCamera {
         latitude: Double?,
         longitude: Double?,
     ) {
-        // A first frame has no previous one to measure against, and a figure returning from the
-        // background can hand this a step of several seconds. Both would fling the springs.
-        val step =
-            if (lastSeconds.isNaN()) 0.0 else (seconds - lastSeconds).toDouble().coerceIn(0.0, 0.05)
-        lastSeconds = seconds
         if (width <= 0f || height <= 0f) return
 
         val zoomTarget = if (connected) CONNECTED_ZOOM else IDLE_ZOOM
@@ -285,13 +295,14 @@ private fun DrawScope.drawStrip(
  * about — and when it settles, the country is exactly under the shape.
  */
 private fun DrawScope.drawMarker(
-    seconds: Float,
+    degrees: Float,
     camera: MapCamera,
     shape: Path,
     bounds: RectF,
     scratch: Path,
     matrix: Matrix,
     paint: Paint,
+    shadow: Paint,
 ) {
     if (bounds.width() <= 0f || bounds.height() <= 0f || camera.stripHeight <= 0f) return
     val centreX = size.width / 2f
@@ -307,21 +318,134 @@ private fun DrawScope.drawMarker(
     // Clockwise, which is what a positive angle is once y points down. Four lobes means a full
     // turn is four repeats, so the rate is set against the lobe rather than the revolution: at
     // eight degrees a second the shape comes back to itself every eleven seconds.
-    matrix.postRotate(seconds * MARKER_DEGREES_PER_SECOND, centreX, centreY)
+    matrix.postRotate(degrees, centreX, centreY)
     shape.transform(matrix, scratch)
-    drawIntoCanvas { it.nativeCanvas.drawPath(scratch, paint) }
+    drawIntoCanvas {
+        val native = it.nativeCanvas
+        // The shadow is the same shape offset in screen space, not a blurred one. A blur would be
+        // the obvious choice anywhere else and is the wrong one here: everything under it is drawn
+        // in hard squares, and a soft edge floating over a pixel grid reads as a rendering mistake.
+        // Offset down and to the right, which is where the light has been coming from since pixel
+        // art began. It is also cheap in a way a blur is not — BlurMaskFilter is one of the few
+        // things a hardware-accelerated canvas still will not do.
+        //
+        // It also does the work the colour no longer does. The marker is the accent at the opposite
+        // lightness of the land, and on a pale theme those two can still sit close; the shadow is
+        // what keeps the shape off the coastline whatever the palette does.
+        val drop = side * MARKER_SHADOW_OFFSET
+        native.save()
+        native.translate(drop, drop)
+        native.drawPath(scratch, shadow)
+        native.restore()
+        native.drawPath(scratch, paint)
+    }
 }
+
+private const val MARKER_SHADOW_OFFSET = 0.11f
+
+/**
+ * Black at forty-five per cent; the alpha byte is 0x73.
+ *
+ * Heavier than it first was, because what it separates changed. Under a dark marker the shadow was
+ * a nicety; under a light one sitting on light land it is the only edge the shape has.
+ */
+private const val MARKER_SHADOW_ARGB = 0x73000000
 
 private const val MARKER_DEGREES_PER_SECOND = 8f
 
-/** Seconds since the figure appeared, ticking once per frame. */
+/**
+ * The planet, kept for the life of the process rather than for the life of the screen.
+ *
+ * Where the window sits on the strip, how far it has zoomed in and what angle the marker has
+ * turned to are all animation that has already been running. They used to live in `remember`,
+ * which ties them to the composition — and the composition ends the moment the user opens another
+ * tab. Coming back built a fresh camera at zero, so the map snapped to the antimeridian and the
+ * flight to the exit country started over, every single time. A figure that rewinds itself
+ * whenever nobody is looking is a screensaver, not a planet.
+ *
+ * One instance, because there is one planet: it lives in the tunnel screen's figure and nowhere
+ * else. Two on screen at once would share a camera and advance it twice a frame, which is why
+ * this is private to this file rather than something a caller is handed.
+ */
+private val Planet = PlanetState()
+
+private class PlanetState {
+    val camera = MapCamera()
+
+    /** Where the cookie has turned to, in degrees and kept inside one revolution. */
+    var markerDegrees = 0f
+        private set
+
+    private var pending = 0.0
+    private var lastFrameMillis = 0L
+    private var lastDrawnFrame = -1L
+    private var stripKey: Any? = null
+    private var stripImage: Bitmap? = null
+
+    /**
+     * Seconds since the previous frame.
+     *
+     * Clamped at both ends. A first frame has nothing to measure against, and the frame clock is
+     * the system's rather than ours — so the gap across a spell on another screen is however long
+     * the user spent there, and unclamped it would fling the springs. Fifty milliseconds is three
+     * frames at sixty hertz: enough to ride out a stutter, short enough that a minute away resumes
+     * where it left off instead of fast-forwarding.
+     */
+    fun tick(frameMillis: Long) {
+        val step =
+            if (lastFrameMillis == 0L) 0.0
+            else ((frameMillis - lastFrameMillis) / 1000.0).coerceIn(0.0, MAX_STEP_SECONDS)
+        lastFrameMillis = frameMillis
+        pending += step
+        markerDegrees = ((markerDegrees + (step * MARKER_DEGREES_PER_SECOND).toFloat()) % 360f)
+    }
+
+    /**
+     * The step for one frame, taken once.
+     *
+     * Draw can run more than once for a single frame, and the camera integrates what it is given —
+     * so a step handed out twice is a planet moving at twice the speed it was asked to. Hence the
+     * frame number: the second caller within a frame gets nothing, which is the truth, no time
+     * having passed. It is also the value the draw reads to be repeated at all.
+     *
+     * Clamped again on the way out. The clamp in [tick] is per frame, and frames keep coming while
+     * a draw is being skipped — so what has piled up in between is not a step anybody should
+     * integrate.
+     */
+    fun stepAt(frame: Long): Double {
+        if (frame == lastDrawnFrame) return 0.0
+        lastDrawnFrame = frame
+        return pending.coerceAtMost(MAX_STEP_SECONDS).also { pending = 0.0 }
+    }
+
+    /**
+     * The baked strip, kept across screens for the same reason the camera is.
+     *
+     * One entry: the key is the mask and the three colours, and the only thing that ever changes
+     * them is the theme. Baking is about a megabyte of pixels written one cell at a time, which is
+     * a frame's worth of work — cheap enough to do when the colours change, wasteful to do again
+     * every time somebody comes back to the tunnel screen.
+     */
+    fun strip(mask: ByteArray, sea: Color, land: Color, gap: Color): Bitmap {
+        val key = listOf(mask, sea, land, gap)
+        stripImage?.takeIf { stripKey == key }?.let { return it }
+        return bakeStrip(mask, sea.toArgb(), land.toArgb(), gap.toArgb()).also {
+            stripKey = key
+            stripImage = it
+        }
+    }
+}
+
+/** Three frames at sixty hertz: enough to ride out a stutter, short enough not to fast-forward. */
+private const val MAX_STEP_SECONDS = 0.05
+
+/** Ticks [Planet] once per frame, and counts the frames so that the figure redraws with them. */
 @Composable
-private fun rememberFrameSeconds(): State<Float> = produceState(0f) {
-    var origin = 0L
+private fun rememberPlanetTicks(): State<Long> = produceState(0L) {
     while (true) {
         withInfiniteAnimationFrameMillis { frame ->
-            if (origin == 0L) origin = frame
-            value = (frame - origin) / 1000f
+            Planet.tick(frame)
+            value += 1
         }
     }
 }

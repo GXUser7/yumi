@@ -30,6 +30,8 @@ import com.mydrop.vpn.data.ConnectOutcome
 import com.mydrop.vpn.data.describe
 import com.mydrop.vpn.pairing.PairingInvite
 import com.mydrop.vpn.pairing.SubscriptionTransfer
+import com.mydrop.vpn.remote.RemoteCommand
+import com.mydrop.vpn.remote.RemoteInvite
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -100,6 +102,20 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val pairingInvite: StateFlow<PairingInvite?> = _pairingInvite.asStateFlow()
     private val _pairingSending = MutableStateFlow(false)
     val pairingSending: StateFlow<Boolean> = _pairingSending.asStateFlow()
+
+    /* ── The television's remote ─────────────────────────────────────────────────────────── */
+
+    /**
+     * Everything about driving a television lives in the console; this only forwards to it.
+     *
+     * It sits in the container rather than here so that a session survives the screen being left:
+     * walking from the remote to the servers tab and back should not cost a reconnection, and a
+     * link that has to be rebuilt every time is a remote that spends its life saying "connecting".
+     */
+    val remote = container.remoteConsole
+
+    /** Whether the tunnel screen should show a door to the remote at all. */
+    val remoteState = container.remoteConsole.state
 
     /** Snackbars are user-facing text, so they follow the chosen language like the screens do. */
     private val strings = container.strings
@@ -514,8 +530,25 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             _pairingInvite.value = it
             return
         }
+        // A television offering itself as something to drive, rather than something to send a
+        // subscription to. Two codes on two screens, and the phone can tell them apart without
+        // asking which one was pointed at.
+        RemoteInvite.decode(raw)?.let { invite ->
+            viewModelScope.launch {
+                remote.pair(invite)
+                    .onSuccess { emit(R.string.remote_paired, it.hostName) }
+                    .onFailure { emit(R.string.remote_pair_failed) }
+            }
+            return
+        }
         applyImport(DeepLinkParser.parse(raw))
     }
+
+    fun openRemote(hostId: String? = null) = remote.open(hostId)
+    fun closeRemote() = remote.close()
+    fun lookForTelevisions() = remote.look()
+    fun sendToRemote(command: RemoteCommand) = remote.send(command)
+    fun forgetRemote(hostId: String) = remote.forget(hostId)
 
     fun dismissPairingInvite() {
         if (!_pairingSending.value) _pairingInvite.value = null

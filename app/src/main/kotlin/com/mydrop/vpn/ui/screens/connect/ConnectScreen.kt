@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -111,6 +112,15 @@ fun ConnectScreen(
     onRoutingModeChange: (RoutingMode) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSpeedTest: () -> Unit,
+    onOpenRemote: () -> Unit,
+    /**
+     * Whether there is a television to drive: one already linked, or one heard on this network.
+     *
+     * The door appears rather than always standing there, because a remote is not a feature of the
+     * app so much as a feature of the room — on a phone that has never been in the same house as a
+     * Yumi television it is a button that can only ever say "nothing found".
+     */
+    remoteAvailable: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val traffic = state.traffic
@@ -152,6 +162,16 @@ fun ConnectScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.End,
         ) {
+            AnimatedVisibility(visible = remoteAvailable) {
+                Row {
+                    TonalIconButton(
+                        Icons.Rounded.SettingsRemote,
+                        stringResource(R.string.remote_open),
+                        onOpenRemote,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
             TonalIconButton(Icons.Rounded.Article, stringResource(R.string.connect_logs), onOpenLogs)
             Spacer(Modifier.width(8.dp))
             // Settings kept its place in the navigation pill, so the shortcut here was a second
@@ -444,7 +464,7 @@ private fun FlowFigure(
                     seaColor = MaterialTheme.colorScheme.primaryContainer,
                     landColor = MaterialTheme.colorScheme.primary,
                     gapColor = container,
-                    markerColor = MaterialTheme.colorScheme.tertiary,
+                    markerColor = semantic.marker,
                 )
             }
         }
