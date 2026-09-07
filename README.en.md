@@ -30,6 +30,14 @@ desktop, and subscriptions refresh as soon as the app opens.
 | <img src="docs/screenshots/tv-connect.png" width="380"> | <img src="docs/screenshots/tv-servers.png" width="380"> |
 | <img src="docs/screenshots/tv-pairing.png" width="380"> | <img src="docs/screenshots/tv-settings.png" width="380"> |
 
+**The remote.** The code lives on the television under Settings → Phone remote, and is scanned on
+the phone through Subscriptions → Add → Scan. Once: from then on the phone finds the television on
+the network by itself, and a remote button appears on the tunnel screen.
+
+| | |
+|:-:|:-:|
+| <img src="docs/screenshots/tv-remote-pairing.png" width="380"> | <img src="docs/screenshots/remote-pairing.png" width="185"> |
+
 ## What it can do
 
 **You can add almost anything.** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`,

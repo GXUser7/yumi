@@ -30,6 +30,14 @@ VPN-клиент для Android: подписки, серверы по ссыл�
 | <img src="docs/screenshots/tv-connect.png" width="380"> | <img src="docs/screenshots/tv-servers.png" width="380"> |
 | <img src="docs/screenshots/tv-pairing.png" width="380"> | <img src="docs/screenshots/tv-settings.png" width="380"> |
 
+**Пульт.** Код показывается на телевизоре в «Настройки → Пульт с телефона», сканируется на
+телефоне через «Подписки → Добавить → Сканировать». Один раз: дальше телефон находит телевизор
+в сети сам, и на экране «Подключение» появляется кнопка пульта.
+
+| | |
+|:-:|:-:|
+| <img src="docs/screenshots/tv-remote-pairing.png" width="380"> | <img src="docs/screenshots/remote-pairing.png" width="185"> |
+
 ## Что умеет
 
 **Добавить можно почти что угодно.** Ссылки `vless://`, `vmess://`, `trojan://`, `ss://`,
