@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -76,6 +77,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LatencyResult
@@ -817,9 +820,14 @@ private fun TvPaletteSwatch(
 /**
  * The remote, set up once.
  *
- * A dialog rather than a screen of its own, because there is nothing to come back to: the code is
- * shown, a phone reads it, and the panel's whole remaining job is to list what is linked so that
- * it can be unlinked. Everything the phone can then do happens on the television's normal screens.
+ * Its own dialog rather than an [AlertDialog], and that is not a stylistic preference. A Material
+ * dialog takes a phone's width wherever it is shown, and on a television that width is a column
+ * about a fifth of the screen: the explanation came out two words to a line over thirteen of them,
+ * the code shrank to the size of an icon, and "Показать код" broke in the middle of the word. The
+ * platform default is sized for the device Material had in mind, and this is not that device.
+ *
+ * Laid out like the subscription transfer panel next door — words on the left, code on the right,
+ * both large enough to be read and scanned from a sofa.
  */
 @Composable
 private fun TvRemoteDialog(
@@ -829,19 +837,26 @@ private fun TvRemoteDialog(
     onForget: (String) -> Unit,
     onClose: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        confirmButton = {
-            Button(onClick = onClose) { Text(stringResource(R.string.tv_cancel)) }
-        },
-        title = { Text(stringResource(R.string.tv_remote_title)) },
-        text = {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.84f).fillMaxHeight(0.8f),
+            shape = RoundedCornerShape(40.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(28.dp),
+                Modifier.fillMaxSize().padding(48.dp),
+                horizontalArrangement = Arrangement.spacedBy(44.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Full height with a flexible gap before the buttons, so they are pinned to the
+                // bottom and always get the height they ask for. Laid out as a plain stack, the
+                // column ran out of room and squeezed its last child to nothing: the two buttons
+                // rendered as empty capsules with their labels crushed out of existence.
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        stringResource(R.string.tv_remote_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
                     Text(
                         stringResource(R.string.tv_remote_hint),
                         style = MaterialTheme.typography.bodyLarge,
@@ -850,51 +865,61 @@ private fun TvRemoteDialog(
                     if (invite != null) {
                         Text(
                             stringResource(R.string.tv_remote_waiting),
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                    } else {
-                        Button(onClick = onShowCode) { Text(stringResource(R.string.tv_remote_show)) }
                     }
-                    if (peers.isEmpty()) {
+                    // The phones already trusted, each with the way to stop trusting it. Kept
+                    // short: a set with a queue of remotes is not a thing that happens.
+                    peers.take(2).forEach { peer ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(
+                                peer.name,
+                                Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            OutlinedButton(onClick = { onForget(peer.id) }) {
+                                Text(stringResource(R.string.tv_remote_forget))
+                            }
+                        }
+                    }
+                    if (peers.isEmpty() && invite == null) {
                         Text(
                             stringResource(R.string.tv_remote_empty),
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    } else {
-                        peers.forEach { peer ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Text(
-                                    peer.name,
-                                    Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                OutlinedButton(onClick = { onForget(peer.id) }) {
-                                    Text(stringResource(R.string.tv_remote_forget))
-                                }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (invite == null) {
+                            Button(onClick = onShowCode) {
+                                Text(stringResource(R.string.tv_remote_show), maxLines = 1)
                             }
+                        }
+                        OutlinedButton(onClick = onClose) {
+                            Text(stringResource(R.string.tv_cancel), maxLines = 1)
                         }
                     }
                 }
                 // Same rounding as the subscription code, and for the same reason: it stays well
                 // inside the quiet zone, so the corners soften without the code ceasing to scan.
-                Box(Modifier.size(260.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(320.dp), contentAlignment = Alignment.Center) {
                     if (invite != null) {
-                        QrCode(invite.encode(), Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)))
+                        QrCode(invite.encode(), Modifier.fillMaxSize().clip(RoundedCornerShape(28.dp)))
                     } else {
-                        Icon(Icons.Rounded.QrCode2, null, Modifier.size(84.dp))
+                        Icon(Icons.Rounded.QrCode2, null, Modifier.size(120.dp))
                     }
                 }
             }
-        },
-    )
+        }
+    }
 }
 
 /**
