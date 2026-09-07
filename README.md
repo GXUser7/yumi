@@ -34,9 +34,9 @@ VPN-клиент для Android: подписки, серверы по ссыл�
 телефоне через «Подписки → Добавить → Сканировать». Один раз: дальше телефон находит телевизор
 в сети сам, и на экране «Подключение» появляется кнопка пульта.
 
-| | |
-|:-:|:-:|
-| <img src="docs/screenshots/tv-remote-pairing.png" width="380"> | <img src="docs/screenshots/remote-pairing.png" width="185"> |
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/screenshots/tv-remote-pairing.png" width="340"> | <img src="docs/screenshots/remote-pairing.png" width="165"> | <img src="docs/screenshots/remote.png" width="165"> |
 
 ## Что умеет
 

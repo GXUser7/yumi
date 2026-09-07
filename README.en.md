@@ -34,9 +34,9 @@ desktop, and subscriptions refresh as soon as the app opens.
 the phone through Subscriptions → Add → Scan. Once: from then on the phone finds the television on
 the network by itself, and a remote button appears on the tunnel screen.
 
-| | |
-|:-:|:-:|
-| <img src="docs/screenshots/tv-remote-pairing.png" width="380"> | <img src="docs/screenshots/remote-pairing.png" width="185"> |
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/screenshots/tv-remote-pairing.png" width="340"> | <img src="docs/screenshots/remote-pairing.png" width="165"> | <img src="docs/screenshots/remote.png" width="165"> |
 
 ## What it can do
 
