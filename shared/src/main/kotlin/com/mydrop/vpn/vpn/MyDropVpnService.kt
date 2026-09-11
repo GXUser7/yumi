@@ -36,6 +36,7 @@ import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.net.interfaceCidr
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.data.GeoAssetStore
 import java.io.File
@@ -138,7 +139,23 @@ class MyDropVpnService : VpnService() {
         private const val TUN_PREFIX_V6 = 126
 
         /** Advertised to applications; see [establishTunnel] for why the value does not matter. */
-        private const val TUN_DNS_V4 = "172.19.0.2"
+
+        /**
+         * Packages kept out of the tunnel whatever the user chose, because carrying them breaks
+         * the phone rather than protecting it. See the call site for the evidence.
+         *
+         * Names rather than UIDs because `VpnService.Builder` speaks packages; excluding one
+         * package of a shared UID excludes the whole UID, which is the point for `com.android.phone`
+         * and the reason `com.google.android.iwlan` is not here.
+         */
+        private val ALWAYS_OUTSIDE_THE_TUNNEL = listOf(
+            // AID_RADIO (1001): telephony, the SIM toolkit, the telephony providers and the IMS
+            // media stack all share it.
+            "com.android.phone",
+            // The vendor IMS service on Tensor Pixels — an ordinary application UID, so it is not
+            // covered by the line above. Absent on other hardware, which costs one refused rule.
+            "com.shannon.imsservice",
+        )
 
         private val _state = MutableStateFlow<VpnState>(VpnState.Disconnected)
         val state: StateFlow<VpnState> = _state.asStateFlow()
@@ -343,6 +360,14 @@ class MyDropVpnService : VpnService() {
      * packet escapes through the gap. It also means nothing else will ever close this.
      */
     private var tunDescriptor: ParcelFileDescriptor? = null
+
+    /**
+     * The per-app rules the live descriptor was built with, or null when there is no descriptor.
+     *
+     * Kept because they cannot be read back off the interface, and because they are the one part of
+     * a reload the core has nothing to do with — see [tunnelFor].
+     */
+    private var tunAppRules: Pair<SplitTunnelMode, Set<String>>? = null
 
     /** Polls the core's byte counters; see [startTrafficPolling] for why polling at all. */
     private var trafficJob: Job? = null
@@ -640,13 +665,6 @@ class MyDropVpnService : VpnService() {
                     _state.value =
                         VpnState.Connecting(nodeId, VpnState.Connecting.Phase.EstablishingTunnel)
 
-                    // The descriptor outlives the core, and that is the whole reason a server
-                    // switch is not a visible reconnect. Xray never closes what it is handed
-                    // (`proxy/tun/tun_android.go:46-48`), so the interface stays up across the stop
-                    // and start below: the key does not blink in the status bar, and no packet
-                    // finds its way out through a gap that never opens.
-                    val descriptor = tunDescriptor ?: establishTunnel()
-
                     // Named before the document is parsed, because `geoip:`/`geosite:` are resolved
                     // during parsing and a path set afterwards would be set too late.
                     XrayCore.setAssetPath(GeoAssetStore(this@MyDropVpnService, logs).directory.absolutePath)
@@ -674,6 +692,12 @@ class MyDropVpnService : VpnService() {
                                 )
                             }
                     }
+
+                    // After the old core has gone, not before: rebuilding the interface under a
+                    // core still reading the old descriptor is a race with nothing to gain, and on
+                    // the ordinary path — where the rules have not changed — this hands back the
+                    // same descriptor either way.
+                    val descriptor = tunnelFor()
 
                     val startedAt = SystemClock.elapsedRealtime()
                     XrayCore.start(config, descriptor.fd, pinnedTag, ::protectSocket)
@@ -768,6 +792,7 @@ class MyDropVpnService : VpnService() {
 
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
+        tunAppRules = null
 
         carriedUploadBytes = 0
         carriedDownloadBytes = 0
@@ -1213,6 +1238,41 @@ class MyDropVpnService : VpnService() {
     // ------------------------------------------------------------- The core
 
     /**
+     * The descriptor to hand the core: the one already up, unless it would now be the wrong one.
+     *
+     * The descriptor outlives the core, and that is the whole reason a server switch is not a
+     * visible reconnect. Xray never closes what it is handed (`proxy/tun/tun_android.go:46-48`), so
+     * the interface stays up across a stop and start: the key does not blink in the status bar, and
+     * no packet finds its way out through a gap that never opens.
+     *
+     * The exception is the per-app rules, because they are not in the document at all.
+     * `addDisallowedApplication` is a property of the platform tunnel, fixed at `establish` and
+     * afterwards readable only by the system. So a reload after somebody edits the application list
+     * reaches the core — which has nothing to do with that list — and leaves the UID ranges exactly
+     * as they were. [TunnelSettingsApplier] writes "settings reapplied" to the journal, the screen
+     * agrees, and the application just excluded goes on being carried by the tunnel until the user
+     * happens to disconnect and connect again. A setting that does not take effect and says it did
+     * is worse than one that plainly waits for a reconnect.
+     *
+     * Rebuilding costs the blink the paragraph above is protecting, so it happens only when the
+     * rules themselves changed — the one case where keeping the old interface is the wrong answer.
+     */
+    private fun tunnelFor(): ParcelFileDescriptor {
+        val settings = (application as MyDropApplication).container.settings.value
+        val wanted = settings.splitTunnelMode to settings.splitTunnelPackages
+        val existing = tunDescriptor ?: return establishTunnel()
+        if (wanted == tunAppRules) return existing
+
+        logs.trace(NATIVE_TAG, "per-app rules changed, rebuilding the interface")
+        // Established before the old one is closed rather than after. `establish` replaces this
+        // service's interface itself, so closing first would open a window with no tunnel at all —
+        // on the one path whose entire job is keeping packets off the physical network.
+        val replacement = establishTunnel()
+        runCatching { existing.close() }
+        return replacement
+    }
+
+    /**
      * Builds the platform tunnel.
      *
      * This used to be `openTun`, and the core decided what went into it: sing-box was told the
@@ -1242,31 +1302,77 @@ class MyDropVpnService : VpnService() {
         // Any address will do: with DNS hijacking on, the core answers whatever is asked of port 53
         // regardless of who it was addressed to. What matters is that applications are handed a
         // resolver inside the tunnel rather than the one the physical network advertises.
-        builder.addDnsServer(TUN_DNS_V4)
+        builder.addDnsServer(XrayConfigFactory.TUN_DNS_V4)
 
+        // Counted rather than swallowed. `addAllowedApplication` and `addDisallowedApplication`
+        // both throw `NameNotFoundException` for a package that is not installed — an app the user
+        // removed, or a list carried over from another phone — and catching that silently means a
+        // rule the settings screen shows as in force was never handed to the platform at all. The
+        // journal cannot show the fault either way, because correctly excluded traffic never
+        // reaches the tunnel to be logged; a count is the only evidence there is.
+        var refused = 0
         when (settings.splitTunnelMode) {
             SplitTunnelMode.Off -> Unit
             // An allow-list with nothing in it does not mean "allow nothing" to VpnService — it
             // means everything, because a list it never receives is a list it never applies. The
             // screen promises the opposite, so an empty selection is left as the mode being off.
             SplitTunnelMode.AllowList -> settings.splitTunnelPackages.sorted().forEach {
-                runCatching { builder.addAllowedApplication(it) }
+                if (runCatching { builder.addAllowedApplication(it) }.isFailure) refused++
             }
             SplitTunnelMode.BlockList -> settings.splitTunnelPackages.sorted().forEach {
+                if (runCatching { builder.addDisallowedApplication(it) }.isFailure) refused++
+            }
+        }
+        if (refused > 0) {
+            logs.trace(
+                NATIVE_TAG,
+                "$refused of ${settings.splitTunnelPackages.size} per-app rules refused " +
+                    "(package not installed); the rest are in force",
+            )
+        }
+
+        // Telephony never rides the tunnel, whatever the user picked.
+        //
+        // The phone finds the server it places calls through by resolving a name under
+        // `3gppnetwork.org`, and those records exist only inside the operator's core network. The
+        // lookup goes out unbound — no `Network.bindSocket`, so no IMS netId — and `netd` then
+        // hands it to whichever network owns that UID: with a tunnel up and telephony inside it,
+        // that is this app's resolver, which asks 1.1.1.1 and is told the name does not exist. The
+        // IMS network cannot rescue it either, because it is RESTRICTED and carries no
+        // `NET_CAPABILITY_INTERNET`, so it can never be the default a stray lookup falls back to.
+        // Excluded instead, the same lookup reaches the carrier's own resolver over cellular,
+        // which is the one resolver on earth that can answer it. A journal caught the failure at
+        // every Wi-Fi/cellular handover, which is exactly when IMS re-registers.
+        //
+        // Two UIDs and not one, because the split is not where it looks. `com.android.phone` is
+        // `AID_RADIO` (1001) and brings the seven other packages sharing it; the vendor IMS
+        // service on a Tensor Pixel is an ordinary application UID of its own and has to be named
+        // separately. Naming a package that is not installed costs nothing but the count above.
+        //
+        // Deliberately not `com.google.android.iwlan`, tempting as Wi-Fi calling looks: it runs as
+        // the system UID, and excluding one package of a shared UID excludes every package that
+        // shares it — which would put the whole of `android.uid.system` outside the tunnel.
+        //
+        // The app excludes itself for a different reason: subscription refreshes and latency
+        // probes would otherwise be routed into a tunnel that is still coming up, and the speed
+        // test would measure the phone's own connection rather than the server it is rating.
+        //
+        // All of it skipped in allow-list mode, because the two lists cannot be mixed — Android
+        // throws `UnsupportedOperationException` from `addDisallowedApplication` once
+        // `addAllowedApplication` has been called. Nothing is lost by skipping: in that mode a
+        // package is inside the tunnel only if the user put it there.
+        if (settings.splitTunnelMode != SplitTunnelMode.AllowList) {
+            (ALWAYS_OUTSIDE_THE_TUNNEL + packageName).forEach {
                 runCatching { builder.addDisallowedApplication(it) }
             }
         }
-
-        // Without this the subscription refreshes and latency probes the app makes would be routed
-        // into the tunnel that is still coming up — and the speed test would measure the connection
-        // of the phone rather than the server it is supposed to be rating.
-        runCatching { builder.addDisallowedApplication(packageName) }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
         val descriptor = builder.establish()
             ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
         tunDescriptor = descriptor
+        tunAppRules = settings.splitTunnelMode to settings.splitTunnelPackages
         return descriptor
     }
 
