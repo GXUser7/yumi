@@ -1304,6 +1304,16 @@ class MyDropVpnService : VpnService() {
         // resolver inside the tunnel rather than the one the physical network advertises.
         builder.addDnsServer(XrayConfigFactory.TUN_DNS_V4)
 
+        // FCM deliberately keeps one encrypted TCP connection quiet between pushes. Forced through
+        // the proxy path on a Pixel, that connection was reaped every 208-394 seconds even after
+        // this client's idle policy was raised to thirty minutes; once the phone entered Doze, Play
+        // services could not promptly replace it and notifications waited for the next wake. A
+        // bypassable VPN lets Play services bind its push channel to the underlying network, which
+        // is Android and Firebase's supported path for keeping that connection reliable. Other
+        // applications still use the VPN unless they explicitly bind elsewhere, and Android's
+        // lockdown mode continues to forbid bypass altogether.
+        builder.allowBypass()
+
         // Counted rather than swallowed. `addAllowedApplication` and `addDisallowedApplication`
         // both throw `NameNotFoundException` for a package that is not installed — an app the user
         // removed, or a list carried over from another phone — and catching that silently means a
