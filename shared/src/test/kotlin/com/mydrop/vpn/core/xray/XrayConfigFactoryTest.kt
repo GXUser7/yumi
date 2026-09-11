@@ -106,6 +106,22 @@ class XrayConfigFactoryTest {
         assertTrue("connIdle $idle s is under Firebase's half-hour heartbeat", idle >= 1800)
     }
 
+    /**
+     * One second is what the core replaces the idle timeout with once a direction finishes, and it
+     * is far too little for a connection that is supposed to sit quietly waiting to be spoken to.
+     */
+    @Test
+    fun `a half-closed connection is not shot within the second`() {
+        val level0 = build(node())["policy"]!!.jsonObject["levels"]!!.jsonObject["0"]!!.jsonObject
+
+        listOf("uplinkOnly", "downlinkOnly").forEach { key ->
+            val seconds = level0[key]!!.jsonPrimitive.content.toInt()
+            assertTrue("$key is $seconds s", seconds >= 15)
+            // Zero reads as "no limit" and means "expire now" — see ActivityTimer.SetTimeout.
+            assertTrue("$key must never be zero", seconds > 0)
+        }
+    }
+
     /** The counters are what the connect screen reads; they were here first and stay. */
     @Test
     fun `outbound byte counters survive the policy block`() {

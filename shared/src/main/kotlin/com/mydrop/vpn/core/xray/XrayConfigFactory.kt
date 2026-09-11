@@ -257,7 +257,32 @@ object XrayConfigFactory {
             // kept six times as long, and a phone whose apps are suspended without closing their
             // sockets will hold more of them. Worth watching if the service starts being killed.
             putJsonObject("levels") {
-                putJsonObject("0") { put("connIdle", CONN_IDLE_SECONDS) }
+                putJsonObject("0") {
+                    put("connIdle", CONN_IDLE_SECONDS)
+                    // The other two halves of the same story, and the ones that actually bite.
+                    //
+                    // Xray defaults both to one second (`features/policy/policy.go:132-133`), and
+                    // they are not idle timeouts — they are what the idle timeout is *replaced*
+                    // with the moment one direction of a connection finishes. `postRequest` in the
+                    // VLESS outbound ends with `defer timer.SetTimeout(DownlinkOnly)`, so a
+                    // connection whose uplink copy returns has one second of life left unless
+                    // something arrives.
+                    //
+                    // Measured on a phone, against the socket this matters most for. Through the
+                    // tunnel the push connection to `mtalk.google.com` lived two and a half
+                    // minutes, died, was rebuilt, and walked through four different Google servers
+                    // in twenty minutes — seven connections where there should have been one. With
+                    // the tunnel off, one connection held the whole seventeen-minute window without
+                    // a break. The same three-minute cadence shows against ten different servers
+                    // across three days of journal, so it is not one proxy misbehaving.
+                    //
+                    // Thirty seconds is long enough that a connection waiting on a slow answer is
+                    // not shot for it, and short enough that a genuinely half-closed connection
+                    // does not linger. Zero would be the obvious way to say "no limit" and is the
+                    // opposite: `ActivityTimer.SetTimeout` treats zero as "expire now".
+                    put("uplinkOnly", HALF_CLOSED_SECONDS)
+                    put("downlinkOnly", HALF_CLOSED_SECONDS)
+                }
             }
             putJsonObject("system") {
                 put("statsOutboundUplink", true)
@@ -894,6 +919,13 @@ object XrayConfigFactory {
      * what the five cost.
      */
     private const val CONN_IDLE_SECONDS = 1800
+
+    /**
+     * How long a connection lives after one of its directions has finished, in seconds.
+     *
+     * The core's own default is one. See the `policy` block in [buildConfig].
+     */
+    private const val HALF_CLOSED_SECONDS = 30
 
     /** Used when everything the user chose turned out to be unexpressible; see [buildDns]. */
     private const val FALLBACK_DNS = FALLBACK_REMOTE_DNS
