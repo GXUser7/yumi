@@ -80,6 +80,101 @@ class XrayConfigFactoryTest {
     private fun JsonObject.outboundNamed(tag: String): JsonObject =
         outbounds().first { it["tag"]?.jsonPrimitive?.content == tag }
 
+    private fun JsonObject.dnsRules(): List<JsonObject> =
+        rules().filter { rule ->
+            rule["inboundTag"]?.jsonArray?.any {
+                it.jsonPrimitive.content == XrayConfigFactory.DNS_IN_TAG
+            } == true
+        }
+
+    // ------------------------------------------------------------------ Timeouts
+
+    /**
+     * Xray's own default here is five minutes, and leaving the key out is a decision to accept it.
+     *
+     * Five minutes reaps any flow that goes quiet — which is what a push connection does by design
+     * between messages, for far longer than that. The core then drops the tun side without an RST
+     * the phone can see, so the notification socket is not reconnected, it is simply never used
+     * again. Asserted rather than trusted because the symptom is silence: nothing fails, nothing is
+     * logged, and the tunnel goes on passing every health check.
+     */
+    @Test
+    fun `idle connections outlive a push heartbeat`() {
+        val level0 = build(node())["policy"]!!.jsonObject["levels"]!!.jsonObject["0"]!!.jsonObject
+        val idle = level0["connIdle"]!!.jsonPrimitive.content.toInt()
+
+        assertTrue("connIdle $idle s is under Firebase's half-hour heartbeat", idle >= 1800)
+    }
+
+    /** The counters are what the connect screen reads; they were here first and stay. */
+    @Test
+    fun `outbound byte counters survive the policy block`() {
+        val system = build(node())["policy"]!!.jsonObject["system"]!!.jsonObject
+
+        assertTrue(system["statsOutboundUplink"]!!.jsonPrimitive.content.toBoolean())
+        assertTrue(system["statsOutboundDownlink"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    // ------------------------------------------------------------------ The DNS hijack setting
+
+    private fun JsonObject.dnsCatchRules(): List<JsonObject> =
+        rules().filter { it["port"]?.jsonPrimitive?.content == "53" }
+
+    /**
+     * Turning the hijack off must weaken the setting, not remove DNS from the phone.
+     *
+     * The tunnel advertises [XrayConfigFactory.TUN_DNS_V4] to applications whatever this setting
+     * says, so something has to answer there. When the only port-53 rule was the hijack itself,
+     * turning it off left every application in the tunnel pointed at an address with nobody
+     * listening — and the query did not even fail quickly, it matched the LAN bypass and went out
+     * of the physical interface addressed to an interface that exists only inside the phone.
+     */
+    @Test
+    fun `the core answers its own resolver with the hijack off`() {
+        val rules = build(node(), settings = settings.copy(hijackDns = false)).dnsCatchRules()
+        val own = rules.filter { rule ->
+            rule["ip"]?.jsonArray?.any {
+                it.jsonPrimitive.content.startsWith(XrayConfigFactory.TUN_DNS_V4)
+            } == true
+        }
+
+        assertEquals("exactly one rule may claim the tunnel's own resolver", 1, own.size)
+        assertEquals(XrayConfigFactory.DNS_TAG, own.single()["outboundTag"]?.jsonPrimitive?.content)
+    }
+
+    /** And with the hijack off, nothing claims queries addressed anywhere else. */
+    @Test
+    fun `queries addressed elsewhere are taken only when the hijack is on`() {
+        val off = build(node(), settings = settings.copy(hijackDns = false)).dnsCatchRules()
+        assertTrue("a blanket port-53 rule survived the setting being off", off.all { it["ip"] != null })
+
+        val on = build(node(), settings = settings.copy(hijackDns = true)).dnsCatchRules()
+        assertTrue("nothing claims port 53 in general with the hijack on", on.any { it["ip"] == null })
+    }
+
+    // ------------------------------------------------------------------ The carrier's own names
+
+    /**
+     * A connection addressed to the operator's own tree goes out of the phone, not to the proxy.
+     *
+     * This is all the list can do from here, and the test says so on purpose. Steering the *DNS
+     * lookup* for these names cannot be expressed as a routing rule: the router matches a domain
+     * with `ctx.GetTargetDomain()`, which for a query leaving the DNS module is the resolver's own
+     * address rather than the name being looked up. A rule written that way passes review, passes
+     * a shape assertion like this one, and matches nothing at runtime — which is how the first
+     * version of this fix was written.
+     */
+    @Test
+    fun `connections to carrier internal names leave the phone directly`() {
+        val rule = build(node()).rules().first { rule ->
+            rule["domain"]?.jsonArray?.any { it.jsonPrimitive.content.endsWith("3gppnetwork.org") } == true
+        }
+
+        assertEquals(XrayConfigFactory.DIRECT_TAG, rule["outboundTag"]?.jsonPrimitive?.content)
+        assertNull(rule["balancerTag"])
+        assertNull("a dns-in rule cannot see the queried name; see the doc comment", rule["inboundTag"])
+    }
+
     // ------------------------------------------------------------------ The balancer contract
 
     /**

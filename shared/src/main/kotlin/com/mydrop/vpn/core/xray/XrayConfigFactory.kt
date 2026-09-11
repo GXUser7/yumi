@@ -224,6 +224,41 @@ object XrayConfigFactory {
         // nothing to explain why.
         putJsonObject("stats") { }
         putJsonObject("policy") {
+            // The one timeout the core gets wrong for a phone, spelled out because leaving it out
+            // means accepting it.
+            //
+            // Xray's default for level 0 is a five-minute idle timeout
+            // (`features/policy/policy.go`: `ConnectionIdle: 300`), and on this path it is applied
+            // twice over — once by the tun stack, which builds its `StackOptions.IdleTimeout` from
+            // it (`proxy/tun/handler.go:127`), and again by every outbound's
+            // `CancelAfterInactivity`. Five minutes is a reasonable guess for a browser tab and the
+            // wrong one for the sockets that matter most here, because the sockets that matter most
+            // here are supposed to be silent: a push connection carries nothing between messages,
+            // Firebase's heartbeat runs on the order of half an hour, and Android defers even that
+            // into a Doze maintenance window.
+            //
+            // The reap itself is clean — `proxy/tun/handler.go:160` closes the connection, so the
+            // phone is told. The cost is what being told sets in motion: Play services schedules a
+            // reconnect, and in Doze that alarm waits for a maintenance window. A journal caught
+            // the shape of it. The connection to `mtalk.google.com` opened at 17:04:11 and carried
+            // nothing afterwards; the phone was idle from 17:06:41; the replacement connection was
+            // accepted at 17:30:46, within a second of Doze ending. Twenty-six minutes with no
+            // notifications, while the watchdog's own probes kept pulling 204s through the same
+            // tunnel and correctly called it healthy.
+            //
+            // So this is a mitigation and not a proof: what is established is that the core would
+            // have reaped that flow around 17:09, and that nothing else in the tunnel was wrong.
+            // What is not established — the journal cannot show it — is that a message was sent
+            // during those minutes and lost. Confirming that needs a paired test, one message id,
+            // VPN on and off, screen on and dozing.
+            //
+            // Half an hour clears Firebase's heartbeat with room to spare. The trade is memory: an
+            // idle flow held for thirty minutes instead of five is a map entry and a goroutine
+            // kept six times as long, and a phone whose apps are suspended without closing their
+            // sockets will hold more of them. Worth watching if the service starts being killed.
+            putJsonObject("levels") {
+                putJsonObject("0") { put("connIdle", CONN_IDLE_SECONDS) }
+            }
             putJsonObject("system") {
                 put("statsOutboundUplink", true)
                 put("statsOutboundDownlink", true)
@@ -812,6 +847,54 @@ object XrayConfigFactory {
     const val FALLBACK_REMOTE_DNS = "https://1.1.1.1/dns-query"
     const val FALLBACK_REMOTE_DNS_ALT = "https://8.8.8.8/dns-query"
 
+    /**
+     * Names that only the carrier's own resolver can answer, and that must never ride the proxy.
+     *
+     * `3gppnetwork.org` is the tree the phone's IMS stack looks in to find the network it places
+     * calls through — `pcscf.ims.mnc<NN>.mcc<NNN>.3gppnetwork.org` for the call server,
+     * `epdg.epc.…` for Wi-Fi calling. The records live inside the operator's network and exist
+     * nowhere else, so no public resolver can return them: 1.1.1.1 and 8.8.8.8 both answer
+     * NXDOMAIN, honestly and uselessly.
+     *
+     * A journal shows the phone asking for `pcscf.ims.mnc002.mcc250.3gppnetwork.org` within
+     * twenty milliseconds of every single Wi-Fi/cellular handover — which is exactly when the IMS
+     * stack re-registers — and being told the name does not exist, four seconds at a time, after a
+     * round trip to a proxy in Germany. Sending these to the proxy is wrong twice over: the answer
+     * cannot be there, and the question says which operator the phone is on.
+     *
+     * What this list can and cannot do, precisely — because the obvious use of it does not work.
+     *
+     * It keeps a *connection* addressed to one of these names off the proxy. It cannot steer the
+     * DNS lookup, and a rule that tries to is silently inert: the router matches a domain with
+     * `ctx.GetTargetDomain()` (`app/router/condition.go:64`), which for a query leaving the DNS
+     * module is the address of the resolver being asked — `1.1.1.1`, not the name being asked
+     * about. Xray does offer per-name resolver selection, as `dns.servers[].domains`, and that is
+     * where a fix belongs; but selection is only half of it, and the other half is having a
+     * resolver that can answer at all. These records live inside the operator's core network, so
+     * the only one that can is the resolver of the network underneath the tunnel, which nothing on
+     * this side hands to the core yet. Until it does, the calls bug is not fixed by this file.
+     */
+    private val CARRIER_INTERNAL_DOMAINS = listOf("domain:3gppnetwork.org")
+
+    /**
+     * The resolver this tunnel advertises to applications, and the one address the core answers
+     * for whatever the hijack setting says.
+     *
+     * Shared with the service rather than spelled twice, because the two have to agree exactly:
+     * the service hands this address to `VpnService.Builder.addDnsServer`, and the rule built from
+     * it in [buildRouting] is what makes anything answer there. Spelled in two files, a rename in
+     * one of them is a phone with a resolver nobody is listening on.
+     */
+    const val TUN_DNS_V4 = "172.19.0.2"
+
+    /**
+     * How long a flow may carry nothing before the core closes it, in seconds.
+     *
+     * Thirty minutes rather than the core's own five. See the `policy` block in [buildConfig] for
+     * what the five cost.
+     */
+    private const val CONN_IDLE_SECONDS = 1800
+
     /** Used when everything the user chose turned out to be unexpressible; see [buildDns]. */
     private const val FALLBACK_DNS = FALLBACK_REMOTE_DNS
 
@@ -883,12 +966,46 @@ object XrayConfigFactory {
             putJsonArray("rules") {
                 dnsRules(settings)
 
+                // Unconditional, and that is the difference between a setting and a trapdoor.
+                //
+                // The service advertises [TUN_DNS_V4] to every application in the tunnel, always —
+                // it is the resolver they were handed, and they will use it whatever this setting
+                // says. Only the rule below made anything answer there, so turning the hijack off
+                // used to leave the whole tunnel pointed at an address where nobody was listening:
+                // the query fell through to the ordinary rules, matched the private ranges of the
+                // LAN bypass — 172.19.0.2 is inside 172.16.0.0/12 — and went out of the physical
+                // interface addressed to an interface that only exists inside this phone. Not a
+                // weaker setting: no DNS at all.
+                //
+                // Nor can the service simply stop advertising a resolver when the hijack is off.
+                // `netd` falls back to the default network's nameservers for a VPN that declares
+                // none (`NetworkController.cpp`, `getNetworkForDnsLocked`), so the tunnel would
+                // carry the traffic while the physical network resolved the names — every lookup
+                // in the clear, which is the one outcome worse than none.
+                //
+                // So the core always answers its own resolver, and the setting means what its name
+                // says: whether queries addressed *elsewhere* are taken as well.
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("ip") { add("$TUN_DNS_V4/32") }
+                    put("port", "53")
+                    put("outboundTag", DNS_TAG)
+                }
+
                 if (settings.hijackDns) {
                     addJsonObject {
                         put("type", "field")
                         put("port", "53")
                         put("outboundTag", DNS_TAG)
                     }
+                }
+
+                // Whatever the mode says. A call signalling path that comes out in another
+                // country is not a call signalling path; see [CARRIER_INTERNAL_DOMAINS].
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("domain") { CARRIER_INTERNAL_DOMAINS.forEach { add(it) } }
+                    put("outboundTag", DIRECT_TAG)
                 }
 
                 // The probe measures the tunnel, so it has to ride it whatever the routing mode
