@@ -363,6 +363,50 @@ class FailoverWatchdog(
         return measured
     }
 
+    /** A pool and what measuring it produced, so the caller can choose without measuring twice. */
+    private data class Pool(
+        val pool: List<ProxyNode>,
+        val measured: Map<String, LatencyResult>,
+        /** Whether [measured] came from the core rather than from a handshake. */
+        val coreConfirmed: Boolean,
+    )
+
+    /**
+     * The servers the user nominated for cellular, measured and ready to choose from.
+     *
+     * Null when there is nothing to fall back to. An empty list is an answer rather than a gap —
+     * these and no others may carry cellular traffic — which is the same reading applyTransport
+     * gives it, and the reason nothing here reaches for ordinary spares to fill the space.
+     *
+     * @param blind whether a bare TCP/TLS probe may stand in when the core names nobody. It may on
+     *   the ordinary path, which has already spent its core measurement on other servers and has
+     *   no other way left to tell a dead list from a slow one. It may not when this is being asked
+     *   *because* the core has gone quiet twice running: a handshake is precisely the evidence that
+     *   run proved worthless, and answering a blind round with a blind round is how the hold came
+     *   to be needed in the first place.
+     */
+    private suspend fun mobileFallback(dead: ProxyNode, mobileIds: Set<String>, blind: Boolean): Pool? {
+        val pool = FailoverGroup.preferSwitchable(
+            profiles.nodes.filter {
+                it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+            },
+            configs.switchable.value,
+        )
+        if (pool.isEmpty()) return null
+
+        logs.info(R.string.log_cellular_ordinary_dead, pool.size)
+        val measured = coreMeasured(pool)
+        if (measured.isNotEmpty() || !blind) return Pool(pool, measured, coreConfirmed = measured.isNotEmpty())
+
+        return Pool(
+            pool,
+            latencyTester.measureAll(pool, settings.value.pingMode) { result ->
+                profiles.recordLatency(result)
+            }.associateBy { it.nodeId },
+            coreConfirmed = false,
+        )
+    }
+
     /**
      * Measures a pool from where the phone is standing now, and picks from what answered.
      *
@@ -940,52 +984,77 @@ class FailoverWatchdog(
         // core repeatedly finding nobody while raw TCP/TLS keeps saying yes, which twenty-five
         // switches in ninety-three minutes showed to be the censor answering handshakes and
         // nothing past them, not the next candidate being the one that works.
-        if (FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)) {
+        val holding = FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)
+
+        // The mobile list gets its turn *before* the hold, not after it, and that ordering is the
+        // whole fix rather than a tidy-up.
+        //
+        // The guard below is right about what it distrusts: a bare TCP/TLS handshake proves nothing
+        // about whether a proxy carries traffic, and acting on a run of them is how ninety-three
+        // minutes went by in twenty-five switches. But this list is measured with [coreMeasured] —
+        // the very evidence the guard is holding out for — so consulting it is not another blind
+        // guess, and refusing to consult it buys nothing.
+        //
+        // While it sat below the guard it could never be reached in the one situation it exists
+        // for. On cellular with the ordinary servers blocked, the core names nobody among them
+        // *every* round, because that is what the outage is; so the second round running always
+        // took the guard's early return, the user's cellular servers were never asked, and the
+        // tunnel sat on a server it had itself declared dead — waking every thirty seconds to
+        // declare it dead again. Twenty-nine such holds across ten episodes in one journal, every
+        // one of them with the last known transport cellular, ended by a handover or by somebody
+        // reconnecting by hand. An hour and a quarter of measurable outage; the true figure is
+        // larger and unknown, because the journal rotates and two episodes run past its edge.
+        val rescue = if (holding && ordinaryFirst) mobileFallback(dead, mobileIds, blind = false) else null
+        val rescued = if (rescue == null) null else FailoverChoice.pick(rescue.pool, rescue.measured)
+
+        if (holding && rescued == null) {
             logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
             alerts.serverStranded(dead.name)
             giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
             return
         }
 
-        var fresh = throughCore.ifEmpty {
-            latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
-                profiles.recordLatency(result)
-            }.associateBy { it.nodeId }
-        }
+        var fresh: Map<String, LatencyResult>
+        var chosen: ProxyNode?
+        var coreConfirmed = throughCore.isNotEmpty()
 
-        var chosen = FailoverChoice.pick(
-            // Group members preferred among the servers that actually answered, rather than among
-            // the ones that were going to be asked.
-            if (ordinaryFirst) {
-                FailoverGroup.preferSwitchable(
-                    candidates.filter { fresh[it.id]?.failed == false },
-                    configs.switchable.value,
-                ).ifEmpty { candidates }
-            } else {
-                candidates
-            },
-            fresh,
-        )
+        if (rescue != null && rescued != null) {
+            // Drawn from the core's own measurement of the cellular list, so there is nothing left
+            // to ask and no reason to spend a handshake asking it.
+            fresh = rescue.measured
+            chosen = rescued
+            coreConfirmed = rescue.coreConfirmed
+        } else {
+            fresh = throughCore.ifEmpty {
+                latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
+                    profiles.recordLatency(result)
+                }.associateBy { it.nodeId }
+            }
 
-        // The ordinary servers were measured in full and none of them answered, which is the whole
-        // condition the mobile list was named for. Nothing here is a guess about which network the
-        // phone is on: ordinaryFirst is already that question answered.
-        if (chosen == null && ordinaryFirst) {
-            val fallback = FailoverGroup.preferSwitchable(
-                profiles.nodes.filter {
-                    it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+            chosen = FailoverChoice.pick(
+                // Group members preferred among the servers that actually answered, rather than
+                // among the ones that were going to be asked.
+                if (ordinaryFirst) {
+                    FailoverGroup.preferSwitchable(
+                        candidates.filter { fresh[it.id]?.failed == false },
+                        configs.switchable.value,
+                    ).ifEmpty { candidates }
+                } else {
+                    candidates
                 },
-                configs.switchable.value,
+                fresh,
             )
-            if (fallback.isNotEmpty()) {
-                logs.info(R.string.log_cellular_ordinary_dead, fallback.size)
-                val second = coreMeasured(fallback)
-                fresh = second.ifEmpty {
-                    latencyTester.measureAll(fallback, settings.value.pingMode) { result ->
-                        profiles.recordLatency(result)
-                    }.associateBy { it.nodeId }
+
+            // The ordinary servers were measured in full and none of them answered, which is the
+            // whole condition the mobile list was named for. Nothing here is a guess about which
+            // network the phone is on: ordinaryFirst is already that question answered.
+            if (chosen == null && ordinaryFirst) {
+                val fallback = mobileFallback(dead, mobileIds, blind = true)
+                if (fallback != null) {
+                    fresh = fallback.measured
+                    chosen = FailoverChoice.pick(fallback.pool, fallback.measured)
+                    if (chosen != null) coreConfirmed = fallback.coreConfirmed
                 }
-                chosen = FailoverChoice.pick(fallback, fresh)
             }
         }
 
@@ -1000,7 +1069,10 @@ class FailoverWatchdog(
         // before it is over. Reset here rather than only on reconnect, because the run this
         // counts is "since the core last agreed with the raw probe", not "since the tunnel came
         // up" — a courier's ninety-three minutes was one connection throughout.
-        blindEscapes = if (throughCore.isEmpty()) blindEscapes + 1 else 0
+        // A switch drawn from the mobile list's own core measurement counts as confirmed too, even
+        // though the ordinary measurement before it named nobody: what this counts is whether the
+        // core vouched for the server being moved to, not which pool it came out of.
+        blindEscapes = if (coreConfirmed) 0 else blindEscapes + 1
 
         logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
         alerts.serverLeft(dead.name, chosen.name)
