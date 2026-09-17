@@ -120,9 +120,9 @@ fun LogsScreen(
                     Icons.Rounded.Download,
                     stringResource(R.string.action_save_logs),
                     onClick = {
-                        // Off the main thread: the journal is fifty megabytes at its largest, and
-                        // copying that where the frames are drawn would freeze the screen for the
-                        // whole of it.
+                        // Off the main thread: the journal runs to tens of megabytes, and copying
+                        // that where the frames are drawn would freeze the screen for the whole of
+                        // it.
                         scope.launch {
                             val name = withContext(Dispatchers.IO) { saveJournalToDownloads(context) }
                             when (name) {
@@ -272,7 +272,8 @@ private fun copyToClipboard(
  *
  * The file rather than the text on screen, and deliberately: the on-screen journal is the short
  * human-readable one, while the file underneath carries the probe-by-probe trace and the core's own
- * output — the half that answers "what happened at four in the morning".
+ * output — the half that answers "what happened at four in the morning". It is written in release
+ * builds too, which is the whole reason this button is worth having on somebody else's phone.
  *
  * Downloads rather than a share sheet, because a share sheet is not a reliable way to move fifty
  * megabytes: some apps refuse the size, some re-encode, and on this phone the send simply did not
@@ -282,8 +283,13 @@ private fun copyToClipboard(
  *   when saving itself failed — three outcomes the caller reports differently.
  */
 private fun saveJournalToDownloads(context: Context): String? {
-    val source = File(File(context.filesDir, "diagnostics"), "yumi.log")
-    if (!source.isFile || source.length() == 0L) return null
+    val directory = File(context.filesDir, "diagnostics")
+    // Both halves, oldest first. The journal rotates, and whoever taps this a minute after a
+    // rotation would otherwise hand over the minute rather than the evening — the half holding
+    // what they are being asked about is the one that just became `yumi.log.1`.
+    val sources = listOf(File(directory, "yumi.log.1"), File(directory, "yumi.log"))
+        .filter { it.isFile && it.length() > 0L }
+    if (sources.isEmpty()) return null
 
     // Named by the moment it was taken, so two of them never collide and the useful one is
     // obvious afterwards.
@@ -301,7 +307,7 @@ private fun saveJournalToDownloads(context: Context): String? {
                 .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: return@runCatching ""
             context.contentResolver.openOutputStream(target)?.use { out ->
-                source.inputStream().use { it.copyTo(out) }
+                sources.forEach { half -> half.inputStream().use { it.copyTo(out) } }
             } ?: return@runCatching ""
         } else {
             // Before scoped storage there is no MediaStore entry to insert; the public directory
@@ -309,7 +315,9 @@ private fun saveJournalToDownloads(context: Context): String? {
             @Suppress("DEPRECATION")
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             dir.mkdirs()
-            source.copyTo(File(dir, name), overwrite = true)
+            File(dir, name).outputStream().use { out ->
+                sources.forEach { half -> half.inputStream().use { it.copyTo(out) } }
+            }
         }
         name
     }.getOrDefault("")

@@ -6,7 +6,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The journal, on disk, for debug builds only.
+ * The journal, on disk.
  *
  * The in-memory journal dies with the process and holds two thousand lines, which is fine for
  * looking at something that just happened and useless for the failures that matter: a tunnel that
@@ -18,10 +18,16 @@ import java.util.Locale
  *
  * So: append to a file, rotate it, and let somebody pull it afterwards.
  *
- * **Debug builds only, and that is the point.** These lines carry server addresses, the domains
- * requests were made to and the shape of somebody's browsing; [LogRepository] deliberately keeps
- * them in memory for exactly that reason. Writing them to storage is a trade worth making while
- * chasing a bug on your own phone, and not one to make silently for everybody else.
+ * **What these lines carry.** Server addresses, the domains requests were made to, the shape of
+ * somebody's browsing; [LogRepository] keeps its own ring in memory for exactly that reason. This
+ * used to be written in debug builds alone on the strength of it — until the bug reports made the
+ * case the other way: a release build that keeps nothing has nobody to blame but itself when a
+ * fault from four in the morning cannot be described.
+ *
+ * So it is written everywhere now, and the containment is where it always should have been rather
+ * than in the build type: the app's private directory, which no other app can read; a cap, so it
+ * cannot grow without end; and no way out of the phone except its owner saving it and sending it
+ * somewhere deliberately. [AppContainer] holds the caps, and the release one is the smaller.
  */
 class DiagnosticLog(
     directory: File,
@@ -100,13 +106,24 @@ class DiagnosticLog(
          * so. A log that cannot hold the interval between noticing a problem and being asked about
          * it is not a diagnostic.
          *
-         * Fifty is affordable because this is debug-only storage in the app's private directory,
-         * and because the quiet case is the one that matters: with the screen off the core writes
-         * almost nothing, so a night costs kilobytes. The cap exists for the loud case.
+         * Fifty is affordable on a phone being debugged, and because the quiet case is the one
+         * that matters: with the screen off the core writes almost nothing, so a night costs
+         * kilobytes. The cap exists for the loud case.
          *
          * [read] concatenates both halves into one string and has no caller inside the app; if one
          * ever appears, it must stream instead — fifty megabytes of UTF-16 is a hundred in memory.
          */
         const val MAX_BYTES = 25L * 1024 * 1024
+
+        /**
+         * The same bound for everybody else: sixteen megabytes across the two halves.
+         *
+         * Fifty is a debugging expense, agreed to by whoever installed a debug build; it is not
+         * something to take from the storage of somebody who only wanted a VPN. Sixteen still
+         * covers the case the journal exists for — an evening's ordinary use, or a whole night
+         * with the screen off — and gives up only the loudest hours, which are also the ones where
+         * the interesting line is a minute old rather than eight hours old.
+         */
+        const val RELEASE_MAX_BYTES = 8L * 1024 * 1024
     }
 }

@@ -7,9 +7,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * In-memory ring buffer of core log lines. Deliberately not persisted: logs from a VPN core
- * contain server addresses and request destinations, and writing that to disk by default would
- * be a privacy hazard the user never asked for.
+ * In-memory ring buffer of core log lines, and the feed for the journal on disk.
+ *
+ * The ring is what the screen reads; [DiagnosticLog] is what somebody sends when they are asked
+ * what happened. The two hold different amounts of the same story on purpose — the ring is a
+ * night, the file is several — and debug and trace lines are kept out of the file below, where
+ * the reason is written down.
  *
  * Most callers pass a resource id rather than a sentence, so the journal speaks the language the
  * user chose. Entries keep the wording they were written with when the language changes later —
@@ -85,8 +88,18 @@ class LogRepository(
         diagnostics?.write('T', tag, message)
     }
 
+    /**
+     * Empties both the journal on screen and the file behind it.
+     *
+     * The file too, and not only for tidiness: the journal names servers and the domains requests
+     * went to, so somebody clearing it is often clearing exactly that. Leaving sixteen megabytes
+     * of it on disk after the screen has gone blank would be answering a deliberate act with a
+     * half-truth — and the next save button would hand over the lines they thought they had
+     * deleted.
+     */
     fun clear() {
         synchronized(lock) { buffer.clear() }
         _entries.value = emptyList()
+        diagnostics?.clear()
     }
 }

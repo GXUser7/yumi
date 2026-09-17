@@ -39,16 +39,34 @@ class AppContainer(context: Context) {
     val settings = SettingsRepository(context.filesDir, applicationScope, writeFailure)
     val strings = Strings(context) { settings.value.language }
     /**
-     * On disk only when the build is debuggable — the flag Android itself sets, so no build
-     * plumbing and no way for a release to switch it on by accident. See [DiagnosticLog] for why
-     * this is not something to hand to everybody.
+     * Whether this build is debuggable — the flag Android itself sets, so no build plumbing and
+     * no way for a release to switch the leak hunt's instruments on by accident.
      */
     private val debuggable = (appContext.applicationInfo.flags and
         android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
+    /**
+     * The journal on disk, in every build.
+     *
+     * Debug builds only until now, and what changed is the bug reports. Somebody on a release
+     * build whose tunnel died in the night has nothing to send in the morning: the in-memory
+     * journal no longer reaches back that far, and the save button on the logs screen — which
+     * exists for precisely this handover — answered "nothing to send" because the file it copies
+     * was never written. A fault nobody can hand over is a fault nobody fixes.
+     *
+     * The privacy cost that kept it debug-only is real and has not gone away; see [DiagnosticLog].
+     * It is answered differently here rather than ignored: the file sits in the app's private
+     * directory where no other app can read it, it is bounded and rotated, the screen's own
+     * clear button empties it, and it leaves the phone only when its owner saves it and attaches
+     * it somewhere by hand.
+     *
+     * Smaller in release than in debug, because fifty megabytes is a fair price on the phone of
+     * somebody hunting a bug and not on everybody's.
+     */
     val diagnostics = DiagnosticLog(
         directory = java.io.File(context.filesDir, "diagnostics"),
-        enabled = debuggable,
+        enabled = true,
+        maxBytes = if (debuggable) DiagnosticLog.MAX_BYTES else DiagnosticLog.RELEASE_MAX_BYTES,
     )
 
     /**
