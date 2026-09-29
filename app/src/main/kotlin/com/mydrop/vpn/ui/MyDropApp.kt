@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.SnackbarHost
@@ -41,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,8 +53,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.shared.R
+import com.mydrop.vpn.ui.components.AmbientBackdrop
 import com.mydrop.vpn.ui.components.ImportConfirmDialog
 import com.mydrop.vpn.ui.components.PairingSendDialog
 import com.mydrop.vpn.ui.components.PillNavigationBar
@@ -68,6 +73,9 @@ import com.mydrop.vpn.ui.screens.settings.SettingsScreen
 import com.mydrop.vpn.ui.screens.speed.SpeedTestScreen
 import com.mydrop.vpn.ui.screens.subscriptions.AddSubscriptionSheet
 import com.mydrop.vpn.ui.screens.subscriptions.SubscriptionsScreen
+import com.mydrop.vpn.ui.theme.LocalSemanticColors
+import com.mydrop.vpn.ui.theme.frostSource
+import com.mydrop.vpn.ui.theme.rememberFrostState
 
 object Routes {
     const val CONNECT = "connect"
@@ -119,9 +127,32 @@ fun MyDropApp(viewModel: MainViewModel) {
     val currentRoute = backStackEntry?.destination?.route ?: Routes.CONNECT
     val showNavigationPill = TopLevel.entries.any { it.route == currentRoute }
 
+    // What the navigation pill blurs: the whole screen under it, backdrop and all.
+    val frost = rememberFrostState()
+
+    // The room is lit by the tunnel. See AmbientBackdrop: the accent when protected, the
+    // "connecting" tone while it comes up, the error colour when it failed, and the accent dimmed
+    // to a third when nothing is running, so the ground still has light for the glass to catch.
+    val semantic = LocalSemanticColors.current
+    val glow = when (state.vpnState) {
+        is VpnState.Connected -> semantic.connected
+        is VpnState.Connecting, VpnState.Disconnecting -> semantic.connecting
+        is VpnState.Failed -> MaterialTheme.colorScheme.error
+        VpnState.Disconnected -> semantic.connected
+    }
+    val glowStrength = when (state.vpnState) {
+        is VpnState.Connected -> 1f
+        is VpnState.Connecting, VpnState.Disconnecting -> 0.75f
+        is VpnState.Failed -> 0.6f
+        VpnState.Disconnected -> 0.35f
+    }
+
     // No app bars anywhere: every screen opens with its own poster headline in the body, which is
     // both the visual signature and the end of the empty-collapsed-bar problem.
     Scaffold(
+        // Transparent, because the ground is the backdrop drawn under the screens below and the
+        // Scaffold's own flat surface would cover it.
+        containerColor = Color.Transparent,
         bottomBar = {
             // The pill floats, so it animates in and out vertically rather than just fading.
             AnimatedVisibility(
@@ -129,7 +160,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                 enter = slideInVertically(tween(240)) { it } + fadeIn(tween(160)),
                 exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(120)),
             ) {
-                PillNavigationBar {
+                PillNavigationBar(frost = frost) {
                     TopLevel.entries.forEach { destination ->
                         val label = stringResource(destination.labelRes)
                         ShortNavigationBarItem(
@@ -173,167 +204,175 @@ fun MyDropApp(viewModel: MainViewModel) {
             PaddingValues(top = innerPadding.calculateTopPadding(), bottom = systemBottom)
         }
 
-        NavHost(
-            navController = navController,
-            startDestination = Routes.CONNECT,
-            modifier = Modifier.fillMaxSize(),
-            // All four transitions read the tab order rather than the back stack — see
-            // [movingForward] for why the stack is the wrong thing to ask.
-            enterTransition = { lateralEnter(movingForward()) },
-            exitTransition = { lateralExit(movingForward()) },
-            popEnterTransition = { lateralEnter(movingForward()) },
-            popExitTransition = { lateralExit(movingForward()) },
-        ) {
-            composable(Routes.CONNECT) {
-                // One broadcast, and only while there is nothing linked yet: a phone that already
-                // knows a television shows the door regardless, and shouting at the network every
-                // time somebody comes back to this tab would buy nothing.
-                LaunchedEffect(remote.bonds.isEmpty()) {
-                    if (remote.bonds.isEmpty()) viewModel.lookForTelevisions()
+        // The backdrop sits inside the frost source rather than under the Scaffold, so the pill's
+        // blur carries the light of the room and not only whatever text happens to be under it.
+        Box(Modifier.fillMaxSize().frostSource(frost)) {
+            AmbientBackdrop(glow = glow, intensity = glowStrength)
+
+            NavHost(
+                navController = navController,
+                startDestination = Routes.CONNECT,
+                modifier = Modifier.fillMaxSize(),
+                // All four transitions read the tab order rather than the back stack — see
+                // [movingForward] for why the stack is the wrong thing to ask.
+                enterTransition = { lateralEnter(movingForward()) },
+                exitTransition = { lateralExit(movingForward()) },
+                popEnterTransition = { lateralEnter(movingForward()) },
+                popExitTransition = { lateralExit(movingForward()) },
+            ) {
+                composable(Routes.CONNECT) {
+                    // One broadcast, and only while there is nothing linked yet: a phone that
+                    // already knows a television shows the door regardless, and shouting at the
+                    // network every time somebody comes back to this tab would buy nothing.
+                    LaunchedEffect(remote.bonds.isEmpty()) {
+                        if (remote.bonds.isEmpty()) viewModel.lookForTelevisions()
+                    }
+                    ConnectScreen(
+                        state = state,
+                        onToggleConnection = viewModel::toggleConnection,
+                        onPickServer = { navController.navigateTopLevel(Routes.SERVERS) },
+                        onRoutingModeChange = viewModel::setRoutingMode,
+                        onOpenLogs = { navController.navigate(Routes.LOGS) },
+                        onOpenSpeedTest = { navController.navigate(Routes.SPEED) },
+                        onOpenRemote = { navController.navigate(Routes.REMOTE) },
+                        remoteAvailable =
+                            remote.bonds.isNotEmpty() || remote.sightings.isNotEmpty(),
+                        modifier = Modifier.padding(contentPadding),
+                    )
                 }
-                ConnectScreen(
-                    state = state,
-                    onToggleConnection = viewModel::toggleConnection,
-                    onPickServer = { navController.navigateTopLevel(Routes.SERVERS) },
-                    onRoutingModeChange = viewModel::setRoutingMode,
-                    onOpenLogs = { navController.navigate(Routes.LOGS) },
-                    onOpenSpeedTest = { navController.navigate(Routes.SPEED) },
-                    onOpenRemote = { navController.navigate(Routes.REMOTE) },
-                    remoteAvailable = remote.bonds.isNotEmpty() || remote.sightings.isNotEmpty(),
-                    modifier = Modifier.padding(contentPadding),
-                )
-            }
 
-            composable(Routes.REMOTE) {
-                // Opened with the screen and closed with it. The console itself outlives both, so
-                // what is kept between visits is the bond and whatever was last heard on the
-                // network — not a socket held open behind a screen nobody is looking at.
-                DisposableEffect(Unit) {
-                    viewModel.openRemote()
-                    onDispose(viewModel::closeRemote)
+                composable(Routes.REMOTE) {
+                    // Opened with the screen and closed with it. The console itself outlives both,
+                    // so what is kept between visits is the bond and whatever was last heard on
+                    // the network — not a socket held open behind a screen nobody is looking at.
+                    DisposableEffect(Unit) {
+                        viewModel.openRemote()
+                        onDispose(viewModel::closeRemote)
+                    }
+                    RemoteScreen(
+                        state = remote,
+                        onBack = { navController.popBackStack() },
+                        onScan = { navController.navigate(Routes.SCAN) },
+                        onConnect = { viewModel.sendToRemote(RemoteCommand.Connect) },
+                        onDisconnect = { viewModel.sendToRemote(RemoteCommand.Disconnect) },
+                        onSelect = { viewModel.sendToRemote(RemoteCommand.Select(it)) },
+                        onForget = viewModel::forgetRemote,
+                        contentPadding = contentPadding,
+                    )
                 }
-                RemoteScreen(
-                    state = remote,
-                    onBack = { navController.popBackStack() },
-                    onScan = { navController.navigate(Routes.SCAN) },
-                    onConnect = { viewModel.sendToRemote(RemoteCommand.Connect) },
-                    onDisconnect = { viewModel.sendToRemote(RemoteCommand.Disconnect) },
-                    onSelect = { viewModel.sendToRemote(RemoteCommand.Select(it)) },
-                    onForget = viewModel::forgetRemote,
-                    contentPadding = contentPadding,
-                )
-            }
 
-            composable(Routes.SPEED) {
-                SpeedTestScreen(
-                    state = speedTest,
-                    // Asked on every composition rather than remembered. It is one cheap query to
-                    // ConnectivityManager, and `remember` with no key cached the answer for the
-                    // life of the screen — so the warning about spending mobile data never appeared
-                    // for the one person it exists for: somebody who started on Wi-Fi and lost it.
-                    isMetered = viewModel.speedTestIsMetered(),
-                    onStart = viewModel::startSpeedTest,
-                    onStop = viewModel::stopSpeedTest,
-                    onBack = { navController.popBackStack() },
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.SPEED) {
+                    SpeedTestScreen(
+                        state = speedTest,
+                        // Asked on every composition rather than remembered. It is one cheap query
+                        // to ConnectivityManager, and `remember` with no key cached the answer for
+                        // the life of the screen — so the warning about spending mobile data never
+                        // appeared for the one person it exists for: somebody who started on Wi-Fi
+                        // and lost it.
+                        isMetered = viewModel.speedTestIsMetered(),
+                        onStart = viewModel::startSpeedTest,
+                        onStop = viewModel::stopSpeedTest,
+                        onBack = { navController.popBackStack() },
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.SERVERS) {
-                ServersScreen(
-                    state = state,
-                    onSelect = viewModel::selectNode,
-                    onPing = viewModel::pingNode,
-                    onRemove = viewModel::removeNode,
-                    onSetTlsInsecure = viewModel::setTlsInsecure,
-                    onToggleGroup = viewModel::toggleServerGroup,
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.SERVERS) {
+                    ServersScreen(
+                        state = state,
+                        onSelect = viewModel::selectNode,
+                        onPing = viewModel::pingNode,
+                        onRemove = viewModel::removeNode,
+                        onSetTlsInsecure = viewModel::setTlsInsecure,
+                        onToggleGroup = viewModel::toggleServerGroup,
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.SUBSCRIPTIONS) {
-                SubscriptionsScreen(
-                    state = state,
-                    onRefresh = viewModel::refreshSubscription,
-                    onRemove = viewModel::removeSubscription,
-                    onSetEnabled = viewModel::setSubscriptionEnabled,
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.SUBSCRIPTIONS) {
+                    SubscriptionsScreen(
+                        state = state,
+                        onRefresh = viewModel::refreshSubscription,
+                        onRemove = viewModel::removeSubscription,
+                        onSetEnabled = viewModel::setSubscriptionEnabled,
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.SETTINGS) {
-                SettingsScreen(
-                    settings = state.settings,
-                    splitTunnelAppCount = state.settings.splitTunnelPackages.size,
-                    dnsProfiles = state.dnsProfiles,
-                    selectedDnsId = state.selectedDnsId,
-                    onSelectDns = viewModel::selectDns,
-                    onRemoveDns = viewModel::removeDns,
-                    onUpdate = viewModel::updateSettings,
-                    onOpenLogs = { navController.navigate(Routes.LOGS) },
-                    onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
-                    onOpenFailover = { navController.navigate(Routes.FAILOVER) },
-                    onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
-                    geoAssets = geoAssets,
-                    onRefreshGeo = viewModel::refreshGeoAssets,
-                    updates = updates,
-                    onCheckUpdate = viewModel::checkForUpdate,
-                    onDownloadUpdate = viewModel::downloadUpdate,
-                    onInstallUpdate = viewModel::installUpdate,
-                    onDismissUpdate = viewModel::dismissUpdate,
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.SETTINGS) {
+                    SettingsScreen(
+                        settings = state.settings,
+                        splitTunnelAppCount = state.settings.splitTunnelPackages.size,
+                        dnsProfiles = state.dnsProfiles,
+                        selectedDnsId = state.selectedDnsId,
+                        onSelectDns = viewModel::selectDns,
+                        onRemoveDns = viewModel::removeDns,
+                        onUpdate = viewModel::updateSettings,
+                        onOpenLogs = { navController.navigate(Routes.LOGS) },
+                        onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
+                        onOpenFailover = { navController.navigate(Routes.FAILOVER) },
+                        onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
+                        geoAssets = geoAssets,
+                        onRefreshGeo = viewModel::refreshGeoAssets,
+                        updates = updates,
+                        onCheckUpdate = viewModel::checkForUpdate,
+                        onDownloadUpdate = viewModel::downloadUpdate,
+                        onInstallUpdate = viewModel::installUpdate,
+                        onDismissUpdate = viewModel::dismissUpdate,
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.LOGS) {
-                LogsScreen(
-                    entries = logs,
-                    onBack = { navController.popBackStack() },
-                    onClear = viewModel::clearLogs,
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.LOGS) {
+                    LogsScreen(
+                        entries = logs,
+                        onBack = { navController.popBackStack() },
+                        onClear = viewModel::clearLogs,
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.SCAN) {
-                ScanScreen(
-                    onResult = viewModel::importText,
-                    onBack = { navController.popBackStack() },
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.SCAN) {
+                    ScanScreen(
+                        onResult = viewModel::importText,
+                        onBack = { navController.popBackStack() },
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.MOBILE_NODES) {
-                NodePickerScreen(
-                    kind = NodePickerKind.Mobile,
-                    settings = state.settings,
-                    nodes = state.nodes,
-                    latencies = state.latencies,
-                    onUpdate = viewModel::updateSettings,
-                    onBack = { navController.popBackStack() },
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.MOBILE_NODES) {
+                    NodePickerScreen(
+                        kind = NodePickerKind.Mobile,
+                        settings = state.settings,
+                        nodes = state.nodes,
+                        latencies = state.latencies,
+                        onUpdate = viewModel::updateSettings,
+                        onBack = { navController.popBackStack() },
+                        contentPadding = contentPadding,
+                    )
+                }
 
-            composable(Routes.FAILOVER) {
-                NodePickerScreen(
-                    kind = NodePickerKind.Failover,
-                    settings = state.settings,
-                    nodes = state.nodes,
-                    latencies = state.latencies,
-                    onUpdate = viewModel::updateSettings,
-                    onBack = { navController.popBackStack() },
-                    contentPadding = contentPadding,
-                )
-            }
+                composable(Routes.FAILOVER) {
+                    NodePickerScreen(
+                        kind = NodePickerKind.Failover,
+                        settings = state.settings,
+                        nodes = state.nodes,
+                        latencies = state.latencies,
+                        onUpdate = viewModel::updateSettings,
+                        onBack = { navController.popBackStack() },
+                        contentPadding = contentPadding,
+                    )
+                }
 
 
-            composable(Routes.SPLIT_TUNNEL) {
-                SplitTunnelScreen(
-                    settings = state.settings,
-                    onUpdate = viewModel::updateSettings,
-                    onBack = { navController.popBackStack() },
-                    contentPadding = contentPadding,
-                )
+                composable(Routes.SPLIT_TUNNEL) {
+                    SplitTunnelScreen(
+                        settings = state.settings,
+                        onUpdate = viewModel::updateSettings,
+                        onBack = { navController.popBackStack() },
+                        contentPadding = contentPadding,
+                    )
+                }
             }
         }
     }

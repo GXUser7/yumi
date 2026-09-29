@@ -28,6 +28,13 @@ serialization = "1.11.0"
 camerax = "1.6.1"
 zxing = "3.5.4"
 
+# Frosted glass behind the navigation pill. Compose has no backdrop blur of its own: a blur
+# modifier blurs the node it sits on, never what lies behind it. Haze records the screen into a
+# graphics layer and blurs the slice under each glass element (RenderEffect, Android 12+), falling
+# back to a plain tint below that. 1.7.x rather than 2.x: 2.0 is built with Kotlin 2.4, whose
+# metadata the 2.2 compiler bundled in AGP cannot read; 1.7.3 is 2.3, one step ahead, which it can.
+haze = "1.7.3"
+
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "splashscreen" }
@@ -53,6 +60,7 @@ androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.r
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }

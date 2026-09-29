@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.LogEntry
+import com.mydrop.vpn.ui.components.FrostBehindWindow
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
@@ -146,7 +147,10 @@ fun LogsScreen(
             AlertDialog(
                 onDismissRequest = { savedAs = null },
                 title = { Text(stringResource(R.string.logs_saved_title)) },
-                text = { Text(stringResource(R.string.logs_saved_text, name, TELEGRAM_FOR_LOGS)) },
+                text = {
+                    FrostBehindWindow()
+                    Text(stringResource(R.string.logs_saved_text, name, TELEGRAM_FOR_LOGS))
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         savedAs = null

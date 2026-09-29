@@ -35,8 +35,6 @@ import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,7 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -67,6 +65,8 @@ import com.mydrop.vpn.core.format.daysUntil
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.ui.MainUiState
+import com.mydrop.vpn.ui.components.FrostBehindWindow
+import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.format.formatBytes
@@ -154,12 +154,7 @@ private fun SubscriptionCard(
     onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
-    ) {
+    GlassCard(modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -310,21 +305,41 @@ private fun TrafficQuota(subscription: Subscription) {
 
 @Composable
 private fun RefreshButton(isRefreshing: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = !isRefreshing) {
+        if (isRefreshing) {
+            SpinningRefreshIcon()
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Autorenew,
+                contentDescription = stringResource(R.string.action_refresh),
+            )
+        }
+    }
+}
+
+/**
+ * The refresh glyph turning, for as long as it is on screen and no longer.
+ *
+ * Its own composable so the infinite transition exists only while a fetch does. It used to be
+ * created with the button and left running whether or not anything was refreshing, with the angle
+ * read during composition — so every card on this tab recomposed on every frame, forever, to
+ * rotate an icon by zero degrees. The angle is also read in the layer now rather than in
+ * composition, which turns each frame of the spin into a redraw instead of a recomposition.
+ */
+@Composable
+private fun SpinningRefreshIcon() {
     val infinite = rememberInfiniteTransition(label = "refresh")
-    val spin by infinite.animateFloat(
+    val spin = infinite.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(900, easing = { it }), RepeatMode.Restart),
         label = "spin",
     )
-
-    IconButton(onClick = onClick, enabled = !isRefreshing) {
-        Icon(
-            imageVector = Icons.Rounded.Autorenew,
-            contentDescription = stringResource(R.string.action_refresh),
-            modifier = Modifier.rotate(if (isRefreshing) spin else 0f),
-        )
-    }
+    Icon(
+        imageVector = Icons.Rounded.Autorenew,
+        contentDescription = stringResource(R.string.action_refresh),
+        modifier = Modifier.graphicsLayer { rotationZ = spin.value },
+    )
 }
 
 /** Sheet for adding a subscription by URL, or importing anything pasted from the clipboard. */
@@ -342,7 +357,14 @@ fun AddSubscriptionSheet(
     var name by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf(AddKind.Auto) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // Frosted rather than solid: the sheet is its own window, so the blur is the compositor's
+        // (see FrostBehindWindow), and the pane lets a little of it through.
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.92f),
+    ) {
+        FrostBehindWindow()
         Column(
             modifier = Modifier
                 .fillMaxWidth()

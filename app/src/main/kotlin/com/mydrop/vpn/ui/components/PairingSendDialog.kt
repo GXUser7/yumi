@@ -43,6 +43,7 @@ fun PairingSendDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.pairing_send_title)) },
         text = {
+            FrostBehindWindow()
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     stringResource(R.string.pairing_send_target, invite.deviceName.ifBlank { invite.host }),

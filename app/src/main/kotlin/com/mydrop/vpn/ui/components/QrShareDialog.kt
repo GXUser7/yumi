@@ -43,6 +43,7 @@ fun QrShareDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
+            FrostBehindWindow()
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),

@@ -38,4 +38,7 @@ dependencies {
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
     implementation(libs.androidx.graphics.shapes)
+    // api rather than implementation: the glass modifiers wrap Haze's, and a consumer compiling
+    // against a signature that mentions one of its types has to be able to see it.
+    api(libs.haze)
 }
