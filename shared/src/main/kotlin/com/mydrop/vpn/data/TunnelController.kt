@@ -67,6 +67,16 @@ interface TunnelController {
     fun selectOutbound(node: ProxyNode): Boolean = false
 
     /**
+     * Moves the tunnel onto one member of the group it is on, without saying the server changed:
+     * as far as the user and the rest of the app are concerned it is still on the same server, and
+     * only the road inside it moved. See [com.mydrop.vpn.core.model.NodeGroup].
+     *
+     * [member] is one of the group's [com.mydrop.vpn.core.model.dialed] members, under the id the
+     * core knows it by. False when it could not be done, and then nothing moved.
+     */
+    fun pinMember(member: ProxyNode): Boolean = false
+
+    /**
      * Times a request through each of [nodes] and answers in milliseconds, keyed by node id.
      *
      * The measurement the app cannot make for itself. Everything it can reach from the phone

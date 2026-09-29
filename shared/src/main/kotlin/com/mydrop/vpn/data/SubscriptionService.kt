@@ -74,6 +74,9 @@ class SubscriptionService(
         const val READ_TIMEOUT_MILLIS = 30_000
         const val MAX_REDIRECTS = 5
         const val MAX_BODY_BYTES = 8L * 1024 * 1024
+
+        /** A panel's subscription link: one opaque id as the whole path, as Remnawave writes them. */
+        val PANEL_LINK_PATH = Regex("^/[A-Za-z0-9_-]{8,64}/?$")
     }
 
     suspend fun fetch(subscription: Subscription): SubscriptionUpdate = withContext(Dispatchers.IO) {
@@ -141,12 +144,18 @@ class SubscriptionService(
                     )
                 }
 
+                // The same subscription as Xray documents, when this list flattened the provider's
+                // auto-select servers into their last resort; see autoSelectVariant.
+                val nodes = autoSelectVariant(subscription, body.nodes) ?: body.nodes
+
                 // Refused here rather than left to fail at connect time. A protocol the core
                 // cannot speak makes a row that looks like every other row, pings like every other
                 // row and carries nothing — and the user is left comparing servers to work out
-                // which of them is the broken one.
-                val refused = body.nodes.mapNotNull(XrayConfigFactory::unsupported)
-                val carried = body.nodes.filter { XrayConfigFactory.unsupported(it) == null }
+                // which of them is the broken one. A group keeps whichever members it can carry.
+                val carried = nodes.mapNotNull(XrayConfigFactory::carriable)
+                val refused = nodes
+                    .filter { XrayConfigFactory.carriable(it) == null }
+                    .mapNotNull(XrayConfigFactory::unsupported)
 
                 logs.info(
                     R.string.log_subscription_received,
@@ -199,6 +208,45 @@ class SubscriptionService(
             is SubscriptionBody.Empty ->
                 SubscriptionUpdate.Failure(subscription.id, strings.get(body.reason.messageRes))
         }
+    }
+
+    /**
+     * The subscription again, asked for as Xray documents, when the list it answered with cannot
+     * hold what the provider actually offers.
+     *
+     * A share link is one server. A provider's auto-select server is several — a balancer over
+     * candidates, see [com.mydrop.vpn.core.model.NodeGroup] — and a panel asked for links flattens
+     * it into one of them, the balancer's last resort. Which format a panel answers with is decided
+     * by the User-Agent, and this app's is not one a panel knows; the provider's own client is
+     * handed the documents and this app was handed the flattened list. The journal showed the
+     * result: "LTE Авто" servers that carried nothing here and worked there.
+     *
+     * Remnawave, which is what hands out links shaped like `https://host/<id>`, serves the same
+     * subscription in a named format under a suffix, and `json` is Xray's. So a list of links from
+     * such an address is followed by one more request for that, and its answer replaces the list
+     * only when it is plainly the better one: it has to parse, to carry at least one auto-select
+     * server, and to be no shorter than half the list — a panel that answered the suffix with
+     * something else entirely must not empty the server list. Otherwise nothing changes.
+     */
+    private fun autoSelectVariant(subscription: Subscription, links: List<ProxyNode>): List<ProxyNode>? {
+        if (links.any { it.group != null }) return null
+        val url = runCatching { URL(subscription.url) }.getOrNull() ?: return null
+        if (url.query != null || !PANEL_LINK_PATH.matches(url.path.orEmpty())) return null
+
+        val variant = subscription.url.trimEnd('/') + "/json"
+        val response = runCatching { fetch(variant, subscription) }.getOrNull() ?: return null
+        if (response.code !in 200..299) return null
+        val body = SubscriptionParser.parse(response.body, subscription.id) as? SubscriptionBody.Nodes
+            ?: return null
+        val nodes = body.nodes.filterNot { it.isPlaceholder() }
+        val groups = nodes.count { it.group != null }
+        logs.trace(
+            "YumiSub",
+            "${subscription.name}: ${links.size} links, the json variant has ${nodes.size} " +
+                "servers of which $groups auto-select",
+        )
+        if (groups == 0 || nodes.size < links.size / 2) return null
+        return nodes
     }
 
     private data class Response(

@@ -4,6 +4,8 @@ import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.dialed
+import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.TlsOptions
@@ -152,6 +154,29 @@ object XrayConfigFactory {
     }
 
     /**
+     * [node] as far as the core can carry it: a group without the members it cannot, the lone
+     * member of a group that had only one it could, and null when nothing is left to dial.
+     *
+     * Asked at import in place of [unsupported], which reads a group as its first member and would
+     * refuse a whole group for one member it cannot carry — or keep one whose first member it can,
+     * with the rest waiting to sink the document the moment the group is selected.
+     */
+    fun carriable(node: ProxyNode): ProxyNode? {
+        val group = node.group ?: return node.takeIf { unsupported(it) == null }
+        val members = group.members.filter { unsupported(it) == null }
+        return when {
+            members.isEmpty() -> null
+            members.size == group.members.size -> node
+            members.size == 1 -> members.single().copy(name = node.name)
+            else -> members.first().copy(
+                name = node.name,
+                sourceUri = null,
+                group = group.copy(members = members),
+            ).identified()
+        }
+    }
+
+    /**
      * @param nodes every server the balancer may move onto without the core being rebuilt. The
      *   caller decides what belongs here — the failover group, the mobile list — and anything
      *   [unsupported] rejects is skipped rather than allowed to sink the document.
@@ -183,16 +208,22 @@ object XrayConfigFactory {
             add(selected)
             addAll(nodes.filter { it.id != selected.id && unsupported(it) == null })
         }
+        // What the core is given: a group is every one of its members, each under a tag of its own,
+        // and the tunnel starts on the provider's first choice. Which member carries it after that
+        // is the watchdog's to decide, by measuring them (see GroupSelector).
+        val dialed = usable.flatMap { it.dialed() }.filter { unsupported(it) == null }
         val resolved = settings.withDnsOverride(dnsOverride)
 
         return Document(
             json = json.encodeToString(
                 JsonObject.serializer(),
-                buildConfig(usable, resolved, probe, geoAvailable),
+                buildConfig(dialed, resolved, probe, geoAvailable),
             ),
-            pinnedTag = nodeTag(selected.id),
+            pinnedTag = nodeTag(selected.dialed().first().id),
+            // The servers, not their members: this is what the tunnel can be moved onto, and a
+            // group is moved onto as one (XrayTunnelController.selectOutbound).
             nodeTags = usable.map { nodeTag(it.id) },
-            verificationForced = usable
+            verificationForced = dialed
                 .filter { node ->
                     val tls = node.tls
                     // A node that pins its certificate is not one that asked to skip the check —

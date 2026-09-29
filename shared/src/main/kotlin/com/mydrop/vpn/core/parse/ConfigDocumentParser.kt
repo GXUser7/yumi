@@ -1,5 +1,6 @@
 package com.mydrop.vpn.core.parse
 
+import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.identified
 import com.mydrop.vpn.core.model.ProxySettings
@@ -11,6 +12,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -74,10 +76,99 @@ object ConfigDocumentParser {
         val outbounds = document["outbounds"] as? JsonArray ?: return emptyList()
         val label = document.str("remarks")
 
-        return outbounds.mapNotNull { element ->
-            fromOutbound(element as? JsonObject ?: return@mapNotNull null, label, subscriptionId)
+        val tagged = outbounds.mapNotNull { element ->
+            val outbound = element as? JsonObject ?: return@mapNotNull null
+            val node = fromOutbound(outbound, label, subscriptionId) ?: return@mapNotNull null
+            outbound.str("tag").orEmpty() to node
         }
+        autoSelect(document, tagged, label)?.let { return listOf(it) }
+        return tagged.map { it.second }
     }
+
+    /**
+     * The document as one server of several, when it is an auto-select document: a balancer over
+     * its outbounds, choosing among them the way the provider set it to. See [NodeGroup] for what
+     * reading it as a plain list of outbounds cost.
+     *
+     * The members are the balancer's own candidates — its `selector` matches tags by prefix, as the
+     * core's does — in the provider's order of preference, and its `fallbackTag` last, because that
+     * is what the provider made it: the server to use when nothing better answers. Outbounds no
+     * balancer names are left out of the group; no route in the document could reach them either.
+     *
+     * Null for anything that is not a choice between at least two servers, which leaves the
+     * document to be read the ordinary way.
+     */
+    private fun autoSelect(
+        document: JsonObject,
+        tagged: List<Pair<String, ProxyNode>>,
+        label: String?,
+    ): ProxyNode? {
+        if (tagged.size < 2) return null
+        val routing = document["routing"] as? JsonObject ?: return null
+        val balancers = (routing["balancers"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+        for (balancer in balancers) {
+            val selector = (balancer["selector"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNullSafe() }
+                .orEmpty()
+            val chosen = tagged.filter { (tag, _) -> tag.isNotEmpty() && selector.any { tag.startsWith(it) } }
+            val fallbackTag = balancer.str("fallbackTag")
+            val fallback = tagged.firstOrNull { it.first.isNotEmpty() && it.first == fallbackTag }
+                ?.takeIf { it !in chosen }
+
+            val strategy = balancer["strategy"] as? JsonObject
+            val type = strategy?.str("type")?.lowercase().orEmpty()
+            val options = strategy?.get("settings") as? JsonObject
+            val costs = (options?.get("costs") as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+            // Stable, so candidates the costs do not tell apart keep the order they were written in.
+            val ordered = if (costs.isNotEmpty()) chosen.sortedBy { (tag, _) -> costOf(costs, tag) } else chosen
+
+            val members = (ordered + listOfNotNull(fallback)).map { it.second }.distinctBy { it.id }
+            if (members.size < 2) continue
+            val first = members.first()
+            return first.copy(
+                name = label?.takeIf { it.isNotBlank() } ?: first.name,
+                // No link says "these seven, chosen this way"; sharing it as its first member's
+                // link would hand somebody a different server under the same name.
+                sourceUri = null,
+                group = NodeGroup(
+                    members = members,
+                    strategy = if (type == "leastping") NodeGroup.STRATEGY_FASTEST else NodeGroup.STRATEGY_COST,
+                    maxDelayMillis = durationMillis(options?.str("maxRTT")),
+                ),
+            ).identified()
+        }
+        return null
+    }
+
+    /**
+     * What a `leastLoad` cost list charges for [tag]: the first entry that matches it, as the core
+     * reads them — a regular expression when `regexp` says so, a plain substring otherwise.
+     * Unmatched costs nothing, which is also the core's reading.
+     */
+    private fun costOf(costs: List<JsonObject>, tag: String): Double =
+        costs.firstOrNull { cost ->
+            val match = cost.str("match") ?: return@firstOrNull false
+            if (cost.bool("regexp")) {
+                runCatching { Regex(match).containsMatchIn(tag) }.getOrDefault(false)
+            } else {
+                tag.contains(match)
+            }
+        }?.let { (it["value"] as? JsonPrimitive)?.doubleOrNull } ?: 0.0
+
+    /** A Go duration as the core writes it — `2s`, `1500ms`, `1m` — in milliseconds; 0 if unreadable. */
+    private fun durationMillis(value: String?): Int {
+        val match = value?.trim()?.let { DURATION.matchEntire(it) } ?: return 0
+        val amount = match.groupValues[1].toDoubleOrNull() ?: return 0
+        val scale = when (match.groupValues[2]) {
+            "ms" -> 1.0
+            "s" -> 1_000.0
+            "m" -> 60_000.0
+            else -> return 0
+        }
+        return (amount * scale).toInt().coerceAtLeast(0)
+    }
+
+    private val DURATION = Regex("""(\d+(?:\.\d+)?)(ms|s|m)""")
 
     /**
      * One outbound, whichever dialect it is written in.

@@ -21,6 +21,11 @@ data class ProxyNode(
     val subscriptionId: String? = null,
     /** The URI this node was parsed from, kept so the node can be re-shared losslessly. */
     val sourceUri: String? = null,
+    /**
+     * Set for a server that is really several, as a provider's auto-select document describes it;
+     * the fields above are then its first member's. See [NodeGroup].
+     */
+    val group: NodeGroup? = null,
 ) {
     val protocol: Protocol get() = settings.protocol
 
@@ -29,6 +34,8 @@ data class ProxyNode(
     /** Badges shown under the server name: protocol details that actually change behaviour. */
     val badges: List<String>
         get() = buildList {
+            // First, because it changes what every other badge describes: only the first member.
+            group?.let { add("Auto ×${it.members.size}") }
             (settings as? ProxySettings.Raw)?.declaredType
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { add(it) }
@@ -64,6 +71,17 @@ data class ProxyNode(
         fun stableId(node: ProxyNode): String {
             val scope = node.subscriptionId ?: "manual"
             val settings = node.settings
+            // A group is its members, not its first one. Seeded like the rest it would be its first
+            // member's twin, and the same outbound listed alone elsewhere in the subscription would
+            // then collide with it and one of the two would vanish from the list.
+            node.group?.let { group ->
+                val seed = buildString {
+                    append(scope).append("|group|")
+                    group.members.forEach { append(it.id).append(',') }
+                }
+                val digest = MessageDigest.getInstance("SHA-256").digest(seed.toByteArray())
+                return digest.take(12).joinToString("") { "%02x".format(it) }
+            }
             val seed = buildString {
                 append(scope).append('|')
                 append(settings.protocol.name).append('|')

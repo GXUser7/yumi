@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
@@ -749,5 +750,50 @@ class XrayConfigFactoryTest {
         assertTrue(config["inbounds"] is JsonArray)
         assertTrue(config["outbounds"] is JsonArray)
         assertTrue(config["log"]!!.jsonObject["loglevel"]!!.jsonPrimitive is JsonPrimitive)
+    }
+
+    // ------------------------------------------------------------------ Groups
+
+    /**
+     * A group is every member under a tag of its own, the tunnel starts on the first, and a member
+     * that is also listed alone does not produce a second outbound with the same tag — which the
+     * core refuses, taking every other server with it.
+     */
+    @Test
+    fun `a group is all its members, pinned to the first, with no tag twice`() {
+        val first = node(id = "m1", server = "a.example")
+        val second = node(id = "m2", server = "b.example")
+        val group = node(id = "g", name = "Auto").copy(group = NodeGroup(listOf(first, second)))
+        val alone = node(id = "m2", server = "b.example")
+
+        val document = XrayConfigFactory.build(
+            nodes = listOf(group, alone),
+            selected = group,
+            settings = settings,
+        )
+        val config = Json.parseToJsonElement(document.json).jsonObject
+        val tags = config.outbounds().mapNotNull { it["tag"]?.jsonPrimitive?.content }
+
+        assertEquals(tags.size, tags.toSet().size)
+        assertTrue(XrayConfigFactory.nodeTag("g-0") in tags)
+        assertTrue(XrayConfigFactory.nodeTag("g-1") in tags)
+        assertTrue(XrayConfigFactory.nodeTag("m2") in tags)
+        assertEquals(XrayConfigFactory.nodeTag("g-0"), document.pinnedTag)
+        assertEquals(XrayConfigFactory.nodeTag("g"), document.nodeTags.first())
+        assertTrue("a.example" in config.outboundNamed(XrayConfigFactory.nodeTag("g-0")).toString())
+    }
+
+    @Test
+    fun `a group keeps the members the core can carry and drops the ones it cannot`() {
+        val carried = node(id = "m1", server = "a.example")
+        val refused = node(id = "m2", server = "b.example", settings = ProxySettings.Tuic(uuid = "u", password = "p"))
+        val group = node(id = "g", name = "Auto").copy(group = NodeGroup(listOf(carried, refused)))
+
+        val result = XrayConfigFactory.carriable(group)
+
+        assertNotNull(result)
+        assertNull(result!!.group)
+        assertEquals("a.example", result.server)
+        assertEquals("Auto", result.name)
     }
 }

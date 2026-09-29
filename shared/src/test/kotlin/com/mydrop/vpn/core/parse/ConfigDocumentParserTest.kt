@@ -1,5 +1,6 @@
 package com.mydrop.vpn.core.parse
 
+import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProxySettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -152,5 +153,95 @@ class ConfigDocumentParserTest {
         val nodes = ConfigDocumentParser.parse(document, null)
         assertEquals(listOf("good", "good-2"), nodes.map { it.name })
         assertNull(nodes.firstOrNull { it.name == "broken" })
+    }
+
+    /**
+     * The shape a provider hands its own client for an auto-select server, cut down from a real
+     * one: a balancer over candidates with a cost each, the dead last resort as its fallback. Read
+     * as plain outbounds this became the fallback alone, which the server refused.
+     */
+    private val autoSelect = """
+        {
+          "remarks": "LTE Авто - Германия #2",
+          "outbounds": [
+            {
+              "tag": "cand-01-aaa", "protocol": "vless",
+              "settings": {"vnext": [{"address": "10.0.0.1", "port": 443,
+                "users": [{"id": "11111111-2222-3333-4444-000000000001", "encryption": "none"}]}]},
+              "streamSettings": {"network": "grpc", "security": "tls",
+                "grpcSettings": {"serviceName": "x5.lk.v1.AccountService"},
+                "tlsSettings": {"serverName": "lk.x5.ru", "fingerprint": "qq"}}
+            },
+            {
+              "tag": "cand-03-ccc", "protocol": "vless",
+              "settings": {"vnext": [{"address": "10.0.0.3", "port": 443,
+                "users": [{"id": "11111111-2222-3333-4444-000000000003", "encryption": "none"}]}]},
+              "streamSettings": {"network": "grpc", "security": "tls",
+                "grpcSettings": {"serviceName": "segment"},
+                "tlsSettings": {"serverName": "river-3-329.rtbcdn.ru", "fingerprint": "qq"}}
+            },
+            {
+              "tag": "cand-02-bbb", "protocol": "vless",
+              "settings": {"vnext": [{"address": "10.0.0.2", "port": 60443,
+                "users": [{"id": "11111111-2222-3333-4444-000000000002", "encryption": "none",
+                           "flow": "xtls-rprx-vision"}]}]},
+              "streamSettings": {"network": "tcp", "security": "reality",
+                "realitySettings": {"serverName": "de.example.ru", "publicKey": "PUBKEY",
+                                    "shortId": "43dc", "fingerprint": "qq"}}
+            },
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "block"}
+          ],
+          "routing": {
+            "domainStrategy": "IPIfNonMatch",
+            "balancers": [{
+              "tag": "bal_price",
+              "selector": ["cand-02-bbb", "cand-03-ccc"],
+              "fallbackTag": "cand-01-aaa",
+              "strategy": {"type": "leastLoad", "settings": {
+                "costs": [
+                  {"match": "cand-02-bbb", "regexp": false, "value": 0},
+                  {"match": "cand-03-ccc", "regexp": false, "value": 100000}
+                ],
+                "maxRTT": "2s"
+              }}
+            }]
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun `an auto-select document becomes one server of several, cheapest first and fallback last`() {
+        val nodes = ConfigDocumentParser.parse(autoSelect, "sub-1")
+
+        assertEquals(1, nodes.size)
+        val node = nodes.single()
+        assertEquals("LTE Авто - Германия #2", node.name)
+        val group = assertNotNullGroup(node)
+        // By cost, whatever order they were written in, and the balancer's last resort after them.
+        assertEquals(listOf("10.0.0.2", "10.0.0.3", "10.0.0.1"), group.members.map { it.server })
+        assertEquals(NodeGroup.STRATEGY_COST, group.strategy)
+        assertEquals(2_000, group.maxDelayMillis)
+        // The node wears its first member, so the list and the ping read it as that server.
+        assertEquals("10.0.0.2", node.server)
+        assertEquals(60443, node.port)
+        // A group is not its first member: listed alone too, the two must not collide.
+        assertTrue(group.members.none { it.id == node.id })
+        assertNull(node.sourceUri)
+    }
+
+    @Test
+    fun `several outbounds without a balancer are still several servers`() {
+        val withoutBalancer = autoSelect.replace("\"balancers\"", "\"unused\"")
+        val nodes = ConfigDocumentParser.parse(withoutBalancer, "sub-1")
+
+        assertEquals(3, nodes.size)
+        assertTrue(nodes.all { it.group == null })
+    }
+
+    private fun assertNotNullGroup(node: com.mydrop.vpn.core.model.ProxyNode): NodeGroup {
+        val group = node.group
+        assertTrue("expected a group", group != null)
+        return group!!
     }
 }

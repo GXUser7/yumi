@@ -6,6 +6,7 @@ import android.net.VpnService
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.xray.XrayConfigFactory
@@ -84,7 +85,10 @@ class XrayTunnelController(
      */
     override fun selectOutbound(node: ProxyNode): Boolean {
         if (state.value !is VpnState.Connected) return false
-        if (!XrayCore.selectOutbound(XrayConfigFactory.nodeTag(node.id))) return false
+        // A group is moved onto as one, landing on the provider's first choice; the watchdog
+        // measures its members straight after and moves inside it if that one is down.
+        val target = node.dialed().first()
+        if (!XrayCore.selectOutbound(XrayConfigFactory.nodeTag(target.id))) return false
         // Before returning, so nobody can observe a tunnel that has moved and a screen that has not.
         MyDropVpnService.noteNode(node.id, node.name)
         logs.trace(TAG, "switched to ${node.name} without restarting the core")
@@ -107,19 +111,32 @@ class XrayTunnelController(
      * once and returns when they have all answered or timed out, so there is no partial table to
      * mistake for a complete one.
      */
+    override fun pinMember(member: ProxyNode): Boolean {
+        if (state.value !is VpnState.Connected) return false
+        return XrayCore.selectOutbound(XrayConfigFactory.nodeTag(member.id))
+    }
+
     override suspend fun measureThroughTunnel(nodes: List<ProxyNode>): Map<String, Int> {
         if (state.value !is VpnState.Connected || nodes.isEmpty()) return emptyMap()
 
-        val byTag = nodes.associateBy { XrayConfigFactory.nodeTag(it.id) }
-        val delays = withContext(Dispatchers.IO) {
-            XrayCore.measureOutbounds(byTag.keys, MEASURE_TIMEOUT_MILLIS)
-        }
-        return delays.mapNotNull { (tag, millis) ->
-            // Negative means asked and did not answer, which is a different fact from not measured
-            // — and it has to stay absent rather than become a number, or a server that answered
-            // nothing would be chosen for answering instantly.
-            byTag[tag]?.takeIf { millis > 0 }?.let { it.id to millis }
+        // Every outbound the core holds for these nodes, and whose it is: a group has no outbound
+        // of its own, only its members', and answers for the best of them — it is as good as the
+        // road the watchdog would move it onto.
+        val owners = nodes.flatMap { node ->
+            node.dialed().map { XrayConfigFactory.nodeTag(it.id) to node.id }
         }.toMap()
+        val delays = withContext(Dispatchers.IO) {
+            XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS)
+        }
+        return delays.entries
+            .mapNotNull { (tag, millis) ->
+                // Negative means asked and did not answer, which is a different fact from not
+                // measured — and it has to stay absent rather than become a number, or a server that
+                // answered nothing would be chosen for answering instantly.
+                owners[tag]?.takeIf { millis > 0 }?.let { it to millis }
+            }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, measured) -> measured.min() }
     }
 
     override fun disconnect() {

@@ -57,6 +57,8 @@ class FailoverWatchdog(
     private val logs: LogRepository,
     private val alerts: AlertNotifier,
     private val scope: CoroutineScope,
+    /** Which member of a group carries the tunnel; see [GroupSelector]. */
+    private val groups: GroupSelector = GroupSelector(tunnel, logs),
 ) {
 
     private var watching: Job? = null
@@ -487,6 +489,13 @@ class FailoverWatchdog(
             launch { tunnel.handovers.collect { nudges.trySend(Nudge.Handover(it)) } }
             launch { tunnel.wakeups.collect { nudges.trySend(Nudge.Awake) } }
 
+            // A group's members are measured straight away rather than after the grace. The core
+            // starts on the provider's first choice, and that one being down is exactly what a
+            // group exists to route around; the grace is there to spare probes a settling core,
+            // and this is not a probe of the tunnel but a choice of road inside it.
+            groups.tunnelRestarted()
+            profiles.selectedNode()?.takeIf { it.group != null }?.let { groups.choose(it, "connected") }
+
             // Subscribed before the grace, not after it. These flows have no replay, so fifteen
             // seconds of listening to nothing meant every network change in the first fifteen
             // seconds of a tunnel was lost — and the first fifteen seconds, right after a switch
@@ -566,6 +575,12 @@ class FailoverWatchdog(
                         null -> Unit
                     }
                 }
+                // Looked at on the provider's schedule whatever the failover switch says: choosing
+                // among a group's members is how that one server works, not a move to another one.
+                profiles.selectedNode()
+                    ?.takeIf { it.group != null && tunnel.hasNetwork.value && groups.due(it) }
+                    ?.let { groups.choose(it, "scheduled") }
+
                 if (!settings.value.autoFailover) {
                     failures = 0
                     continue
@@ -659,7 +674,15 @@ class FailoverWatchdog(
                 }
 
                 failures = if (alive || vetoed) 0 else failures + 1
-                if (firstProbe) firstProbeFailed = !alive && !vetoed
+                // A group whose member stopped carrying traffic is not a dead server while another
+                // member answers: the road moves inside it, and the count starts again. Only when no
+                // member answers does the failure count towards leaving it for another server.
+                if (failures > 0 && current.group != null &&
+                    groups.choose(current, "probe failed", avoidPinned = true)
+                ) {
+                    failures = 0
+                }
+                if (firstProbe) firstProbeFailed = failures > 0
                 if (!alive && failures < FailoverPolicy.FAILURES_BEFORE_SWAP) {
                     logs.debug(
                         // Two different diagnoses, and telling them apart is most of the value of
