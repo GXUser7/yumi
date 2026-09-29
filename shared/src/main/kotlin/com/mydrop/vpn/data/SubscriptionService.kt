@@ -77,6 +77,13 @@ class SubscriptionService(
 
         /** A panel's subscription link: one opaque id as the whole path, as Remnawave writes them. */
         val PANEL_LINK_PATH = Regex("^/[A-Za-z0-9_-]{8,64}/?$")
+
+        /**
+         * Appended to this app's own agent when asking for Xray documents; see [autoSelectVariant].
+         * The name of a client panels already hand documents to, said the way browsers have long
+         * said `Mozilla/5.0 (compatible; …)`: this app still names itself first.
+         */
+        const val DOCUMENTS_AGENT_SUFFIX = " (compatible; Happ)"
     }
 
     suspend fun fetch(subscription: Subscription): SubscriptionUpdate = withContext(Dispatchers.IO) {
@@ -212,7 +219,8 @@ class SubscriptionService(
 
     /**
      * The subscription again, asked for as Xray documents, when the list it answered with cannot
-     * hold what the provider actually offers.
+     * hold what the provider actually offers — and the auto-select servers from that answer put in
+     * the places their flattened links held.
      *
      * A share link is one server. A provider's auto-select server is several — a balancer over
      * candidates, see [com.mydrop.vpn.core.model.NodeGroup] — and a panel asked for links flattens
@@ -221,32 +229,58 @@ class SubscriptionService(
      * handed the documents and this app was handed the flattened list. The journal showed the
      * result: "LTE Авто" servers that carried nothing here and worked there.
      *
-     * Remnawave, which is what hands out links shaped like `https://host/<id>`, serves the same
-     * subscription in a named format under a suffix, and `json` is Xray's. So a list of links from
-     * such an address is followed by one more request for that, and its answer replaces the list
-     * only when it is plainly the better one: it has to parse, to carry at least one auto-select
-     * server, and to be no shorter than half the list — a panel that answered the suffix with
-     * something else entirely must not empty the server list. Otherwise nothing changes.
+     * Two ways of asking are tried, in order. Remnawave serves a named format under a suffix of a
+     * link shaped like `https://host/<id>`, and `json` is Xray's. Not every panel behind such a link
+     * does: Quattro's answered the suffix with a 404 and chose by the agent alone, handing documents
+     * to any agent that mentions Happ, Streisand, INCY or v2raytun — Remnawave's own default
+     * response rules — and links to everyone else, this app included. So the second request is the
+     * link itself with [DOCUMENTS_AGENT_SUFFIX] after this app's name, unless the user set an agent
+     * of their own, which is theirs to choose.
+     *
+     * Only the groups are taken from the documents, never the list. The same answer wrote Quattro's
+     * Hysteria2 servers as Xray `hysteria` outbounds, which this parser does not read; taking the
+     * documents whole would have quietly removed the servers a friend's phone was riding. A group
+     * replaces the link of the same name, which keeps its row, its place and — through the name —
+     * the selection; a group no link is named after is added at the end. A document without a
+     * group, a request that fails, or an answer that is not documents changes nothing.
      */
     private fun autoSelectVariant(subscription: Subscription, links: List<ProxyNode>): List<ProxyNode>? {
         if (links.any { it.group != null }) return null
         val url = runCatching { URL(subscription.url) }.getOrNull() ?: return null
-        if (url.query != null || !PANEL_LINK_PATH.matches(url.path.orEmpty())) return null
 
-        val variant = subscription.url.trimEnd('/') + "/json"
-        val response = runCatching { fetch(variant, subscription) }.getOrNull() ?: return null
-        if (response.code !in 200..299) return null
-        val body = SubscriptionParser.parse(response.body, subscription.id) as? SubscriptionBody.Nodes
-            ?: return null
-        val nodes = body.nodes.filterNot { it.isPlaceholder() }
-        val groups = nodes.count { it.group != null }
-        logs.trace(
-            "YumiSub",
-            "${subscription.name}: ${links.size} links, the json variant has ${nodes.size} " +
-                "servers of which $groups auto-select",
-        )
-        if (groups == 0 || nodes.size < links.size / 2) return null
-        return nodes
+        val variants = buildList {
+            if (url.query == null && PANEL_LINK_PATH.matches(url.path.orEmpty())) {
+                add(Triple("suffix", subscription.url.trimEnd('/') + "/json", subscription))
+            }
+            if (subscription.userAgentOverride == null) {
+                val asking = subscription.copy(userAgentOverride = userAgent + DOCUMENTS_AGENT_SUFFIX)
+                add(Triple("agent", subscription.url, asking))
+            }
+        }
+        for ((how, variantUrl, asking) in variants) {
+            val response = runCatching { fetch(variantUrl, asking) }.getOrNull()
+            val body = response?.takeIf { it.code in 200..299 }
+                ?.let { SubscriptionParser.parse(it.body, subscription.id) }
+            val groups = (body as? SubscriptionBody.Nodes)?.nodes.orEmpty().filter { it.group != null }
+            logs.trace(
+                "YumiSub",
+                "${subscription.name}: documents by $how: " + when {
+                    response == null -> "no answer"
+                    response.code !in 200..299 -> "HTTP ${response.code}"
+                    body !is SubscriptionBody.Nodes -> "not a server list"
+                    else -> "${body.nodes.size} servers, ${groups.size} auto-select"
+                },
+            )
+            if (groups.isNotEmpty()) return withGroups(links, groups)
+        }
+        return null
+    }
+
+    /** [links] with each of [groups] in the place of the link named after it; see [autoSelectVariant]. */
+    private fun withGroups(links: List<ProxyNode>, groups: List<ProxyNode>): List<ProxyNode> {
+        val byName = groups.associateBy { it.name }
+        val names = links.mapTo(HashSet()) { it.name }
+        return links.map { link -> byName[link.name] ?: link } + groups.filter { it.name !in names }
     }
 
     private data class Response(
