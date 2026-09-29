@@ -644,6 +644,25 @@ class XrayConfigFactoryTest {
         )
     }
 
+    /**
+     * YouTube's video nodes sit inside Russian networks and `geoip:ru` sent one direct, where it
+     * hung. Its names have to be matched, and sent to the proxy, before the country rules are.
+     */
+    @Test
+    fun `the rules mode keeps youtube on the proxy ahead of the ru rules`() {
+        val config = build(node(), settings = settings.copy(routingMode = RoutingMode.Rules))
+        val rules = config.rules()
+        val youtube = rules.indexOfFirst { rule ->
+            rule["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:googlevideo.com" } == true
+        }
+        val ruByAddress = rules.indexOfFirst { rule ->
+            rule["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "geoip:ru" } == true
+        }
+        assertTrue(youtube >= 0)
+        assertTrue(youtube < ruByAddress)
+        assertEquals(XrayConfigFactory.BALANCER_TAG, rules[youtube]["balancerTag"]?.jsonPrimitive?.content)
+    }
+
     /** The LAN ranges are spelled out so reaching the router never waits on a 23 MB download. */
     @Test
     fun `bypassing the lan does not depend on the geo databases`() {

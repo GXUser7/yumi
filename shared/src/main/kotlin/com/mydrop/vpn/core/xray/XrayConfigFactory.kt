@@ -902,6 +902,32 @@ object XrayConfigFactory {
     private val CARRIER_INTERNAL_DOMAINS = listOf("domain:3gppnetwork.org")
 
     /**
+     * Names the rules mode sends through the proxy even when their address is Russian.
+     *
+     * `geoip:ru` decides by where an *address* is registered, and some of what is throttled here
+     * is served from inside the country. YouTube's video comes from Google Global Cache nodes that
+     * Google places in Russian providers' networks: a journal shows
+     * `rr1---sn-4g5ednld.googlevideo.com` resolving to 173.194.182.102, which the database files
+     * under RU, and the rule taking it `direct` — where the TLS handshake hung until the player
+     * gave up, every retry, because every retry was sent to the same node. Even an open road would
+     * not have played: the stream's URL is signed for the address the player asked from, which is
+     * the proxy's. The node next to it, 173.194.187.170, went through the proxy and played.
+     *
+     * `domainStrategy` is `IPIfNonMatch`, so a name that matches here is routed on the name and
+     * never resolved for the country rules; with sniffing on, that holds for connections the
+     * application opened by address too.
+     */
+    private val PROXIED_DESPITE_RU_ADDRESS = listOf(
+        "domain:googlevideo.com",
+        "domain:youtube.com",
+        "domain:youtu.be",
+        "domain:ytimg.com",
+        "domain:ggpht.com",
+        "domain:youtube-nocookie.com",
+        "domain:youtubei.googleapis.com",
+    )
+
+    /**
      * The resolver this tunnel advertises to applications, and the one address the core answers
      * for whatever the hijack setting says.
      *
@@ -1088,6 +1114,13 @@ object XrayConfigFactory {
                     // proxy. Saying so by omission rather than by an unresolvable rule is the whole
                     // point — the alternative is a configuration the core refuses to load.
                     RoutingMode.Rules -> if (geoAvailable) {
+                        // Before the country rules, by name, so the address is never asked about;
+                        // see [PROXIED_DESPITE_RU_ADDRESS].
+                        addJsonObject {
+                            put("type", "field")
+                            putJsonArray("domain") { PROXIED_DESPITE_RU_ADDRESS.forEach { add(it) } }
+                            put("balancerTag", BALANCER_TAG)
+                        }
                         addJsonObject {
                             put("type", "field")
                             putJsonArray("domain") { add("geosite:category-ru") }
