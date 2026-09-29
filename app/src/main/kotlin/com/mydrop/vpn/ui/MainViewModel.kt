@@ -262,6 +262,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     // ------------------------------------------------------------- Tunnel
 
     fun toggleConnection() {
+        // A tap on a control that is busy stopping is not a request to start again. `isActive` is
+        // false while disconnecting, so the tap used to fall through to connect: an impatient
+        // second press on "Отключение…" put the tunnel straight back up behind the stop.
+        if (uiState.value.vpnState is VpnState.Disconnecting) return
         if (uiState.value.vpnState.isActive) {
             container.tunnelLauncher.disconnect()
             return
@@ -341,7 +345,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
-        container.tunnelLauncher.connectTo(node, "vpn consent granted")
+        container.tunnelLauncher.connectTo(node, "routing mode changed")
         emit(R.string.message_routing_applied, strings.get(mode.labelRes))
     }
 
@@ -381,16 +385,35 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    private var pingAllJob: Job? = null
+
+    /**
+     * Measures every server, one sweep at a time.
+     *
+     * A second press while a sweep is running is ignored rather than starting another one beside
+     * it: the button is a FAB that stays under the thumb, and two sweeps meant twice the probes
+     * against every server, results landing out of order, and the first sweep's end clearing the
+     * spinners of the second while it was still measuring.
+     *
+     * Only this sweep's ids are cleared at the end, so a single server being measured from its own
+     * menu keeps its spinner until its own answer arrives.
+     */
     fun pingAll() {
+        if (pingAllJob?.isActive == true) return
         val nodes = container.profiles.nodes
         if (nodes.isEmpty()) return
-        viewModelScope.launch {
-            transient.update { it.copy(pingingNodeIds = nodes.map { n -> n.id }.toSet()) }
-            container.latencyTester.measureAll(nodes, container.settings.value.pingMode) { result ->
-                container.profiles.recordLatency(result)
-                transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - result.nodeId) }
+        val ids = nodes.map { it.id }.toSet()
+        pingAllJob = viewModelScope.launch {
+            transient.update { it.copy(pingingNodeIds = it.pingingNodeIds + ids) }
+            try {
+                val mode = container.settings.value.pingMode
+                container.latencyTester.measureAll(nodes, mode) { result ->
+                    container.profiles.recordLatency(result)
+                    transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - result.nodeId) }
+                }
+            } finally {
+                transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - ids) }
             }
-            transient.update { it.copy(pingingNodeIds = emptySet()) }
             emit(R.string.message_latency_done)
         }
     }
@@ -716,7 +739,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private fun applyDnsToRunningTunnel(name: String) {
         if (!uiState.value.vpnState.isActive) return
         val node = container.profiles.selectedNode() ?: return
-        container.tunnelLauncher.connectTo(node, "certificate flag changed")
+        container.tunnelLauncher.connectTo(node, "resolver changed")
         emit(R.string.message_dns_applied, name)
     }
 

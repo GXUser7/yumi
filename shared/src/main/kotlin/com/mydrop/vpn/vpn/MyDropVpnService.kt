@@ -126,6 +126,12 @@ class MyDropVpnService : VpnService() {
          */
         private const val DESTROY_LOCK_TIMEOUT_MILLIS = 5_000L
 
+        /** How often a core restarted after a handover is tried before the tunnel gives up. */
+        private const val RESTART_ATTEMPTS = 2
+
+        /** Long enough for the outgoing core to let go of its loopback ports. */
+        private const val RESTART_RETRY_MILLIS = 750L
+
         /** Advertised to applications; see [establishTunnel] for why the value does not matter. */
 
         /**
@@ -1190,6 +1196,21 @@ class MyDropVpnService : VpnService() {
      *
      * Rebuilding does more than the old call did: it also re-reads the configuration. That is
      * harmless here, and it is why this is a restart rather than a reconnect.
+     *
+     * Two things a server switch in [startTunnel] already did right and this restart did not.
+     *
+     * The counters are banked first. A restarted core counts from zero, exactly like a switched
+     * one, and without the banking every Wi-Fi/cellular handover walked the session figure on the
+     * connect screen back by whatever the tunnel had carried so far: the session total of a
+     * commute reset at every station.
+     *
+     * And a restart that fails is not left standing. The old core was already stopped by then, so
+     * a failed start meant no core at all behind a TUN that stayed up: every packet on the phone
+     * went into the interface and nothing read it, while the screen and the notification went on
+     * saying the tunnel was protected. With failover off — the default — nothing ever looked
+     * again. It is tried once more after a pause, which is what a loopback port still held by the
+     * outgoing core needs, and after that it fails the way a failed start does: said, on screen,
+     * with the reason.
      */
     private fun resetCoreNetwork() {
         val descriptor = tunDescriptor ?: return
@@ -1197,10 +1218,48 @@ class MyDropVpnService : VpnService() {
         scope.launch {
             tunnelLock.withLock {
                 if (!XrayCore.running) return@withLock
-                runCatching {
-                    XrayCore.stop()
-                    XrayCore.start(config.json, descriptor.fd, config.pinnedTag, ::protectSocket)
-                }.onFailure { logs.trace(NATIVE_TAG, "core restart after handover failed: ${it.message}") }
+
+                stopTrafficPolling()
+                carriedUploadBytes += lastUploadBytes
+                carriedDownloadBytes += lastDownloadBytes
+                lastUploadBytes = 0
+                lastDownloadBytes = 0
+
+                runCatching { XrayCore.stop() }
+                var attempt = 0
+                var failure: Throwable?
+                do {
+                    if (attempt > 0) delay(RESTART_RETRY_MILLIS)
+                    attempt++
+                    failure = runCatching {
+                        XrayCore.start(
+                            config.json,
+                            descriptor.fd,
+                            config.pinnedTag,
+                            ::protectSocket,
+                        )
+                    }.exceptionOrNull()
+                    if (failure != null) {
+                        logs.trace(
+                            NATIVE_TAG,
+                            "core restart after handover failed " +
+                                "(attempt $attempt): ${failure.message}",
+                        )
+                    }
+                } while (failure != null && attempt < RESTART_ATTEMPTS)
+
+                if (failure == null) {
+                    startTrafficPolling()
+                    return@withLock
+                }
+
+                val message = failure.message
+                    ?: failure::class.simpleName
+                    ?: strings.get(R.string.error_core_start_failed)
+                logs.error(R.string.log_start_failed, message)
+                android.util.Log.e("MyDropVpn", "core failed to restart after a handover", failure)
+                _state.value = VpnState.Failed(nodeId, message)
+                stopTunnel()
             }
         }
     }
