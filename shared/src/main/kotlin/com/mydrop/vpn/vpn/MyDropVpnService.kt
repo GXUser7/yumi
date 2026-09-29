@@ -126,18 +126,6 @@ class MyDropVpnService : VpnService() {
          */
         private const val DESTROY_LOCK_TIMEOUT_MILLIS = 5_000L
 
-        /**
-         * The addresses the tunnel carries.
-         *
-         * Arbitrary and private on purpose — nothing routes to them, and they exist so the
-         * interface has a family to install a default route for. The same pair the sing-box
-         * configuration used, kept so a phone upgrading across the port sees no change.
-         */
-        private const val TUN_ADDRESS_V4 = "172.19.0.1"
-        private const val TUN_PREFIX_V4 = 30
-        private const val TUN_ADDRESS_V6 = "fdfe:dcba:9876::1"
-        private const val TUN_PREFIX_V6 = 126
-
         /** Advertised to applications; see [establishTunnel] for why the value does not matter. */
 
         /**
@@ -1294,8 +1282,8 @@ class MyDropVpnService : VpnService() {
         builder.setSession(nodeName.ifEmpty { "Yumi" })
         builder.setMtu(settings.mtu)
 
-        builder.addAddress(TUN_ADDRESS_V4, TUN_PREFIX_V4)
-        builder.addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
+        builder.addAddress(XrayConfigFactory.TUN_ADDRESS_V4, XrayConfigFactory.TUN_PREFIX_V4)
+        builder.addAddress(XrayConfigFactory.TUN_ADDRESS_V6, XrayConfigFactory.TUN_PREFIX_V6)
         builder.addRoute("0.0.0.0", 0)
         builder.addRoute("::", 0)
 

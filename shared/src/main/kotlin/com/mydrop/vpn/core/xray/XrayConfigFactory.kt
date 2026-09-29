@@ -11,6 +11,7 @@ import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.TlsOptions
 import com.mydrop.vpn.core.model.TransportOptions
 import com.mydrop.vpn.core.net.isNumericAddress
+import java.net.InetAddress
 import com.mydrop.vpn.core.net.splitHostPort
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArrayBuilder
@@ -970,6 +971,21 @@ object XrayConfigFactory {
     const val TUN_DNS_V4 = "172.19.0.2"
 
     /**
+     * The addresses the service gives the tunnel's interface, and their prefixes.
+     *
+     * Arbitrary and private on purpose — nothing routes to them, and they exist so the interface
+     * has a family to install a default route for. The same pair the sing-box configuration used,
+     * kept so a phone upgrading across the port sees no change.
+     *
+     * Here rather than in the service for the reason [TUN_DNS_V4] is: [buildRouting] drops whatever
+     * is addressed to the subnet they make, and a subnet spelled in two files drifts.
+     */
+    const val TUN_ADDRESS_V4 = "172.19.0.1"
+    const val TUN_PREFIX_V4 = 30
+    const val TUN_ADDRESS_V6 = "fdfe:dcba:9876::1"
+    const val TUN_PREFIX_V6 = 126
+
+    /**
      * How long a flow may carry nothing before the core closes it, in seconds.
      *
      * Thirty minutes rather than the core's own five. See the `policy` block in [buildConfig] for
@@ -1079,6 +1095,34 @@ object XrayConfigFactory {
                     putJsonArray("ip") { add("$TUN_DNS_V4/32") }
                     put("port", "53")
                     put("outboundTag", DNS_TAG)
+                }
+
+                // Everything else addressed to the tunnel's own subnet is dropped, ahead of the LAN
+                // bypass, because sending it anywhere sends it round.
+                //
+                // A /30 has a broadcast address, 172.19.0.3, and the kernel's `local` table — read
+                // before any of the rules that honour `VpnService.protect` — routes a packet for it
+                // back into the interface it belongs to, protected socket or not. A journal from a
+                // friend's phone caught what that costs. Some application there broadcast to every
+                // interface it had; the LAN bypass sent the datagram `direct`, freedom sent it from
+                // a new port straight back into the tunnel, and the core took that for a new flow
+                // and sent it again — thirty-eight thousand journal lines in a few seconds, each
+                // turn a UDP port held for [CONN_IDLE_SECONDS]. The second time it happened, twelve
+                // minutes later with the first run's ports still held, the phone ran out of them:
+                // `bind: address already in use` for every socket the core opened, Hysteria's QUIC
+                // and the DNS among them. Every server looked dead, the watchdog measured the
+                // spares through the same starved core, found none alive, and stayed put until the
+                // tunnel was turned off.
+                //
+                // The resolver above is the one address in the subnet anything answers at, so
+                // nothing that works is lost here.
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("ip") {
+                        add(subnetOf(TUN_ADDRESS_V4, TUN_PREFIX_V4))
+                        add(subnetOf(TUN_ADDRESS_V6, TUN_PREFIX_V6))
+                    }
+                    put("outboundTag", BLOCK_TAG)
                 }
 
                 if (settings.hijackDns) {
@@ -1257,6 +1301,20 @@ object XrayConfigFactory {
         "fc00::/7",
         "fe80::/10",
     )
+
+    /**
+     * [address]/[prefix] with the host bits cleared: the subnet written the way a routing rule
+     * reads it, rather than trusting the core to mask an interface address for us.
+     */
+    private fun subnetOf(address: String, prefix: Int): String {
+        // A literal, so no lookup happens.
+        val bytes = InetAddress.getByName(address).address
+        for (index in bytes.indices) {
+            val kept = (prefix - index * 8).coerceIn(0, 8)
+            bytes[index] = (bytes[index].toInt() and (0xFF00 ushr kept)).toByte()
+        }
+        return "${InetAddress.getByAddress(bytes).hostAddress}/$prefix"
+    }
 
     private fun LogLevel.toXrayLevel(): String = when (this) {
         LogLevel.Trace -> "debug"

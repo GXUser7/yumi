@@ -169,6 +169,35 @@ class XrayConfigFactoryTest {
         assertTrue("nothing claims port 53 in general with the hijack on", on.any { it["ip"] == null })
     }
 
+    // ------------------------------------------------------------------ The tunnel's own subnet
+
+    /**
+     * Whatever else is addressed to the tunnel's subnet is dropped before the LAN bypass can send
+     * it `direct`: its broadcast address routes back into the tunnel even from a protected socket,
+     * and each turn of that loop held a UDP port until the phone had none left.
+     */
+    @Test
+    fun `the tunnel's own subnet is dropped ahead of the lan bypass`() {
+        val rules = build(node(), settings = settings.copy(bypassLan = true)).rules()
+        // The v6 half is only checked loosely: how an address is written back out differs between
+        // the JVM and Android, and the core reads either.
+        val own = rules.indexOfFirst { rule ->
+            val ips = rule["ip"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+            "172.19.0.0/30" in ips && ips.any { it.startsWith("fdfe:dcba:9876:") && it.endsWith("/126") }
+        }
+        val resolver = rules.indexOfFirst { rule ->
+            rule["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "${XrayConfigFactory.TUN_DNS_V4}/32" } == true
+        }
+        val lan = rules.indexOfFirst { rule ->
+            rule["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "172.16.0.0/12" } == true
+        }
+
+        assertTrue("no rule drops the tunnel's subnet", own >= 0)
+        assertEquals(XrayConfigFactory.BLOCK_TAG, rules[own]["outboundTag"]?.jsonPrimitive?.content)
+        assertTrue("the resolver has to be answered before its subnet is dropped", resolver in 0 until own)
+        assertTrue("the lan bypass would send the subnet round first", own < lan)
+    }
+
     // ------------------------------------------------------------------ The carrier's own names
 
     /**
