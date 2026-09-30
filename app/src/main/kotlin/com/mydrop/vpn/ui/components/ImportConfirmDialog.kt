@@ -35,6 +35,7 @@ fun ImportConfirmDialog(
         icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
         title = { Text(stringResource(R.string.import_confirm_title)) },
         text = {
+            FrostBehindWindow()
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = summarise(pending),

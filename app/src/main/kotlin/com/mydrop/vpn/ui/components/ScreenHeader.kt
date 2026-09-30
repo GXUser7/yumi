@@ -18,9 +18,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.ui.theme.Glass
+import com.mydrop.vpn.ui.theme.GlassTone
+import com.mydrop.vpn.ui.theme.glass
 
 /**
  * The poster headline every screen opens with, in place of an app bar.
@@ -64,7 +69,12 @@ fun ScreenHeader(
     }
 }
 
-/** Circular tonal action, the one control shape that sits above the headline. */
+/**
+ * Circular glass action, the one control shape that sits above the headline.
+ *
+ * A bead of the same glass as the cards rather than a tonal disc: over the lit backdrop an opaque
+ * container tone reads as a hole punched in the light.
+ */
 @Composable
 fun TonalIconButton(
     icon: ImageVector,
@@ -74,11 +84,14 @@ fun TonalIconButton(
 ) {
     FilledIconButton(
         onClick = onClick,
-        modifier = modifier.size(40.dp),
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .glass(Glass.style(GlassTone.Regular), CircleShape),
         shape = CircleShape,
         colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
         Icon(

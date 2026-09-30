@@ -101,6 +101,9 @@ class MainActivity : ComponentActivity() {
             MyDropTheme(
                 themeMode = state.settings.themeMode,
                 dynamicColor = state.settings.dynamicColor,
+                // The phone never passed this on, so the palettes the television offers existed
+                // here only as a field in the settings file. Wallpaper colours still win when on.
+                palette = state.settings.palette,
                 amoled = state.settings.amoled,
             ) {
                 MyDropApp(viewModel = viewModel)
@@ -129,7 +132,6 @@ class MainActivity : ComponentActivity() {
         if (!payload.isNullOrBlank()) viewModel.importFromExternalLink(payload)
     }
 
-    /** Without this the tunnel's foreground notification is silently dropped on Android 13+. */
     /**
      * Asks, once, to be left alone by battery optimisation.
      *
@@ -163,6 +165,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Without this the tunnel's foreground notification is silently dropped on Android 13+. */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val granted = ContextCompat.checkSelfPermission(

@@ -43,11 +43,13 @@ fun ProtocolBadge(protocol: Protocol, modifier: Modifier = Modifier) {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
         modifier = modifier
+            // Translucent, so the pill sits in the glass of its row rather than on top of it as an
+            // opaque sticker.
             .background(
                 color = if (emphasised) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
                 } else {
-                    MaterialTheme.colorScheme.surfaceContainerHighest
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                 },
                 shape = RoundedCornerShape(6.dp),
             )

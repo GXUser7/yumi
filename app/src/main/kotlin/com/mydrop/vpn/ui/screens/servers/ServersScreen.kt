@@ -1,7 +1,6 @@
 package com.mydrop.vpn.ui.screens.servers
 
 import androidx.annotation.StringRes
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,8 +30,6 @@ import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SwapVert
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -40,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -60,12 +58,15 @@ import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.ui.MainUiState
 import com.mydrop.vpn.ui.components.BadgeRow
+import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.LatencyChip
 import com.mydrop.vpn.ui.components.ProtocolBadge
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.format.pluralServers
 import com.mydrop.vpn.ui.format.pluralSources
+import com.mydrop.vpn.ui.theme.Glass
+import com.mydrop.vpn.ui.theme.GlassTone
 
 enum class ServerSort(@StringRes val labelRes: Int) {
     Default(R.string.servers_sort_default),
@@ -251,6 +252,10 @@ private fun SearchAndSortRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
+    // The field is filled with thin glass, so it reads as a surface on the backdrop rather than as
+    // an outline drawn straight onto the light.
+    val fieldGlass = Glass.style(GlassTone.Thin).fillBottom
+
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -274,6 +279,10 @@ private fun SearchAndSortRow(
             },
             singleLine = true,
             shape = RoundedCornerShape(18.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = fieldGlass,
+                unfocusedContainerColor = fieldGlass,
+            ),
         )
 
         Box {
@@ -348,7 +357,7 @@ private fun GroupHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .background(
-                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                         RoundedCornerShape(8.dp),
                     )
                     .padding(horizontal = 8.dp, vertical = 2.dp),
@@ -385,20 +394,22 @@ private fun ServerRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
-    val containerColor by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
-        },
-        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
-        label = "row-color",
-    )
+    // The selected server is the one pane in the list tinted with colour and edged with the accent:
+    // in a list of two hundred, the row carrying the traffic has to be findable at a glance.
+    val pane = if (selected) {
+        Glass.style(
+            tint = MaterialTheme.colorScheme.secondaryContainer,
+            rim = MaterialTheme.colorScheme.primary,
+        )
+    } else {
+        Glass.style()
+    }
 
-    Card(
+    GlassCard(
         onClick = onSelect,
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = RowShape,
+        style = pane,
     ) {
         Row(
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
@@ -502,6 +513,8 @@ private fun ServerRow(
         }
     }
 }
+
+private val RowShape = RoundedCornerShape(22.dp)
 
 @Composable
 private fun EmptyState(hasNodes: Boolean, modifier: Modifier = Modifier) {

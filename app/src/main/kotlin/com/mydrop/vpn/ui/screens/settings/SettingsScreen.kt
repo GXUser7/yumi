@@ -6,13 +6,18 @@ import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +38,7 @@ import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
@@ -50,8 +56,6 @@ import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,6 +64,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
@@ -71,23 +76,34 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
+import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.model.UpdateState
+import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
+import com.mydrop.vpn.ui.theme.Glass
+import com.mydrop.vpn.ui.theme.GlassTone
+import com.mydrop.vpn.ui.theme.LocalGlassColors
+import com.mydrop.vpn.ui.theme.glass
+import com.mydrop.vpn.ui.theme.scheme
 import com.mydrop.vpn.vpn.TunnelTileService
 
 /**
@@ -246,6 +262,14 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                Spacer(Modifier.height(12.dp))
+
+                PaletteRow(
+                    selected = settings.palette,
+                    dynamic = settings.dynamicColor,
+                    onSelect = { chosen -> onUpdate { it.copy(palette = chosen) } },
+                )
 
                 Spacer(Modifier.height(4.dp))
 
@@ -706,6 +730,99 @@ fun SettingsScreen(
 }
 
 /**
+ * The palettes, shown as what they are.
+ *
+ * The television has offered these from the start; the phone had the field in its settings and no
+ * way to reach it. Swatches rather than names, each painted in its own scheme's accent rather than
+ * the current one, so the row is the choice and not a label for it — the same reasoning as the
+ * television's row, at a phone's size.
+ *
+ * Dimmed rather than hidden while wallpaper colours are on. The wallpaper wins then, and a row that
+ * vanished would leave somebody who remembers choosing "Rose" wondering where it went.
+ */
+@Composable
+private fun PaletteRow(selected: Palette, dynamic: Boolean, onSelect: (Palette) -> Unit) {
+    val dark = LocalGlassColors.current.dark
+
+    val title = stringResource(R.string.settings_palette)
+    Text(
+        text = title + " · " + stringResource(selected.labelRes),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (dynamic) {
+        Text(
+            text = stringResource(R.string.settings_palette_dynamic),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+    // Spread across the card rather than scrolled: seven swatches are one control, and each takes
+    // its share of the width up to a comfortable size, so a narrow phone shrinks them instead of
+    // hiding the last two past the edge.
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Palette.entries.forEach { option ->
+            val scheme = remember(option, dark) { option.scheme(dark) }
+            PaletteSwatch(
+                accent = scheme.primary,
+                tick = scheme.onPrimary,
+                chosen = option == selected,
+                enabled = !dynamic,
+                label = stringResource(option.labelRes),
+                onClick = { onSelect(option) },
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+    }
+}
+
+/**
+ * One swatch. The chosen one morphs from a circle to a rounded square on the scheme's spring —
+ * the expressive way of saying "this one" with the shape rather than only with a tick.
+ */
+@Composable
+private fun PaletteSwatch(
+    accent: Color,
+    tick: Color,
+    chosen: Boolean,
+    enabled: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val corner by animateDpAsState(
+        targetValue = if (chosen) 13.dp else 22.dp,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "swatch-corner",
+    )
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .sizeIn(maxWidth = SwatchSize, maxHeight = SwatchSize)
+            .aspectRatio(1f)
+            .alpha(if (enabled) 1f else 0.4f)
+            .semantics { contentDescription = label },
+        shape = RoundedCornerShape(corner),
+        color = accent,
+        contentColor = tick,
+        border = if (chosen) BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface) else null,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (chosen) {
+                Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+private val SwatchSize = 44.dp
+
+/**
  * The state of the routing databases, and a way to fetch them again.
  *
  * The size is shown rather than a bare "ready", because that is the number that says whether these
@@ -756,12 +873,7 @@ private fun SettingsSection(
     icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
-    ) {
+    GlassCard(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -794,12 +906,13 @@ private fun SettingsSection(
  */
 @Composable
 private fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(18.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clip(shape)
+            .glass(Glass.style(GlassTone.Thin), shape)
             .padding(horizontal = 14.dp, vertical = 4.dp),
         content = content,
     )
@@ -1093,7 +1206,7 @@ private fun DnsRow(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                     .padding(horizontal = 8.dp, vertical = 3.dp),
             )
         }

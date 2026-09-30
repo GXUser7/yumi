@@ -11,9 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -42,8 +40,6 @@ import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -77,6 +73,7 @@ import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.model.WorldMap
 import com.mydrop.vpn.ui.MainUiState
+import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.PixelPlanet
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.components.TonalIconButton
@@ -85,8 +82,11 @@ import com.mydrop.vpn.ui.components.TrafficWaves
 import com.mydrop.vpn.ui.components.rememberRateHistory
 import com.mydrop.vpn.ui.format.formatBytes
 import com.mydrop.vpn.ui.format.formatRate
+import com.mydrop.vpn.ui.theme.Glass
+import com.mydrop.vpn.ui.theme.GlassTone
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
+import com.mydrop.vpn.ui.theme.glass
 import kotlinx.coroutines.delay
 
 /** Corner radius of the flow figure and of the statistics panel it grows into. */
@@ -201,12 +201,16 @@ fun ConnectScreen(
                 // Drag anywhere on the figure: it is the statistics panel in its collapsed form,
                 // and a 250 dp target beats hunting for a handle.
                 .pointerInput(Unit) {
+                    // In dp rather than pixels: ninety pixels is a flick on a 4x panel and most of
+                    // a thumb's travel on a 2x one, so the same drag opened the panel on one phone
+                    // and did nothing on another.
+                    val threshold = DRAG_THRESHOLD.toPx()
                     var travel = 0f
                     detectVerticalDragGestures(
                         onDragStart = { travel = 0f },
                         onDragEnd = {
-                            if (travel < -THRESHOLD_PX) statsExpanded = true
-                            if (travel > THRESHOLD_PX) statsExpanded = false
+                            if (travel < -threshold) statsExpanded = true
+                            if (travel > threshold) statsExpanded = false
                         },
                     ) { _, amount -> travel += amount }
                 },
@@ -261,7 +265,7 @@ fun ConnectScreen(
     }
 }
 
-private const val THRESHOLD_PX = 90f
+private val DRAG_THRESHOLD = 36.dp
 
 /* ── Headline ─────────────────────────────────────────────────────────────────────────────── */
 
@@ -402,26 +406,20 @@ private fun FlowFigure(
     val running = state.vpnState is VpnState.Connected
     val warming = state.vpnState is VpnState.Connecting
 
-    val container by animateColorAsState(
-        targetValue = when {
-            running -> MaterialTheme.colorScheme.surfaceContainerLow
-            warming -> MaterialTheme.colorScheme.surfaceContainerLowest
-            else -> MaterialTheme.colorScheme.surfaceContainerLowest
-        },
-        label = "figure-container",
+    // The figure is a pane of glass, and its state is in the pane: thin and neutral while nothing
+    // runs — the empty outline that says "no traffic" is now the glass's own rim — and a fuller
+    // pane with the accent in its edge once the stream is flowing through it.
+    val pane = Glass.style(
+        tone = if (running) GlassTone.Regular else GlassTone.Thin,
+        rim = if (running) semantic.connected else Color.Unspecified,
+        rimWidth = if (running) 1.5.dp else 1.dp,
     )
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(FigureShape)
-            .background(container)
-            .then(
-                // An empty outline is how "no traffic" is stated. Once the field is full the
-                // border would only compete with it.
-                if (running) Modifier
-                else Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, FigureShape)
-            ),
+            .glass(pane, FigureShape),
     ) {
         when (state.settings.visualizer) {
             Visualizer.Waves -> TrafficWaves(
@@ -463,7 +461,9 @@ private fun FlowFigure(
                     warming = warming,
                     seaColor = MaterialTheme.colorScheme.primaryContainer,
                     landColor = MaterialTheme.colorScheme.primary,
-                    gapColor = container,
+                    // The glass shows through between the pixels rather than a painted tone that
+                    // would have to guess what colour the pane comes out on this backdrop.
+                    gapColor = Color.Transparent,
                     markerColor = semantic.marker,
                 )
             }
@@ -517,13 +517,12 @@ private fun LatencyBadge(
     val semantic = LocalSemanticColors.current
     val value = latency?.takeIf { !it.failed }?.millis
 
-    Card(
+    GlassCard(
         onClick = onClick,
         modifier = modifier.size(56.dp),
-        shape = RoundedCornerShape(19.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f),
-        ),
+        shape = LatencyShape,
+        // Thick: it sits over the moving waves, and the number has to read over any of them.
+        style = Glass.style(GlassTone.Thick),
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -549,6 +548,8 @@ private fun LatencyBadge(
     }
 }
 
+private val LatencyShape = RoundedCornerShape(19.dp)
+
 /* ── Statistics ───────────────────────────────────────────────────────────────────────────── */
 
 @Composable
@@ -562,11 +563,13 @@ private fun StatsPanel(
     val semantic = LocalSemanticColors.current
     val traffic = state.traffic
 
+    val tile = Glass.style(GlassTone.Thin)
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .clip(FigureShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .glass(Glass.style(GlassTone.Regular), FigureShape)
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -597,8 +600,8 @@ private fun StatsPanel(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .clip(TileShape)
+                .glass(tile, TileShape)
                 .padding(12.dp),
         ) {
             TrafficSparkline(
@@ -654,6 +657,8 @@ private fun StatsPanel(
     }
 }
 
+private val TileShape = RoundedCornerShape(18.dp)
+
 /** [ValueAndUnit] keeps the number and its unit apart precisely so the tile can size them apart. */
 @Composable
 private fun RateTile(
@@ -664,8 +669,8 @@ private fun RateTile(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clip(TileShape)
+            .glass(Glass.style(GlassTone.Thin), TileShape)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -713,9 +718,13 @@ private fun ControlPill(
     val connected = state is VpnState.Connected
     val busy = state is VpnState.Connecting || state is VpnState.Disconnecting
 
+    // Solid while it is asking to be pressed, glass once the tunnel is up: the loud button is the
+    // one the user is being asked to press, and a running tunnel's control fades to a pane with
+    // the accent in its rim — the outline it always faded to, now made of the same glass as
+    // everything around it.
     val container by animateColorAsState(
         targetValue = when {
-            connected -> MaterialTheme.colorScheme.surface
+            connected -> Color.Transparent
             busy -> MaterialTheme.colorScheme.primaryContainer
             else -> MaterialTheme.colorScheme.primary
         },
@@ -736,12 +745,19 @@ private fun ControlPill(
         label = "control-corner",
     )
 
+    val shape = RoundedCornerShape(corner)
     Button(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().height(ControlHeight),
-        shape = RoundedCornerShape(corner),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(ControlHeight)
+            .clip(shape)
+            .glass(
+                Glass.style(GlassTone.Regular, rim = semantic.connected, rimWidth = 1.5.dp),
+                shape,
+            ),
+        shape = shape,
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
-        border = if (connected) BorderStroke(1.5.dp, semantic.connected) else null,
         contentPadding = PaddingValues(0.dp),
     ) {
         when (state) {
@@ -774,12 +790,10 @@ private fun ControlPill(
 
 @Composable
 private fun SimulationBanner(modifier: Modifier = Modifier) {
-    Card(
+    GlassCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-        ),
+        style = Glass.style(tint = MaterialTheme.colorScheme.tertiaryContainer),
     ) {
         Row(
             modifier = Modifier.padding(14.dp),

@@ -53,6 +53,9 @@ fun MyDropTheme(
 
     CompositionLocalProvider(
         LocalSemanticColors provides scheme.toSemanticColors(dark),
+        // Derived from the resolved scheme, AMOLED included, so the panes are tinted with the room
+        // they are in; see Glass.kt.
+        LocalGlassColors provides scheme.toGlassColors(dark),
     ) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
