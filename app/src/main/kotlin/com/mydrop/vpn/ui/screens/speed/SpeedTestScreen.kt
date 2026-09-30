@@ -427,7 +427,7 @@ private fun Control(
             .fillMaxWidth()
             .height(ControlHeight)
             .clip(shape)
-            .glass(Glass.style(GlassTone.Regular, rim = MaterialTheme.colorScheme.primary), shape),
+            .glass(Glass.panel(), shape),
         shape = shape,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (running) {

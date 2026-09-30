@@ -406,14 +406,11 @@ private fun FlowFigure(
     val running = state.vpnState is VpnState.Connected
     val warming = state.vpnState is VpnState.Connecting
 
-    // The figure is a pane of glass, and its state is in the pane: thin and neutral while nothing
-    // runs — the empty outline that says "no traffic" is now the glass's own rim — and a fuller
-    // pane with the accent in its edge once the stream is flowing through it.
-    val pane = Glass.style(
-        tone = if (running) GlassTone.Regular else GlassTone.Thin,
-        rim = if (running) semantic.connected else Color.Unspecified,
-        rimWidth = if (running) 1.5.dp else 1.dp,
-    )
+    // The figure is a pane of glass, thin while nothing runs and fuller once the stream flows
+    // through it. No accent edge: the headline above it already says "protected" in the accent,
+    // and the stream inside says it again — an outline saying it a third time was one line too
+    // many on a screen of them.
+    val pane = Glass.style(tone = if (running) GlassTone.Regular else GlassTone.Thin)
 
     Box(
         modifier = modifier
@@ -698,7 +695,7 @@ private fun RateTile(
 /* ── Control ──────────────────────────────────────────────────────────────────────────────── */
 
 /** Tall enough to be the obvious thing on the screen. */
-private val ControlHeight = 116.dp
+private val ControlHeight = 96.dp
 
 /**
  * The control: full width always, with the corner radius carrying the state.
@@ -714,14 +711,13 @@ private fun ControlPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val semantic = LocalSemanticColors.current
     val connected = state is VpnState.Connected
     val busy = state is VpnState.Connecting || state is VpnState.Disconnecting
 
     // Solid while it is asking to be pressed, glass once the tunnel is up: the loud button is the
-    // one the user is being asked to press, and a running tunnel's control fades to a pane with
-    // the accent in its rim — the outline it always faded to, now made of the same glass as
-    // everything around it.
+    // one the user is being asked to press — YouCloud's play button, the one filled accent on the
+    // screen — and a running tunnel's control fades to the panel glass the navigation pill is made
+    // of, its words in the accent.
     val container by animateColorAsState(
         targetValue = when {
             connected -> Color.Transparent
@@ -740,7 +736,7 @@ private fun ControlPill(
     // Half the height is a pill; a quarter of it is the square. Animating the radius rather than
     // swapping shapes keeps the corners continuous through the whole transition.
     val corner by animateDpAsState(
-        targetValue = if (connected) 34.dp else ControlHeight / 2,
+        targetValue = if (connected) 32.dp else ControlHeight / 2,
         animationSpec = MaterialTheme.motionScheme.slowSpatialSpec(),
         label = "control-corner",
     )
@@ -752,10 +748,7 @@ private fun ControlPill(
             .fillMaxWidth()
             .height(ControlHeight)
             .clip(shape)
-            .glass(
-                Glass.style(GlassTone.Regular, rim = semantic.connected, rimWidth = 1.5.dp),
-                shape,
-            ),
+            .glass(Glass.panel(), shape),
         shape = shape,
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
         contentPadding = PaddingValues(0.dp),

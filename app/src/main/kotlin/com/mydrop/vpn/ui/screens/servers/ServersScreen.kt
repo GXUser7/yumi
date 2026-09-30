@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,18 +27,22 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppGood
 import androidx.compose.material.icons.rounded.GppMaybe
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,24 +54,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.WorldMap
 import com.mydrop.vpn.ui.MainUiState
-import com.mydrop.vpn.ui.components.BadgeRow
-import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.LatencyChip
-import com.mydrop.vpn.ui.components.ProtocolBadge
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.format.pluralServers
 import com.mydrop.vpn.ui.format.pluralSources
 import com.mydrop.vpn.ui.theme.Glass
 import com.mydrop.vpn.ui.theme.GlassTone
+import com.mydrop.vpn.ui.theme.MonoStyle
+import com.mydrop.vpn.ui.theme.glass
 
 enum class ServerSort(@StringRes val labelRes: Int) {
     Default(R.string.servers_sort_default),
@@ -113,7 +119,7 @@ fun ServersScreen(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         item(key = "header") {
             ScreenHeader(
@@ -157,7 +163,7 @@ fun ServersScreen(
                     count = group.nodes.size,
                     collapsed = collapsed,
                     onToggle = { onToggleGroup(group.id) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 6.dp),
                 )
             }
 
@@ -175,13 +181,13 @@ fun ServersScreen(
                             ?.takeIf { it.enabled && it.reality == null }
                             ?.let { tls -> { onSetTlsInsecure(node.id, !tls.insecure) } },
                         onShare = node.sourceUri?.let { { sharing = node } },
-                        modifier = Modifier.padding(horizontal = 16.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp),
                     )
                 }
             }
         }
 
-        item(key = "tail") { Spacer(Modifier.height(88.dp)) }
+        item(key = "tail") { Spacer(Modifier.height(16.dp)) }
     }
 
     sharing?.let { node ->
@@ -252,9 +258,9 @@ private fun SearchAndSortRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
-    // The field is filled with thin glass, so it reads as a surface on the backdrop rather than as
-    // an outline drawn straight onto the light.
-    val fieldGlass = Glass.style(GlassTone.Thin).fillBottom
+    // A field of glass with no outline, as YouCloud's search is: an outline drawn straight onto
+    // the backdrop was one more line in a screen that was all lines.
+    val fieldGlass = Glass.style(GlassTone.Regular).fill
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -278,15 +284,28 @@ private fun SearchAndSortRow(
                 }
             },
             singleLine = true,
-            shape = RoundedCornerShape(18.dp),
+            shape = FieldShape,
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = fieldGlass,
                 unfocusedContainerColor = fieldGlass,
+                unfocusedBorderColor = Color.Transparent,
+                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
             ),
         )
 
         Box {
-            IconButton(onClick = { menuOpen = true }) {
+            FilledIconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(FieldShape)
+                    .glass(Glass.panel(), FieldShape),
+                shape = FieldShape,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                ),
+            ) {
                 Icon(
                     Icons.Rounded.SwapVert,
                     contentDescription = stringResource(R.string.action_sort),
@@ -312,6 +331,8 @@ private fun SearchAndSortRow(
     }
 }
 
+private val FieldShape = RoundedCornerShape(20.dp)
+
 @Composable
 private fun GroupHeader(
     title: String,
@@ -320,49 +341,38 @@ private fun GroupHeader(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The whole header toggles, and the arrow is a plain icon rather than an IconButton.
-    // An IconButton centres its 24 dp glyph in a container whose size is a theme decision, so the
-    // gap between glyph and screen edge was whatever that container happened to be — which is how
-    // the arrow kept drifting inward. A bare icon ends exactly where the row ends, level with the
-    // search field above it, and the row itself is a far bigger target than the button ever was.
-    //
-    // Title and badge share one weighted slot. Giving the title its own `weight(1f, fill = false)`
-    // alongside a weighted spacer split the free space between the two of them, so the spacer could
-    // only ever push the arrow halfway — which is where it sat, stranded in the middle of the row
-    // with a screen's worth of gap to its right.
+    // YouCloud's section rule: the name and the count in the accent, then a hairline to the arrow.
+    // The whole row toggles; the arrow is a plain icon, so it ends exactly where the row ends.
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onToggle)
-            .padding(vertical = 6.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Spacer(Modifier.size(8.dp))
-            Text(
-                text = "$count",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .background(
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                        RoundedCornerShape(8.dp),
-                    )
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = count.toString(),
+            style = MonoStyle.copy(fontSize = MaterialTheme.typography.titleSmall.fontSize),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+        )
+        Spacer(Modifier.width(12.dp))
+        Box(
+            Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        )
+        Spacer(Modifier.width(8.dp))
         Icon(
             imageVector = if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
             contentDescription = stringResource(
@@ -393,52 +403,56 @@ private fun ServerRow(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val (flag, title) = remember(node.name) { splitFlag(node.name) }
 
-    // The selected server is the one pane in the list tinted with colour and edged with the accent:
-    // in a list of two hundred, the row carrying the traffic has to be findable at a glance.
-    val pane = if (selected) {
-        Glass.style(
-            tint = MaterialTheme.colorScheme.secondaryContainer,
-            rim = MaterialTheme.colorScheme.primary,
-        )
-    } else {
-        Glass.style()
-    }
-
-    GlassCard(
+    // Rows are flat, as a list of tracks is in YouCloud: a list of two hundred cards was two
+    // hundred outlines. The row carrying the traffic is the one pane in the list, tinted and
+    // edged with the accent, so it can still be found at a glance.
+    Surface(
         onClick = onSelect,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RowShape)
+            .then(
+                if (selected) {
+                    Modifier.glass(
+                        Glass.style(
+                            tint = MaterialTheme.colorScheme.secondaryContainer,
+                            rim = MaterialTheme.colorScheme.primary,
+                        ),
+                        RowShape,
+                    )
+                } else {
+                    Modifier
+                },
+            ),
         shape = RowShape,
-        style = pane,
+        color = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // No selection dot: the row's own container colour already states the selection, and
-            // a marker that is invisible three quarters of the time still cost a permanent gutter.
+            ServerTile(flag = flag, node = node)
+
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = node.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ProtocolBadge(node.protocol)
-                    BadgeRow(node.badges)
-                }
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(2.dp))
+                // One quiet line instead of a row of chips: the protocol and what changes how it
+                // behaves, in the order the badges are ranked.
                 Text(
-                    text = node.address,
+                    text = (listOf(node.protocol.label) + node.badges.take(4)).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -451,8 +465,9 @@ private fun ServerRow(
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(
-                        Icons.Rounded.NetworkPing,
+                        Icons.Rounded.MoreVert,
                         contentDescription = stringResource(R.string.servers_actions),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -514,7 +529,49 @@ private fun ServerRow(
     }
 }
 
-private val RowShape = RoundedCornerShape(22.dp)
+private val RowShape = RoundedCornerShape(24.dp)
+
+/**
+ * The server's cover, as a track has one in YouCloud: its flag on a square of glass, or the
+ * protocol's initials when the name carries no flag.
+ */
+@Composable
+private fun ServerTile(flag: String?, node: ProxyNode) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(TileShape)
+            .glass(Glass.panel(), TileShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (flag != null) {
+            Text(text = flag, fontSize = 24.sp)
+        } else {
+            Text(
+                text = node.protocol.label.take(2).uppercase(),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+private val TileShape = RoundedCornerShape(16.dp)
+
+/**
+ * The name's flag, and the name without it.
+ *
+ * The flag moves to the tile rather than being shown twice. Only the first flag is taken, and the
+ * name is kept whole when nothing is left of it but the flag.
+ */
+private fun splitFlag(name: String): Pair<String?, String> {
+    val code = WorldMap.countryCodeOf(name) ?: return null to name
+    val flag = code.map { String(Character.toChars(REGIONAL_A + (it - 'A'))) }.joinToString("")
+    val rest = name.replaceFirst(flag, "").trim()
+    return flag to rest.ifEmpty { name }
+}
+
+private const val REGIONAL_A = 0x1F1E6
 
 @Composable
 private fun EmptyState(hasNodes: Boolean, modifier: Modifier = Modifier) {

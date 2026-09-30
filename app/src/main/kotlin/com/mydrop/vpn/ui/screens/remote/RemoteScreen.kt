@@ -347,7 +347,6 @@ private fun ControlPill(
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val semantic = LocalSemanticColors.current
     val running = state == RemoteTunnelState.On
     val busy = state == RemoteTunnelState.Warming || state == RemoteTunnelState.Stopping
 
@@ -378,10 +377,7 @@ private fun ControlPill(
             .fillMaxWidth()
             .height(ControlHeight)
             .clip(shape)
-            .glass(
-                Glass.style(GlassTone.Regular, rim = semantic.connected, rimWidth = 1.5.dp),
-                shape,
-            ),
+            .glass(Glass.panel(), shape),
         shape = shape,
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
         contentPadding = PaddingValues(0.dp),

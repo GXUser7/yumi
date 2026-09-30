@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.ui.theme.Glass
-import com.mydrop.vpn.ui.theme.GlassTone
 import com.mydrop.vpn.ui.theme.glass
 
 /**
@@ -56,13 +55,13 @@ fun ScreenHeader(
 
         Spacer(Modifier.height(10.dp))
 
-        Text(text = title, style = titleStyle)
+        Text(text = title, style = titleStyle, color = MaterialTheme.colorScheme.onBackground)
 
         if (subtitle != null) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -72,8 +71,7 @@ fun ScreenHeader(
 /**
  * Circular glass action, the one control shape that sits above the headline.
  *
- * A bead of the same glass as the cards rather than a tonal disc: over the lit backdrop an opaque
- * container tone reads as a hole punched in the light.
+ * YouCloud's round button: the panel tone the navigation pill is made of, its mark in the accent.
  */
 @Composable
 fun TonalIconButton(
@@ -85,19 +83,19 @@ fun TonalIconButton(
     FilledIconButton(
         onClick = onClick,
         modifier = modifier
-            .size(40.dp)
+            .size(44.dp)
             .clip(CircleShape)
-            .glass(Glass.style(GlassTone.Regular), CircleShape),
+            .glass(Glass.panel(), CircleShape),
         shape = CircleShape,
         colors = IconButtonDefaults.filledIconButtonColors(
             containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onSurface,
+            contentColor = MaterialTheme.colorScheme.primary,
         ),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            modifier = Modifier.size(19.dp),
+            modifier = Modifier.size(20.dp),
         )
     }
 }

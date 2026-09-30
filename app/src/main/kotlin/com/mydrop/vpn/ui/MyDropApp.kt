@@ -19,21 +19,18 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shield
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
@@ -53,13 +51,14 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.shared.R
-import com.mydrop.vpn.ui.components.AmbientBackdrop
 import com.mydrop.vpn.ui.components.ImportConfirmDialog
 import com.mydrop.vpn.ui.components.PairingSendDialog
+import com.mydrop.vpn.ui.components.PillActionButton
 import com.mydrop.vpn.ui.components.PillNavigationBar
+import com.mydrop.vpn.ui.components.PillNavigationItem
+import com.mydrop.vpn.ui.components.ShapesBackdrop
 import com.mydrop.vpn.ui.screens.apps.SplitTunnelScreen
 import com.mydrop.vpn.ui.screens.connect.ConnectScreen
 import com.mydrop.vpn.ui.screens.failover.NodePickerKind
@@ -73,7 +72,6 @@ import com.mydrop.vpn.ui.screens.settings.SettingsScreen
 import com.mydrop.vpn.ui.screens.speed.SpeedTestScreen
 import com.mydrop.vpn.ui.screens.subscriptions.AddSubscriptionSheet
 import com.mydrop.vpn.ui.screens.subscriptions.SubscriptionsScreen
-import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.frostSource
 import com.mydrop.vpn.ui.theme.rememberFrostState
 
@@ -131,29 +129,17 @@ fun MyDropApp(viewModel: MainViewModel) {
     // What the navigation pill blurs: the whole screen under it, backdrop and all.
     val frost = rememberFrostState()
 
-    // The room is lit by the tunnel. See AmbientBackdrop: the accent when protected, the
-    // "connecting" tone while it comes up, the error colour when it failed, and the accent dimmed
-    // to a third when nothing is running, so the ground still has light for the glass to catch.
-    val semantic = LocalSemanticColors.current
-    val glow = when (state.vpnState) {
-        is VpnState.Connected -> semantic.connected
-        is VpnState.Connecting, VpnState.Disconnecting -> semantic.connecting
-        is VpnState.Failed -> MaterialTheme.colorScheme.error
-        VpnState.Disconnected -> semantic.connected
-    }
-    val glowStrength = when (state.vpnState) {
-        is VpnState.Connected -> 1f
-        is VpnState.Connecting, VpnState.Disconnecting -> 0.75f
-        is VpnState.Failed -> 0.6f
-        VpnState.Disconnected -> 0.35f
-    }
-
     // No app bars anywhere: every screen opens with its own poster headline in the body, which is
     // both the visual signature and the end of the empty-collapsed-bar problem.
     Scaffold(
         // Transparent, because the ground is the backdrop drawn under the screens below and the
         // Scaffold's own flat surface would cover it.
         containerColor = Color.Transparent,
+        // Named, because it cannot be derived. The Scaffold picks its content colour from its
+        // container, and for a transparent container that is whatever colour is already in force —
+        // which at the root of the app is none, so black. Every headline that did not name a
+        // colour of its own came out black on the dark ground.
+        contentColor = MaterialTheme.colorScheme.onBackground,
         bottomBar = {
             // The pill floats, so it animates in and out vertically rather than just fading.
             AnimatedVisibility(
@@ -161,32 +147,39 @@ fun MyDropApp(viewModel: MainViewModel) {
                 enter = slideInVertically(tween(240)) { it } + fadeIn(tween(160)),
                 exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(120)),
             ) {
-                PillNavigationBar(frost = frost) {
-                    TopLevel.entries.forEach { destination ->
-                        val label = stringResource(destination.labelRes)
-                        ShortNavigationBarItem(
-                            selected = currentRoute == destination.route,
-                            onClick = { navController.navigateTopLevel(destination.route) },
-                            icon = { Icon(destination.icon, contentDescription = label) },
-                            label = { Text(label) },
+                val pingAll: @Composable () -> Unit = {
+                    PillActionButton(onClick = viewModel::pingAll, frost = frost) {
+                        PingAllButtonContent(isBusy = state.pingingNodeIds.isNotEmpty())
+                    }
+                }
+                val addSubscription: @Composable () -> Unit = {
+                    PillActionButton(onClick = { showAddSheet = true }, frost = frost) {
+                        Icon(
+                            Icons.Rounded.Add,
+                            contentDescription = stringResource(R.string.action_add),
+                            modifier = Modifier.size(28.dp),
                         )
                     }
                 }
-            }
-        },
-        floatingActionButton = {
-            when (currentRoute) {
-                Routes.SERVERS -> FloatingActionButton(onClick = viewModel::pingAll) {
-                    PingAllButtonContent(isBusy = state.pingingNodeIds.isNotEmpty())
+                PillNavigationBar(
+                    frost = frost,
+                    // The screen's own action stands beside the pill, where the thumb already is,
+                    // rather than floating over the list it acts on.
+                    action = when (currentRoute) {
+                        Routes.SERVERS -> pingAll
+                        Routes.SUBSCRIPTIONS -> addSubscription
+                        else -> null
+                    },
+                ) {
+                    TopLevel.entries.forEach { destination ->
+                        PillNavigationItem(
+                            selected = currentRoute == destination.route,
+                            onClick = { navController.navigateTopLevel(destination.route) },
+                            icon = destination.icon,
+                            label = stringResource(destination.labelRes),
+                        )
+                    }
                 }
-
-                Routes.SUBSCRIPTIONS -> ExtendedFloatingActionButton(
-                    onClick = { showAddSheet = true },
-                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text(stringResource(R.string.action_add)) },
-                )
-
-                else -> Unit
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -208,7 +201,7 @@ fun MyDropApp(viewModel: MainViewModel) {
         // The backdrop sits inside the frost source rather than under the Scaffold, so the pill's
         // blur carries the light of the room and not only whatever text happens to be under it.
         Box(Modifier.fillMaxSize().frostSource(frost)) {
-            AmbientBackdrop(glow = glow, intensity = glowStrength)
+            ShapesBackdrop()
 
             NavHost(
                 navController = navController,

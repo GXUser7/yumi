@@ -23,12 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
+import com.mydrop.vpn.ui.theme.MonoStyle
 
 /** Protocol pill. REALITY-capable protocols get the primary accent to stand out in long lists. */
 @Composable
@@ -122,9 +122,8 @@ fun LatencyChip(
     ) { text ->
         Text(
             text = text,
-            style = MaterialTheme.typography.labelMedium,
+            style = MonoStyle.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize),
             color = color,
-            fontFamily = FontFamily.Monospace,
         )
     }
 }

@@ -58,7 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.daysUntil
@@ -167,8 +167,8 @@ private fun SubscriptionCard(
                         text = subscription.url,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
 

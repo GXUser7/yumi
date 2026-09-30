@@ -23,8 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.ui.theme.MonoStyle
 import com.mydrop.vpn.core.format.ValueAndUnit
 
 /**
@@ -80,9 +80,8 @@ fun StatTile(
                 ) { text ->
                     Text(
                         text = text,
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MonoStyle.copy(fontSize = MaterialTheme.typography.headlineSmall.fontSize),
                         color = MaterialTheme.colorScheme.onSurface,
-                        fontFamily = FontFamily.Monospace,
                     )
                 }
                 Text(

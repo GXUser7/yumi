@@ -1,106 +1,107 @@
 package com.mydrop.vpn.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.mydrop.vpn.shared.R
 
 /*
- * Three voices, two superfamilies.
+ * Two faces, the same two YouCloud is set in, so the two apps read as one family.
  *
- * The poster voice is Roboto Flex instanced at wght 880 / wdth 90 / opsz 144: heavy, slightly
- * narrowed, optically sized for large settings. System Roboto cannot reach it — there is no
- * width axis and nothing above Black — which is why the faces are bundled rather than requested
- * from the platform.
+ * Unbounded for the display roles — the tunnel's state word, the screen titles: wide, round and
+ * heavy, its forms close to the shapes in the backdrop behind them, with a Cyrillic drawn as its
+ * own rather than added on. Onest for everything else: a calm grotesque, as good in Cyrillic as in
+ * Latin, that leaves the figure and the numbers the attention.
  *
- * Static instances rather than the variable file: pinning the axes at build time drops every
- * delta table, so all five faces together come to ~170 KB instead of ~1.8 MB, and none of the
- * runtime variable-font API is involved.
+ * The condensed Roboto Flex poster this replaces was tuned to shout, and on the glass it did —
+ * black, narrow, at 52 sp it was the loudest thing on every screen. Unbounded is so wide that the
+ * display sizes are smaller than YouCloud's: "подключиться" has to fit across a phone in one line.
+ *
+ * Both files are variable, one weight axis each, so every weight a style asks for is drawn at that
+ * weight rather than faked from its neighbour. Both carry tabular figures, which is why there is
+ * no monospace face any more: the latency, the rates and the session timer ask for `tnum`.
  */
 
-private val Display = FontFamily(Font(R.font.roboto_flex_display, FontWeight.Black))
-
-private val Ui = FontFamily(
-    Font(R.font.roboto_flex_regular, FontWeight.Normal),
-    Font(R.font.roboto_flex_medium, FontWeight.Medium),
-    Font(R.font.roboto_flex_semibold, FontWeight.SemiBold),
+@OptIn(ExperimentalTextApi::class)
+private fun variableFamily(res: Int): FontFamily = FontFamily(
+    (100..900 step 100).map { weight ->
+        Font(res, weight = FontWeight(weight), variationSettings = FontVariation.Settings(FontVariation.weight(weight)))
+    },
 )
 
-/** Digits that line up in columns: latency, throughput, the session timer. */
-val MonoFamily = FontFamily(Font(R.font.roboto_mono_medium, FontWeight.Medium))
+private val Display = variableFamily(R.font.unbounded)
+private val Sans = variableFamily(R.font.onest)
 
-/**
- * Trimmed leading. Poster type set at 0.86 line height only looks right once the font's own
- * ascent/descent padding is out of the way, and [LineHeightStyle.Trim] needs
- * `includeFontPadding = false` to have anything to trim.
- */
 @Suppress("DEPRECATION")
-private val TightPlatform = PlatformTextStyle(includeFontPadding = false)
+private val NoFontPadding = PlatformTextStyle(includeFontPadding = false)
 
-private val TrimBoth = LineHeightStyle(
-    alignment = LineHeightStyle.Alignment.Center,
-    trim = LineHeightStyle.Trim.Both,
-)
-
-private fun poster(size: Int, tracking: Float = -0.04f) = TextStyle(
+private fun display(size: Int, lineHeight: Int, tracking: Float) = TextStyle(
     fontFamily = Display,
-    fontWeight = FontWeight.Black,
+    fontWeight = FontWeight.Bold,
     fontSize = size.sp,
-    lineHeight = (size * 0.86f).sp,
-    letterSpacing = tracking.em,
-    platformStyle = TightPlatform,
-    lineHeightStyle = TrimBoth,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking.sp,
+    platformStyle = NoFontPadding,
 )
 
-private fun ui(
+private fun sans(
     size: Int,
+    lineHeight: Int,
     weight: FontWeight = FontWeight.Normal,
-    lineHeight: Float = 1.42f,
     tracking: Float = 0f,
 ) = TextStyle(
-    fontFamily = Ui,
+    fontFamily = Sans,
     fontWeight = weight,
     fontSize = size.sp,
-    lineHeight = (size * lineHeight).sp,
-    letterSpacing = tracking.em,
-    platformStyle = TightPlatform,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking.sp,
+    platformStyle = NoFontPadding,
 )
 
 val MyDropTypography = Typography(
-    // Screen headlines. displayLarge is the tunnel screen's state word; the smaller steps carry
-    // the same voice onto screens whose titles are longer.
-    displayLarge = poster(52),
-    displayMedium = poster(44),
-    displaySmall = poster(38),
+    // displayLarge is the tunnel screen's state word and timer; displaySmall every screen's title.
+    displayLarge = display(36, 44, -0.5f),
+    displayMedium = display(32, 40, -0.5f),
+    displaySmall = display(28, 36, -0.25f),
 
-    headlineLarge = poster(32, tracking = -0.03f),
-    headlineMedium = poster(28, tracking = -0.03f),
-    headlineSmall = poster(24, tracking = -0.025f),
+    headlineLarge = sans(32, 40, FontWeight.ExtraBold, -0.75f),
+    headlineMedium = sans(28, 36, FontWeight.ExtraBold, -0.5f),
+    headlineSmall = sans(24, 32, FontWeight.ExtraBold, -0.25f),
 
-    titleLarge = ui(20, FontWeight.SemiBold, lineHeight = 1.3f),
-    titleMedium = ui(16, FontWeight.SemiBold, lineHeight = 1.35f),
-    titleSmall = ui(14, FontWeight.SemiBold, lineHeight = 1.35f),
+    titleLarge = sans(22, 28, FontWeight.ExtraBold, -0.25f),
+    titleMedium = sans(16, 22, FontWeight.Bold),
+    titleSmall = sans(14, 20, FontWeight.SemiBold, 0.1f),
 
-    bodyLarge = ui(16),
-    bodyMedium = ui(14),
-    bodySmall = ui(12, lineHeight = 1.35f),
+    bodyLarge = sans(16, 22),
+    bodyMedium = sans(14, 20, tracking = 0.1f),
+    bodySmall = sans(12, 16, tracking = 0.2f),
 
-    labelLarge = ui(14, FontWeight.Medium, lineHeight = 1.2f),
-    labelMedium = ui(12, FontWeight.Medium, lineHeight = 1.2f, tracking = 0.02f),
-    // Uppercase micro-labels ("ПРИЁМ", "МС") need the extra tracking to stay readable.
-    labelSmall = ui(10, FontWeight.Medium, lineHeight = 1.2f, tracking = 0.08f),
+    labelLarge = sans(14, 20, FontWeight.SemiBold, 0.1f),
+    labelMedium = sans(12, 16, FontWeight.SemiBold, 0.4f),
+    // Uppercase kickers ("ПРИЁМ", "МС") need the tracking to stay readable.
+    labelSmall = sans(11, 14, FontWeight.SemiBold, 0.8f),
 )
 
-/** Tabular figures for anything that has to line up or tick without jitter. */
+/**
+ * Figures that line up and tick without jitter: latency, throughput, the session timer.
+ *
+ * Onest with tabular figures rather than a monospace face — the numbers belong to the same text
+ * as the words around them, and only their widths need to hold still.
+ */
 val MonoStyle = TextStyle(
-    fontFamily = MonoFamily,
-    fontWeight = FontWeight.Medium,
-    letterSpacing = (-0.02f).em,
-    platformStyle = TightPlatform,
+    fontFamily = Sans,
+    fontWeight = FontWeight.SemiBold,
+    fontFeatureSettings = "tnum",
+    letterSpacing = 0.em,
+    platformStyle = NoFontPadding,
 )
+
+/** The same figures for places that set their own style and only need the face. */
+val MonoFamily: FontFamily = Sans
