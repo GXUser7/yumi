@@ -1,5 +1,6 @@
 package com.mydrop.vpn.ui
 
+import android.os.SystemClock
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
@@ -37,6 +38,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +48,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -80,6 +84,7 @@ import com.mydrop.vpn.ui.screens.subscriptions.AddSubscriptionSheet
 import com.mydrop.vpn.ui.screens.subscriptions.SubscriptionsScreen
 import com.mydrop.vpn.ui.theme.frostSource
 import com.mydrop.vpn.ui.theme.rememberFrostState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 object Routes {
@@ -151,9 +156,31 @@ fun MyDropApp(viewModel: MainViewModel) {
     val frost = frostState.takeIf { state.settings.glassEffects }
     val remoteAvailable = remote.bonds.isNotEmpty() || remote.sightings.isNotEmpty()
 
+    // The backdrop waits while somebody is touching the screen; see ShapesBackdrop's hold.
+    val touch = remember { TouchActivity() }
+    LaunchedEffect(touch.active) {
+        if (!touch.active) return@LaunchedEffect
+        while (touch.pressed || SystemClock.uptimeMillis() - touch.lastEventAt < TOUCH_SETTLE_MILLIS) {
+            delay(100)
+        }
+        touch.active = false
+    }
+
     // No app bars anywhere: every screen opens with its own poster headline in the body, which is
     // both the visual signature and the end of the empty-collapsed-bar problem.
     Scaffold(
+        // Watched on the way down and never consumed, so every control below sees the same events
+        // it always did. On the Scaffold rather than the content, so a tap on the pill counts too.
+        modifier = Modifier.pointerInput(touch) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    touch.pressed = event.changes.any { it.pressed }
+                    touch.lastEventAt = SystemClock.uptimeMillis()
+                    if (!touch.active) touch.active = true
+                }
+            }
+        },
         // Transparent, because the ground is the backdrop drawn under the screens below and the
         // Scaffold's own flat surface would cover it.
         containerColor = Color.Transparent,
@@ -256,6 +283,7 @@ fun MyDropApp(viewModel: MainViewModel) {
             ShapesBackdrop(
                 motionEnabled = state.settings.backgroundMotion,
                 animated = state.settings.backgroundMotion,
+                hold = { touch.active },
             )
 
             NavHost(
@@ -455,6 +483,22 @@ fun MyDropApp(viewModel: MainViewModel) {
         )
     }
 }
+
+/**
+ * Whether a finger is on the screen, or has just let go of something that is still moving.
+ *
+ * Only [active] is state: the rest is written on every pointer event and read by one loop, and
+ * making it observable would recompose on each of them.
+ */
+@Stable
+private class TouchActivity {
+    var active by mutableStateOf(false)
+    var pressed = false
+    var lastEventAt = 0L
+}
+
+/** Long enough for a fling or a page settling after the finger has left. */
+private const val TOUCH_SETTLE_MILLIS = 1_200L
 
 /**
  * Which way the screen travelled: a detail screen always enters from the right and leaves back to

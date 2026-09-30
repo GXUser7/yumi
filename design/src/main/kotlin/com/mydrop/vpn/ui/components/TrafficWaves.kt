@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.ln
 import kotlin.math.sin
@@ -175,7 +176,15 @@ private fun defaultBands(): List<Band> = listOf(
 
 private const val TWO_PI = (PI * 2).toFloat()
 
-/** Seconds since the figure first drew, rebased so Float keeps frame-level precision. */
+/**
+ * Seconds since the figure first drew, rebased so Float keeps frame-level precision — ticking
+ * thirty times a second rather than on every frame the panel can show.
+ *
+ * On a 120 Hz phone the figure used to be redrawn 120 times a second for as long as the tunnel
+ * screen was open, whether or not anything was flowing: a Pixel measured the idle screen at 66–86
+ * frames a second. The crests move a fraction of their width per second; thirty steps of that are
+ * as smooth to the eye and a quarter of the work.
+ */
 @Composable
 private fun rememberSeconds(): State<Float> = produceState(0f) {
     var origin = 0L
@@ -184,8 +193,11 @@ private fun rememberSeconds(): State<Float> = produceState(0f) {
             if (origin == 0L) origin = frame
             value = (frame - origin) / 1000f
         }
+        delay(WAVE_FRAME_MILLIS)
     }
 }
+
+private const val WAVE_FRAME_MILLIS = 33L
 
 /**
  * The rate at which the figure is fully swept up. Set to a busy line rather than a fast one on

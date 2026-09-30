@@ -16,6 +16,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
@@ -287,12 +292,22 @@ private fun rememberTiltSensor(enabled: Boolean): TiltSensor {
 /**
  * The backdrop. [motionEnabled] ties the shapes to the accelerometer; [animated] false freezes
  * the scene (nothing is redrawn per frame then).
+ *
+ * [hold] freezes it for as long as it says so — the app holds it while a finger is on the screen
+ * and while what it threw is still settling. Measured on a Pixel 9 Pro, a frame of this backdrop
+ * costs the GPU ten to thirteen milliseconds, and the blur under the navigation pill another three
+ * or four on top, against a budget of eight at 120 Hz. Drifting at thirty frames a second it landed
+ * on the frames of every scroll and every swipe between tabs, and those are the frames anybody
+ * notices: 13 % of the settings scroll and 6 % of the tab swipes came out late with the drift on,
+ * about 1 % with it frozen. Nobody watches a blurred shape drift while flicking through a list, so
+ * the drift waits until they stop.
  */
 @Composable
 fun ShapesBackdrop(
     modifier: Modifier = Modifier,
     motionEnabled: Boolean = true,
     animated: Boolean = true,
+    hold: () -> Boolean = { false },
 ) {
     val scheme = MaterialTheme.colorScheme
     val darkTheme = scheme.background.luminance() < 0.5f
@@ -302,24 +317,28 @@ fun ShapesBackdrop(
     val shiftPx = with(LocalDensity.current) { PARALLAX_SHIFT_DP * density }
     val frame = remember { mutableLongStateOf(0L) }
 
+    val currentHold by rememberUpdatedState(hold)
     LaunchedEffect(animated) {
         if (!animated) return@LaunchedEffect
         var last = 0L
-        var drawn = 0L
         while (isActive) {
+            if (currentHold()) {
+                // Suspended rather than skipping frames: while held nothing is scheduled at all.
+                snapshotFlow { currentHold() }.first { !it }
+                // The pause is not time the springs should catch up on.
+                last = 0L
+            }
             withFrameNanos { now ->
-                val dt = if (last == 0L) 0f else ((now - last) / 1_000_000_000f).coerceAtMost(0.05f)
+                val dt = if (last == 0L) 0f else ((now - last) / 1_000_000_000f).coerceAtMost(MAX_STEP_SECONDS)
                 last = now
                 motion.step(dt, shapes, tilt, shiftPx)
-                // Redrawn sixty times a second at most: the shapes drift slowly, and on a 120 Hz
-                // screen every other frame of them was work nobody could see. Only drifting, thirty:
-                // each frame of the backdrop repaints the whole screen over it, glass and all.
-                val interval = if (motion.lively) BACKDROP_FRAME_NANOS else CALM_BACKDROP_FRAME_NANOS
-                if (now - drawn >= interval) {
-                    drawn = now
-                    frame.longValue = now
-                }
+                frame.longValue = now
             }
+            // Waited out between frames rather than counted off on every vsync: asking for each
+            // frame of a 120 Hz panel only to skip most of them still woke the main thread 120
+            // times a second. Thirty a second while a tilt is being followed or a shake settles,
+            // twenty while the shapes only drift and turn — under a pixel a frame, and blurred.
+            delay(if (motion.lively) LIVELY_FRAME_MILLIS else CALM_FRAME_MILLIS)
         }
     }
 
@@ -585,6 +604,8 @@ private val FAR_BLUR = 8.dp
 private val NEAR_BLUR = 3.dp
 private const val FAR_SHRINK = 4
 private const val NEAR_SHRINK = 2
-private const val BACKDROP_FRAME_NANOS = 15_000_000L
-// Thirty a second, with room for a frame arriving a little early.
-private const val CALM_BACKDROP_FRAME_NANOS = 32_000_000L
+private const val LIVELY_FRAME_MILLIS = 33L
+private const val CALM_FRAME_MILLIS = 50L
+
+/** Longer than a calm frame, so a slow frame does not slow the drift down with it. */
+private const val MAX_STEP_SECONDS = 0.1f

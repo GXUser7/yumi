@@ -264,6 +264,10 @@ private fun TrafficQuota(subscription: Subscription) {
             progress = { animatedFraction },
             modifier = Modifier.fillMaxWidth().height(12.dp),
             amplitude = { progress -> (1f - progress).coerceIn(0f, 1f) },
+            // Still. The wave's height is the reading — how much of the plan is left — and its
+            // travel added nothing to it while redrawing the tab 66 times a second, forever, for as
+            // long as the card was on screen.
+            waveSpeed = 0.dp,
         )
 
         Spacer(Modifier.height(8.dp))
