@@ -269,7 +269,9 @@
     <string name="settings_amoled">AMOLED black</string>
     <string name="settings_amoled_subtitle">Pure black background in the dark theme</string>
     <string name="settings_background_motion">Live backdrop</string>
-    <string name="settings_background_motion_subtitle">The shapes behind the screens tilt and shake with the phone</string>
+    <string name="settings_background_motion_subtitle">The shapes behind the screens drift and follow the tilt of the phone. Off, the backdrop stands still and costs no battery</string>
+    <string name="settings_glass_effects">Transparency effects</string>
+    <string name="settings_glass_effects_subtitle">Blur under the bar and see-through surfaces. Turn off if the phone runs hot or stutters</string>
 
     <string name="settings_routing">Routing</string>
     <string name="settings_bypass_lan">Local network direct</string>

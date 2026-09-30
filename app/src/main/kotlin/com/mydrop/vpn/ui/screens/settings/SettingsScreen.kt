@@ -28,12 +28,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.ui.format.formatBytes
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.Apps
@@ -100,6 +100,7 @@ import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
+import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.theme.Glass
 import com.mydrop.vpn.ui.theme.GlassTone
 import com.mydrop.vpn.ui.theme.LocalGlassColors
@@ -291,6 +292,12 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_background_motion_subtitle),
                     checked = settings.backgroundMotion,
                     onCheckedChange = { onUpdate { s -> s.copy(backgroundMotion = it) } },
+                )
+                SwitchRow(
+                    title = stringResource(R.string.settings_glass_effects),
+                    subtitle = stringResource(R.string.settings_glass_effects_subtitle),
+                    checked = settings.glassEffects,
+                    onCheckedChange = { onUpdate { s -> s.copy(glassEffects = it) } },
                 )
             }
         }
@@ -834,9 +841,12 @@ private val SwatchSize = 44.dp
  */
 @Composable
 private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
+    // A row like every other in the panel, with the action as the round glass button the rest of
+    // the app uses. The tonal text button it replaces was the one loud object in the settings, and
+    // it had its own padding on top of the panel's, so it did not even line up.
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
     ) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -853,20 +863,32 @@ private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
                     stringResource(R.string.settings_geo_missing_subtitle)
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (state.ready) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
             )
         }
         Spacer(Modifier.width(12.dp))
         if (state.refreshing) {
-            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        } else {
-            FilledTonalButton(onClick = onRefresh) {
-                Text(
-                    stringResource(
-                        if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
-                    ),
-                )
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .glass(Glass.panel(), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
+        } else {
+            TonalIconButton(
+                icon = if (state.ready) Icons.Rounded.Refresh else Icons.Rounded.Download,
+                contentDescription = stringResource(
+                    if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
+                ),
+                onClick = onRefresh,
+            )
         }
     }
 }

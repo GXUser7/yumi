@@ -95,10 +95,19 @@ data class AppSettings(
     val palette: Palette = Palette.Glacier,
     val amoled: Boolean = false,
     /**
-     * Whether the backdrop's shapes follow the phone: tilt slides them by depth, a shake knocks
-     * them about. Off leaves them drifting on their own, and nothing listens to the accelerometer.
+     * Whether the backdrop moves at all: the shapes drift and turn, tilt slides them by depth, a
+     * shake knocks them about. Off freezes the scene — drawn once, no frames, no accelerometer.
+     *
+     * Once the switch only let go of the accelerometer, and the drift went on redrawing the whole
+     * backdrop thirty times a second — and with it the blur under the navigation pill — for as long
+     * as the app was open. A switch that promises to spare the phone has to stop all of it.
      */
     val backgroundMotion: Boolean = true,
+    /**
+     * Translucent glass and the blur under the navigation pill. Off makes every pane solid and blurs
+     * nothing — for a phone that heats up or stutters under them.
+     */
+    val glassEffects: Boolean = true,
     val language: AppLanguage = AppLanguage.System,
 
     // Routing

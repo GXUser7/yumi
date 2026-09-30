@@ -267,7 +267,9 @@
     <string name="settings_amoled">AMOLED-чёрный</string>
     <string name="settings_amoled_subtitle">Чистый чёрный фон в тёмной теме</string>
     <string name="settings_background_motion">Живой фон</string>
-    <string name="settings_background_motion_subtitle">Фигуры на фоне наклоняются и вздрагивают вместе с телефоном</string>
+    <string name="settings_background_motion_subtitle">Фигуры на фоне плывут и откликаются на наклон телефона. Выключенный фон стоит на месте и не тратит батарею</string>
+    <string name="settings_glass_effects">Эффекты прозрачности</string>
+    <string name="settings_glass_effects_subtitle">Размытие под панелью и полупрозрачные поверхности. Выключите, если телефон греется или подтормаживает</string>
 
     <string name="settings_routing">Маршрутизация</string>
     <string name="settings_bypass_lan">Локальная сеть напрямую</string>

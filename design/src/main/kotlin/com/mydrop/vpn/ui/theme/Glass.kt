@@ -76,6 +76,12 @@ data class GlassColors(
     val thickAlpha: Float,
     /** The hairline of light round every pane. */
     val edge: Color,
+    /**
+     * Whether the panes are solid: the "transparency effects" switch turned off. Every tone is laid
+     * on at full strength and nothing is blurred, which is what a slow phone asked for — the
+     * backdrop still shows between the panes, it just stops showing through them.
+     */
+    val solid: Boolean = false,
 )
 
 /**
@@ -86,7 +92,7 @@ data class GlassColors(
  * read as a stain. Mixing the container tone with the accent's container gives the launcher's
  * muted tone in a wallpaper scheme and the same kind of tone in every palette.
  */
-fun ColorScheme.toGlassColors(dark: Boolean): GlassColors = if (dark) {
+fun ColorScheme.toGlassColors(dark: Boolean, solid: Boolean = false): GlassColors = (if (dark) {
     GlassColors(
         dark = true,
         base = surfaceContainer,
@@ -108,7 +114,7 @@ fun ColorScheme.toGlassColors(dark: Boolean): GlassColors = if (dark) {
         thickAlpha = 0.82f,
         edge = Color.White.copy(alpha = 0.55f),
     )
-}
+}).let { if (solid) it.copy(thinAlpha = 1f, regularAlpha = 1f, thickAlpha = 1f, solid = true) else it }
 
 val LocalGlassColors: ProvidableCompositionLocal<GlassColors> =
     staticCompositionLocalOf { MyDropDarkColors.toGlassColors(dark = true) }
@@ -158,7 +164,7 @@ fun GlassColors.style(
     rimWidth: Dp = 1.dp,
 ): GlassStyle = GlassStyle(
     fill = if (tint.isSpecified) {
-        tint.copy(alpha = tint.alpha * TINTED_ALPHA)
+        tint.copy(alpha = if (solid) 1f else tint.alpha * TINTED_ALPHA)
     } else {
         base.copy(alpha = alphaOf(tone))
     },
@@ -195,7 +201,8 @@ fun Modifier.frostedGlass(
 ): Modifier {
     val clipped = clip(shape)
     if (state == null) {
-        return clipped.pane(style.copy(fill = style.fill.copy(alpha = FALLBACK_ALPHA)), shape, fill = true)
+        val fill = style.fill.copy(alpha = maxOf(style.fill.alpha, FALLBACK_ALPHA))
+        return clipped.pane(style.copy(fill = fill), shape, fill = true)
     }
     return clipped
         .hazeEffect(

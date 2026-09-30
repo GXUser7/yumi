@@ -31,13 +31,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Science
-import androidx.compose.material.icons.rounded.SettingsRemote
-import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -76,7 +73,6 @@ import com.mydrop.vpn.ui.MainUiState
 import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.PixelPlanet
 import com.mydrop.vpn.ui.components.ShapeSpinner
-import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.components.TrafficSparkline
 import com.mydrop.vpn.ui.components.TrafficWaves
 import com.mydrop.vpn.ui.components.rememberRateHistory
@@ -110,17 +106,6 @@ fun ConnectScreen(
     onToggleConnection: () -> Unit,
     onPickServer: () -> Unit,
     onRoutingModeChange: (RoutingMode) -> Unit,
-    onOpenLogs: () -> Unit,
-    onOpenSpeedTest: () -> Unit,
-    onOpenRemote: () -> Unit,
-    /**
-     * Whether there is a television to drive: one already linked, or one heard on this network.
-     *
-     * The door appears rather than always standing there, because a remote is not a feature of the
-     * app so much as a feature of the room — on a phone that has never been in the same house as a
-     * Yumi television it is a button that can only ever say "nothing found".
-     */
-    remoteAvailable: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val traffic = state.traffic
@@ -157,36 +142,14 @@ fun ConnectScreen(
         }
     }
 
+    // No row of buttons above the headline any more. The speed test and the remote stand beside
+    // the navigation pill, where every tab keeps its actions; the journal is reached from the
+    // settings, where it always was as well.
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            AnimatedVisibility(visible = remoteAvailable) {
-                Row {
-                    TonalIconButton(
-                        Icons.Rounded.SettingsRemote,
-                        stringResource(R.string.remote_open),
-                        onOpenRemote,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-            }
-            TonalIconButton(Icons.Rounded.Article, stringResource(R.string.connect_logs), onOpenLogs)
-            Spacer(Modifier.width(8.dp))
-            // Settings kept its place in the navigation pill, so the shortcut here was a second
-            // door to the same room. Measuring the tunnel has nowhere else to be reached from.
-            TonalIconButton(
-                Icons.Rounded.Speed,
-                stringResource(R.string.connect_speed_test),
-                onOpenSpeedTest,
-            )
-        }
-
         Headline(
             state = state,
             statsExpanded = statsExpanded,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp),
         )
 
         AnimatedVisibility(visible = state.tunnelIsSimulated) {

@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                 // here only as a field in the settings file. Wallpaper colours still win when on.
                 palette = state.settings.palette,
                 amoled = state.settings.amoled,
+                glassEffects = state.settings.glassEffects,
             ) {
                 MyDropApp(viewModel = viewModel)
             }
