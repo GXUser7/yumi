@@ -57,6 +57,7 @@ import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -871,25 +872,17 @@ private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
             )
         }
         Spacer(Modifier.width(12.dp))
-        if (state.refreshing) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .glass(Glass.panel(), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            }
-        } else {
-            TonalIconButton(
-                icon = if (state.ready) Icons.Rounded.Refresh else Icons.Rounded.Download,
-                contentDescription = stringResource(
-                    if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
-                ),
-                onClick = onRefresh,
-            )
-        }
+        RoundAction(
+            icon = if (state.ready) Icons.Rounded.Refresh else Icons.Rounded.Download,
+            contentDescription = stringResource(
+                if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
+            ),
+            onClick = onRefresh,
+            // Missing databases are the one case worth pressing for: rules and ad blocking are
+            // doing nothing until they arrive.
+            emphasized = !state.ready,
+            busy = state.refreshing,
+        )
     }
 }
 
@@ -1206,6 +1199,43 @@ private fun UpdateRow(
 
 /** Two-thirds of the tunnel screen’s control: the same shape, sized for a settings card. */
 private val UpdateButtonHeight = 76.dp
+
+/**
+ * The round button settings rows end with: the panel glass with the mark in the accent, the accent
+ * itself when it is the thing to press next, and a spinner in its place while it works.
+ */
+@Composable
+private fun RoundAction(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    busy: Boolean = false,
+) {
+    when {
+        busy -> Box(
+            modifier = Modifier
+                .size(RoundActionSize)
+                .clip(CircleShape)
+                .glass(Glass.panel(), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        }
+
+        emphasized -> FilledIconButton(
+            onClick = onClick,
+            modifier = Modifier.size(RoundActionSize),
+            shape = CircleShape,
+        ) {
+            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
+        }
+
+        else -> TonalIconButton(icon = icon, contentDescription = contentDescription, onClick = onClick)
+    }
+}
+
+private val RoundActionSize = 44.dp
 
 private fun megabytes(bytes: Long): String =
     ((bytes * 10 / (1024 * 1024)) / 10.0).toString()
