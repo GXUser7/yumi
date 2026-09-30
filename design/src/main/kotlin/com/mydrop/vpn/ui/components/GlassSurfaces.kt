@@ -31,7 +31,7 @@ import com.mydrop.vpn.ui.theme.GlassStyle
 import com.mydrop.vpn.ui.theme.glass
 
 /** The corner every glass card uses unless it has a reason not to. */
-val GlassCardShape: Shape = RoundedCornerShape(24.dp)
+val GlassCardShape: Shape = RoundedCornerShape(28.dp)
 
 /**
  * A card made of glass: the pane, the content on it, and a press that gives.

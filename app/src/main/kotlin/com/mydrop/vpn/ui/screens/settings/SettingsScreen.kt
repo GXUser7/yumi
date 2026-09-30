@@ -192,7 +192,6 @@ fun SettingsScreen(
         item("appearance") {
             SettingsSection(
                 title = stringResource(R.string.settings_appearance),
-                icon = Icons.Rounded.Palette,
             ) {
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -287,13 +286,18 @@ fun SettingsScreen(
                     checked = settings.amoled,
                     onCheckedChange = { onUpdate { s -> s.copy(amoled = it) } },
                 )
+                SwitchRow(
+                    title = stringResource(R.string.settings_background_motion),
+                    subtitle = stringResource(R.string.settings_background_motion_subtitle),
+                    checked = settings.backgroundMotion,
+                    onCheckedChange = { onUpdate { s -> s.copy(backgroundMotion = it) } },
+                )
             }
         }
 
         item("routing") {
             SettingsSection(
                 title = stringResource(R.string.settings_routing),
-                icon = Icons.Rounded.Router,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_bypass_lan),
@@ -332,7 +336,6 @@ fun SettingsScreen(
         item("tunnel") {
             SettingsSection(
                 title = stringResource(R.string.settings_tunnel),
-                icon = Icons.Rounded.Shield,
             ) {
                 SwitchRow(
                     title = "IPv6",
@@ -371,7 +374,6 @@ fun SettingsScreen(
         item("dns") {
             SettingsSection(
                 title = stringResource(R.string.settings_dns),
-                icon = Icons.Rounded.Dns,
             ) {
                 ValidatedField(
                     initial = settings.remoteDns,
@@ -436,7 +438,6 @@ fun SettingsScreen(
         item("ping") {
             SettingsSection(
                 title = stringResource(R.string.settings_latency),
-                icon = Icons.Rounded.NetworkPing,
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PingMode.entries.forEach { mode ->
@@ -470,7 +471,6 @@ fun SettingsScreen(
         item("behaviour") {
             SettingsSection(
                 title = stringResource(R.string.settings_behaviour),
-                icon = Icons.Rounded.Bolt,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_boot),
@@ -547,7 +547,6 @@ fun SettingsScreen(
         item("failover") {
             SettingsSection(
                 title = stringResource(R.string.settings_failover_section),
-                icon = Icons.Rounded.SwapHoriz,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_failover),
@@ -623,7 +622,6 @@ fun SettingsScreen(
         item("diagnostics") {
             SettingsSection(
                 title = stringResource(R.string.settings_diagnostics),
-                icon = Icons.Rounded.Article,
             ) {
                 NavigationRow(
                     title = stringResource(R.string.settings_logs),
@@ -650,7 +648,6 @@ fun SettingsScreen(
         item("geo") {
             SettingsSection(
                 title = stringResource(R.string.settings_geo),
-                icon = Icons.Rounded.Router,
             ) {
                 GeoRow(state = geoAssets, onRefresh = onRefreshGeo)
             }
@@ -659,7 +656,6 @@ fun SettingsScreen(
         item("alerts") {
             SettingsSection(
                 title = stringResource(R.string.settings_alerts_section),
-                icon = Icons.Rounded.NotificationsActive,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_alert_server),
@@ -691,7 +687,6 @@ fun SettingsScreen(
         item("updates") {
             SettingsSection(
                 title = stringResource(R.string.settings_updates),
-                icon = Icons.Rounded.SystemUpdate,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_update_auto),
@@ -879,32 +874,28 @@ private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
 @Composable
 private fun SettingsSection(
     title: String,
-    icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    GlassCard(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        Column(Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
-                )
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            content()
+    // YouCloud's settings: the section's name above its panel in the accent, the panel itself a
+    // single sheet of glass. A title inside the card, with an icon beside it, made every section
+    // a small poster of its own.
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 16.dp),
+        )
+        GlassCard(modifier = Modifier.fillMaxWidth(), shape = SectionShape) {
+            Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), content = content)
         }
     }
 }
+
+private val SectionShape = RoundedCornerShape(32.dp)
 
 /**
  * Настройки, подчинённые переключателю над ними.

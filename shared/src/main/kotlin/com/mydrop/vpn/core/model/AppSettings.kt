@@ -94,6 +94,11 @@ data class AppSettings(
      */
     val palette: Palette = Palette.Glacier,
     val amoled: Boolean = false,
+    /**
+     * Whether the backdrop's shapes follow the phone: tilt slides them by depth, a shake knocks
+     * them about. Off leaves them drifting on their own, and nothing listens to the accelerometer.
+     */
+    val backgroundMotion: Boolean = true,
     val language: AppLanguage = AppLanguage.System,
 
     // Routing

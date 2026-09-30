@@ -201,7 +201,7 @@ fun MyDropApp(viewModel: MainViewModel) {
         // The backdrop sits inside the frost source rather than under the Scaffold, so the pill's
         // blur carries the light of the room and not only whatever text happens to be under it.
         Box(Modifier.fillMaxSize().frostSource(frost)) {
-            ShapesBackdrop()
+            ShapesBackdrop(motionEnabled = state.settings.backgroundMotion)
 
             NavHost(
                 navController = navController,
