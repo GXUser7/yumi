@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,6 +72,7 @@ import com.mydrop.vpn.ui.format.pluralServers
 import com.mydrop.vpn.ui.format.pluralSources
 import com.mydrop.vpn.ui.theme.Glass
 import com.mydrop.vpn.ui.theme.GlassTone
+import com.mydrop.vpn.ui.theme.LocalGlassColors
 import com.mydrop.vpn.ui.theme.MonoStyle
 import com.mydrop.vpn.ui.theme.glass
 
@@ -417,7 +419,11 @@ private fun ServerRow(
                 if (selected) {
                     Modifier.glass(
                         Glass.style(
-                            tint = MaterialTheme.colorScheme.secondaryContainer,
+                            tint = lerp(
+                                LocalGlassColors.current.panel,
+                                MaterialTheme.colorScheme.primary,
+                                SELECTED_ACCENT,
+                            ),
                             rim = MaterialTheme.colorScheme.primary,
                         ),
                         RowShape,
@@ -530,6 +536,12 @@ private fun ServerRow(
 }
 
 private val RowShape = RoundedCornerShape(24.dp)
+
+/**
+ * How much of the accent the selected row's glass takes: the panel tone warmed towards it, as
+ * YouCloud's playing row is, rather than a second colour of its own.
+ */
+private const val SELECTED_ACCENT = 0.18f
 
 /**
  * The server's cover, as a track has one in YouCloud: its flag on a square of glass, or the

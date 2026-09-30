@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeState
@@ -78,16 +79,18 @@ data class GlassColors(
 )
 
 /**
- * In the dark, cards are `surfaceContainer` and floating controls tone 20 of the secondary palette
- * (`onSecondary`), the same pair YouCloud uses — the second is the tone a Pixel launcher draws its
- * widgets on, so the pill reads as part of the phone rather than as an app's sticker. The light
- * scheme takes the container tones a step up, as the light theme's surfaces are.
+ * In the dark, cards are `surfaceContainer`, as YouCloud's are. Floating controls are a muted tone
+ * of the accent: YouCloud takes tone 20 of the secondary palette, the tone a Pixel launcher draws its
+ * widgets on — but in a wallpaper scheme the secondary is the accent's own hue, and in this app's
+ * built-in palettes it is not. Glacier's secondary is sand, and a sand pill under an ice-blue screen
+ * read as a stain. Mixing the container tone with the accent's container gives the launcher's
+ * muted tone in a wallpaper scheme and the same kind of tone in every palette.
  */
 fun ColorScheme.toGlassColors(dark: Boolean): GlassColors = if (dark) {
     GlassColors(
         dark = true,
         base = surfaceContainer,
-        panel = onSecondary,
+        panel = lerp(surfaceContainerHigh, primaryContainer, 0.35f),
         onPanel = onPrimaryContainer,
         thinAlpha = 0.40f,
         regularAlpha = 0.58f,
@@ -98,8 +101,8 @@ fun ColorScheme.toGlassColors(dark: Boolean): GlassColors = if (dark) {
     GlassColors(
         dark = false,
         base = surfaceContainerLow,
-        panel = secondaryContainer,
-        onPanel = onSecondaryContainer,
+        panel = lerp(surfaceContainerHigh, primaryContainer, 0.5f),
+        onPanel = onPrimaryContainer,
         thinAlpha = 0.46f,
         regularAlpha = 0.64f,
         thickAlpha = 0.82f,

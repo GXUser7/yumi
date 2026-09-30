@@ -326,13 +326,17 @@ fun ShapesBackdrop(
     // A ground a step lighter than the app's background, so the shapes and the covers in front of
     // them have something to stand off from instead of all sinking into the same near-black.
     val ground = if (darkTheme) scheme.surfaceContainer else scheme.surfaceContainerLow
-    // One family of tones — the secondary palette the launcher's widgets and folders use — so the
-    // scene reads as one material at different depths rather than a handful of coloured stickers.
+    // One family of tones, so the scene reads as one material at different depths rather than a
+    // handful of coloured stickers. YouCloud takes the secondary palette, which in a wallpaper
+    // scheme is the accent's own hue muted; this app's built-in palettes pair the accent with a
+    // neighbour instead (Glacier with sand), so the family is mixed from the accent here — see
+    // toGlassColors for the same reasoning about the pill.
+    val body = lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, 0.55f)
     val palette = BackdropPalette(
         ground = ground,
-        body = scheme.secondaryContainer,
-        light = if (darkTheme) scheme.secondary else Color.White,
-        dark = if (darkTheme) Color.Black else scheme.secondary,
+        body = body,
+        light = if (darkTheme) lerp(scheme.onSurfaceVariant, scheme.primary, 0.5f) else Color.White,
+        dark = if (darkTheme) Color.Black else lerp(scheme.onSurfaceVariant, scheme.primary, 0.4f),
         darkTheme = darkTheme
     )
     val far = remember(shapes) { shapes.indices.filter { shapes[it].depth < NEAR_DEPTH } }
