@@ -311,7 +311,7 @@ class AppContainer(context: Context) {
     )
 
     /** Hands applications IPv6 only through servers that were seen to carry it. */
-    val ipv6Guard = Ipv6Guard(
+    val ipv6Guard: Ipv6Guard = Ipv6Guard(
         filesDir = context.filesDir,
         settings = settings,
         profiles = profiles,
