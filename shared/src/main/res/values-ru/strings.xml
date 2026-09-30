@@ -280,7 +280,13 @@
     <string name="settings_split_tunnel_block">Исключено приложений: %1$d</string>
 
     <string name="settings_tunnel">Туннель</string>
-    <string name="settings_ipv6_subtitle">Поднимать IPv6-адрес на интерфейсе</string>
+    <string name="settings_ipv6_subtitle">Приложения получают только IPv4-адреса</string>
+    <string name="settings_ipv6_on">Только через серверы, которые его пропускают, — проверяю каждый при подключении</string>
+    <string name="settings_ipv6_checking">Проверяю, пропускает ли сервер IPv6…</string>
+    <string name="settings_ipv6_active">Включён: сервер пропускает IPv6</string>
+    <string name="settings_ipv6_refused">«%1$s» не пропускает IPv6 — приложения идут по IPv4, чтобы YouTube и Google не ломались</string>
+    <string name="settings_ipv6_refused_many">«%1$s» и ещё %2$d не пропускают IPv6 — приложения идут по IPv4, чтобы YouTube и Google не ломались</string>
+    <string name="settings_ipv6_unchecked">Сервер не удалось проверить — пока только IPv4</string>
     <string name="settings_hijack_dns">Перехват DNS</string>
     <string name="settings_hijack_dns_subtitle">Заворачивать запросы к порту 53 в собственный резолвер</string>
     <string name="settings_mtu_hint">От 1280 до 9000</string>
@@ -456,6 +462,9 @@
 
     <string name="log_dns_switching">DNS «%1$s» перестал отвечать — перехожу на %2$s</string>
     <string name="log_settings_reapplied">Настройки изменились — пересобираю туннель</string>
+    <string name="log_ipv6_refused">«%1$s» не пропускает IPv6 — приложения в туннеле получают только IPv4-адреса</string>
+    <string name="log_ipv6_withdrawn">«%1$s» перестал пропускать IPv6 — пересобираю туннель на IPv4</string>
+    <string name="log_ipv6_enabled">«%1$s» пропускает IPv6 — пересобираю туннель с ним</string>
     <string name="log_dns_dead">DNS «%1$s» перестал отвечать, а запасной выключен</string>
     <string name="log_dns_fallback_also_dead">Запасной DNS (%1$s) тоже не отвечает — дело, скорее всего, не в нём</string>
 

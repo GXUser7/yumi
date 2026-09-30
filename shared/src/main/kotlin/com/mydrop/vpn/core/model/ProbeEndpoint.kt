@@ -40,5 +40,19 @@ object ProbeTargets {
     const val TUNNEL = "cp.cloudflare.com"
     const val DNS = "connectivitycheck.gstatic.com"
 
+    /**
+     * Whether an exit reaches IPv6: [TUNNEL]'s own IPv6 address, written as a literal.
+     *
+     * A literal because that is what applications send. The core routes on the sniffed name but
+     * hands the server the address the application dialled, so the question worth asking is
+     * "can this exit dial an IPv6 address", and a hostname would let the server answer a different
+     * one by resolving it to IPv4.
+     *
+     * Any HTTP answer counts, and the answer here is a 403: Cloudflare refuses a request whose Host
+     * is a bare address. That is fine — only a server that reached the address can relay a refusal
+     * from it. An exit without IPv6 relays nothing; its stream just ends.
+     */
+    const val IPV6_URL = "http://[2606:4700::6810:84e5]/generate_204"
+
     fun url(host: String) = "http://$host/generate_204"
 }

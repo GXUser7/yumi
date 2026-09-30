@@ -110,6 +110,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val speedTest by viewModel.speedTest.collectAsStateWithLifecycle()
     val updates by viewModel.updates.collectAsStateWithLifecycle()
     val geoAssets by viewModel.geoAssets.collectAsStateWithLifecycle()
+    val ipv6 by viewModel.ipv6.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -314,6 +315,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                         onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
                         geoAssets = geoAssets,
                         onRefreshGeo = viewModel::refreshGeoAssets,
+                        ipv6 = ipv6,
                         updates = updates,
                         onCheckUpdate = viewModel::checkForUpdate,
                         onDownloadUpdate = viewModel::downloadUpdate,

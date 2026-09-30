@@ -175,6 +175,9 @@ class AppContainer(context: Context) {
         // inbound to download through, and the builder needs to know whether the files are there.
         // Neither is asked until a configuration is actually being built.
         geoAvailable = { geoAssets.available() },
+        // Late-bound for the same reason: the guard needs the launcher, which needs the tunnel,
+        // which needs this builder.
+        ipv6Allowed = { active, members -> ipv6Guard.allows(active, members) },
     )
 
     /**
@@ -307,6 +310,19 @@ class AppContainer(context: Context) {
         scope = applicationScope,
     )
 
+    /** Hands applications IPv6 only through servers that were seen to carry it. */
+    val ipv6Guard = Ipv6Guard(
+        filesDir = context.filesDir,
+        settings = settings,
+        profiles = profiles,
+        tunnel = tunnel,
+        launcher = tunnelLauncher,
+        configs = tunnelConfigs,
+        logs = logs,
+        scope = applicationScope,
+        onWriteFailure = writeFailure,
+    )
+
     /**
      * New versions of the app itself. The user agent is the same one subscriptions use — GitHub
      * refuses requests without one outright.
@@ -381,6 +397,7 @@ class AppContainer(context: Context) {
         }
         remoteHost?.start()
         failoverWatchdog.start()
+        ipv6Guard.start()
         staleSelectionPruner.start()
         tunnelSettingsApplier.start()
         subscriptionScheduler.start()

@@ -201,18 +201,8 @@ object XrayConfigFactory {
             throw IllegalArgumentException("Xray cannot carry $it, which ${selected.name} needs")
         }
 
-        // The selected node first, and the rest behind it. Order matters twice: the first outbound
-        // is the core's default for anything no rule matched, and while the catch-all rule below
-        // means that should never happen, "should never happen" is a poor thing to have pointing at
-        // an arbitrary server.
-        val usable = buildList {
-            add(selected)
-            addAll(nodes.filter { it.id != selected.id && unsupported(it) == null })
-        }
-        // What the core is given: a group is every one of its members, each under a tag of its own,
-        // and the tunnel starts on the provider's first choice. Which member carries it after that
-        // is the watchdog's to decide, by measuring them (see GroupSelector).
-        val dialed = usable.flatMap { it.dialed() }.filter { unsupported(it) == null }
+        val usable = usable(nodes, selected)
+        val dialed = members(nodes, selected)
         val resolved = settings.withDnsOverride(dnsOverride)
 
         return Document(
@@ -234,6 +224,30 @@ object XrayConfigFactory {
                 }
                 .map { it.name },
         )
+    }
+
+    /**
+     * Every outbound [build] writes for these servers, [selected]'s own first.
+     *
+     * What the core is given: a group is every one of its members, each under a tag of its own,
+     * and the tunnel starts on the provider's first choice. Which member carries it after that is
+     * the watchdog's to decide, by measuring them (see GroupSelector).
+     *
+     * Public because deciding what may go into the document means reasoning about exactly this
+     * list — see `Ipv6Policy` — and a second derivation of it is a second chance to disagree.
+     */
+    fun members(nodes: List<ProxyNode>, selected: ProxyNode): List<ProxyNode> =
+        usable(nodes, selected).flatMap { it.dialed() }.filter { unsupported(it) == null }
+
+    /**
+     * The selected node first, and the rest behind it. Order matters twice: the first outbound is
+     * the core's default for anything no rule matched, and while the catch-all rule below means
+     * that should never happen, "should never happen" is a poor thing to have pointing at an
+     * arbitrary server.
+     */
+    private fun usable(nodes: List<ProxyNode>, selected: ProxyNode): List<ProxyNode> = buildList {
+        add(selected)
+        addAll(nodes.filter { it.id != selected.id && unsupported(it) == null })
     }
 
     /** See the sing-box factory for why the override lands on whichever server actually answers. */
@@ -886,6 +900,9 @@ object XrayConfigFactory {
             // resolver the user did not pick than a resolver that answers nothing.
             if (remote == null && direct == null) add(FALLBACK_DNS)
         }
+        // The only place IPv6 reaches the document, and [settings] here is not always the user's:
+        // the builder switches it off for servers that were not seen to carry IPv6 — see
+        // `Ipv6Policy` for the journal that made that necessary.
         put("queryStrategy", if (settings.enableIpv6) "UseIP" else "UseIPv4")
         put("disableCache", false)
         put("tag", DNS_IN_TAG)

@@ -282,7 +282,13 @@
     <string name="settings_split_tunnel_block">Apps excluded: %1$d</string>
 
     <string name="settings_tunnel">Tunnel</string>
-    <string name="settings_ipv6_subtitle">Raise an IPv6 address on the interface</string>
+    <string name="settings_ipv6_subtitle">Apps get IPv4 addresses only</string>
+    <string name="settings_ipv6_on">Only through servers that carry it — each one is checked on connect</string>
+    <string name="settings_ipv6_checking">Checking whether the server carries IPv6…</string>
+    <string name="settings_ipv6_active">On: the server carries IPv6</string>
+    <string name="settings_ipv6_refused">“%1$s” does not carry IPv6 — apps stay on IPv4 so YouTube and Google keep working</string>
+    <string name="settings_ipv6_refused_many">“%1$s” and %2$d more do not carry IPv6 — apps stay on IPv4 so YouTube and Google keep working</string>
+    <string name="settings_ipv6_unchecked">Could not check the server — IPv4 only until it answers</string>
     <string name="settings_hijack_dns">DNS hijacking</string>
     <string name="settings_hijack_dns_subtitle">Route queries to port 53 into our own resolver</string>
     <string name="settings_mtu_hint">From 1280 to 9000</string>
@@ -458,6 +464,9 @@ Send it here: %2$s</string>
 
     <string name="log_dns_switching">Resolver “%1$s” stopped answering — switching to %2$s</string>
     <string name="log_settings_reapplied">Settings changed — rebuilding the tunnel</string>
+    <string name="log_ipv6_refused">“%1$s” does not carry IPv6 — apps in the tunnel get IPv4 addresses only</string>
+    <string name="log_ipv6_withdrawn">“%1$s” stopped carrying IPv6 — rebuilding the tunnel on IPv4</string>
+    <string name="log_ipv6_enabled">“%1$s” carries IPv6 — rebuilding the tunnel with it</string>
     <string name="log_dns_dead">Resolver “%1$s” stopped answering; the fallback is switched off</string>
     <string name="log_dns_fallback_also_dead">The fallback resolver (%1$s) is not answering either — the fault is probably elsewhere</string>
 

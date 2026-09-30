@@ -4,6 +4,7 @@ import android.content.Context
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -42,7 +43,32 @@ class TunnelConfigBuilder(
      * after the files landed.
      */
     private val geoAvailable: () -> Boolean = { false },
+    /**
+     * Whether applications may be handed IPv6 addresses through these servers: the members of the
+     * one the tunnel starts on, then every member the document holds. See [Ipv6Guard].
+     *
+     * Asked only when the setting is on; off is off, whatever any server can do.
+     */
+    private val ipv6Allowed: (active: List<ProxyNode>, members: List<ProxyNode>) -> Boolean =
+        { _, _ -> true },
 ) {
+
+    /** What the running document decided about IPv6, and the members it decided it for. */
+    data class Ipv6InForce(
+        /** Whether the resolver in the running core answers `AAAA`. */
+        val answers: Boolean,
+        /** Every member the running core holds, in the order it holds them. */
+        val members: List<ProxyNode>,
+    )
+
+    private val _ipv6 = MutableStateFlow<Ipv6InForce?>(null)
+
+    /**
+     * Null while no document is in force. Recorded rather than recomputed, for the same reason as
+     * [switchable]: what matters is what the core was handed, and the verdicts it was decided from
+     * may have moved since.
+     */
+    val ipv6: StateFlow<Ipv6InForce?> = _ipv6.asStateFlow()
 
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
 
@@ -75,6 +101,7 @@ class TunnelConfigBuilder(
         // The group belongs to the same dead tunnel as the inbound. A stale one would let the
         // watchdog keep choosing from servers the next core has never been told about.
         _switchable.value = emptySet()
+        _ipv6.value = null
     }
 
     fun useDnsFallback(active: Boolean) {
@@ -109,11 +136,22 @@ class TunnelConfigBuilder(
         val probe = newProbeEndpoint()
         val group = switchableGroup(node)
 
+        // Decided here, per document, rather than read from the setting by the factory: the setting
+        // says what the user wants, and whether the servers in this document can deliver it is a
+        // separate question with its own answer. Switching it off for this document only is what
+        // keeps a server without IPv6 from breaking every application that prefers it.
+        val members = XrayConfigFactory.members(group, node)
+        val activeIds = node.dialed().mapTo(mutableSetOf()) { it.id }
+        val wanted = settings.value
+        val answersIpv6 = wanted.enableIpv6 &&
+            ipv6Allowed(members.filter { it.id in activeIds }, members)
+        val effective = if (wanted.enableIpv6 && !answersIpv6) wanted.copy(enableIpv6 = false) else wanted
+
         return runCatching {
             XrayConfigFactory.build(
                 nodes = group,
                 selected = node,
-                settings = settings.value,
+                settings = effective,
                 probe = probe,
                 dnsOverride = selectedDns(),
                 geoAvailable = geoAvailable,
@@ -134,6 +172,7 @@ class TunnelConfigBuilder(
             _switchable.value = document.nodeTags.mapTo(mutableSetOf()) { tag ->
                 tag.removePrefix(XrayConfigFactory.nodeTag(""))
             }
+            _ipv6.value = Ipv6InForce(answers = answersIpv6, members = members)
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
             // when reading a log off the device.

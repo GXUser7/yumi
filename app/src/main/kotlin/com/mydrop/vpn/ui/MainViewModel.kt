@@ -26,6 +26,7 @@ import com.mydrop.vpn.core.parse.DnsUriParser
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.GeoAssetStore
+import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.data.ConnectOutcome
 import com.mydrop.vpn.data.describe
 import com.mydrop.vpn.pairing.PairingInvite
@@ -308,6 +309,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     /** What the settings screen shows about the routing databases; see [GeoAssetStore]. */
     val geoAssets: StateFlow<GeoAssetStore.State> = container.geoAssets.state
+
+    /** Whether the running tunnel hands out IPv6, and why not; see [Ipv6Guard]. */
+    val ipv6: StateFlow<Ipv6Guard.Status> = container.ipv6Guard.status
 
     /**
      * Fetches the routing databases again, whether or not they are already there.

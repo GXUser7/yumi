@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.VpnService
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.NetworkTransport
+import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.model.TrafficStats
@@ -15,6 +16,8 @@ import com.mydrop.vpn.vpn.XrayCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -137,6 +140,27 @@ class XrayTunnelController(
             }
             .groupBy({ it.first }, { it.second })
             .mapValues { (_, measured) -> measured.min() }
+    }
+
+    override suspend fun ipv6Through(members: List<ProxyNode>): Map<String, Boolean> {
+        if (state.value !is VpnState.Connected || members.isEmpty()) return emptyMap()
+
+        val owners = members.associateBy { XrayConfigFactory.nodeTag(it.id) }
+        // Both questions at once, each already parallel inside: the pair costs one timeout.
+        val (ipv4, ipv6) = coroutineScope {
+            val plain = async(Dispatchers.IO) {
+                XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS)
+            }
+            val literal = async(Dispatchers.IO) {
+                XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS, ProbeTargets.IPV6_URL)
+            }
+            plain.await() to literal.await()
+        }
+        return owners.mapNotNull { (tag, member) ->
+            // Negative is "asked and nothing came back", the same reading as in the method above.
+            if ((ipv4[tag] ?: -1) <= 0) return@mapNotNull null
+            member.id to ((ipv6[tag] ?: -1) > 0)
+        }.toMap()
     }
 
     override fun disconnect() {

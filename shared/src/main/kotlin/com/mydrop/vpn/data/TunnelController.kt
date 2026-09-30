@@ -89,6 +89,16 @@ interface TunnelController {
     suspend fun measureThroughTunnel(nodes: List<ProxyNode>): Map<String, Int> = emptyMap()
 
     /**
+     * Whether each of [members] carries IPv6 out of its exit, keyed by member id.
+     *
+     * [members] are dialed members, under the ids the core knows them by — a group is asked
+     * member by member, because each has an exit of its own. True when the member fetched both the
+     * ordinary probe and [com.mydrop.vpn.core.model.ProbeTargets.IPV6_URL], false when it fetched
+     * the first and not the second. Absent when it fetched neither, which says nothing about IPv6.
+     */
+    suspend fun ipv6Through(members: List<ProxyNode>): Map<String, Boolean> = emptyMap()
+
+    /**
      * Whether the device has a default network at all.
      *
      * True by default: a controller that cannot know must not claim the phone is offline, because

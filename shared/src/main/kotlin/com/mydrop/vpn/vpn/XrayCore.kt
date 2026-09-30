@@ -143,13 +143,20 @@ object XrayCore {
      * by an operator whose business is answering it quickly — and it is dialled *through* each
      * server, so it sees the failure this app exists to escape: a port that accepts connections
      * while nothing crosses them.
+     *
+     * @param probeUrl what to fetch. The tunnel probe unless somebody is asking a narrower question
+     *   — see [ProbeTargets.IPV6_URL].
      */
-    fun measureOutbounds(tags: Collection<String>, timeoutMillis: Int): Map<String, Int> {
+    fun measureOutbounds(
+        tags: Collection<String>,
+        timeoutMillis: Int,
+        probeUrl: String = ProbeTargets.url(ProbeTargets.TUNNEL),
+    ): Map<String, Int> {
         if (tags.isEmpty()) return emptyMap()
         val answer = runCatching {
             Yumi.measureOutbounds(
                 tags.joinToString(" "),
-                ProbeTargets.url(ProbeTargets.TUNNEL),
+                probeUrl,
                 timeoutMillis.toLong(),
             )
         }.getOrElse {

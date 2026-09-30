@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import com.mydrop.vpn.data.GeoAssetStore
+import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.ui.format.formatBytes
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
@@ -167,6 +168,7 @@ fun SettingsScreen(
     onOpenMobileNodes: () -> Unit,
     geoAssets: GeoAssetStore.State,
     onRefreshGeo: () -> Unit,
+    ipv6: Ipv6Guard.Status,
     updates: UpdateState,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
@@ -334,9 +336,16 @@ fun SettingsScreen(
             ) {
                 SwitchRow(
                     title = "IPv6",
-                    subtitle = stringResource(R.string.settings_ipv6_subtitle),
+                    subtitle = ipv6Subtitle(settings.enableIpv6, ipv6),
                     checked = settings.enableIpv6,
                     onCheckedChange = { onUpdate { s -> s.copy(enableIpv6 = it) } },
+                    // The one state here that is a warning rather than a description: the user
+                    // asked for IPv6 and a server is refusing it.
+                    subtitleColor = if (settings.enableIpv6 && ipv6 is Ipv6Guard.Status.Refused) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_hijack_dns),
@@ -926,12 +935,36 @@ private fun GroupDivider() {
     )
 }
 
+/**
+ * What the IPv6 switch says about itself.
+ *
+ * Its old line, "raise an IPv6 address on the interface", described a detail that happens either
+ * way and said nothing about the part that bites: through a server that cannot reach IPv6, turning
+ * this on used to break YouTube and every Google app while everything else went on working.
+ */
+@Composable
+private fun ipv6Subtitle(enabled: Boolean, status: Ipv6Guard.Status): String = when {
+    !enabled -> stringResource(R.string.settings_ipv6_subtitle)
+    status is Ipv6Guard.Status.Refused -> status.servers.let { servers ->
+        if (servers.size == 1) {
+            stringResource(R.string.settings_ipv6_refused, servers.first())
+        } else {
+            stringResource(R.string.settings_ipv6_refused_many, servers.first(), servers.size - 1)
+        }
+    }
+    status == Ipv6Guard.Status.Checking -> stringResource(R.string.settings_ipv6_checking)
+    status == Ipv6Guard.Status.Active -> stringResource(R.string.settings_ipv6_active)
+    status == Ipv6Guard.Status.Unchecked -> stringResource(R.string.settings_ipv6_unchecked)
+    else -> stringResource(R.string.settings_ipv6_on)
+}
+
 @Composable
 private fun SwitchRow(
     title: String,
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     Row(
         modifier = Modifier
@@ -945,7 +978,7 @@ private fun SwitchRow(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = subtitleColor,
             )
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
