@@ -61,7 +61,6 @@ import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.ui.MainUiState
 import com.mydrop.vpn.ui.components.BadgeRow
 import com.mydrop.vpn.ui.components.LatencyChip
-import com.mydrop.vpn.ui.components.ProtocolBadge
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.format.pluralServers
@@ -408,19 +407,17 @@ private fun ServerRow(
             // No selection dot: the row's own container colour already states the selection, and
             // a marker that is invisible three quarters of the time still cost a permanent gutter.
             Column(Modifier.weight(1f)) {
+                // Two lines, not one: providers put the country last ("🇳🇱 ⚡️ ⭐️ LTE Авто -
+                // Нидерланды"), and on a 360 dp phone a single line broke after the dash and
+                // dropped the one word that told these servers apart, without even an ellipsis.
                 Text(
                     text = node.name,
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ProtocolBadge(node.protocol)
-                    BadgeRow(node.badges)
-                }
+                BadgeRow(node.protocol, node.badges)
                 Spacer(Modifier.height(3.dp))
                 Text(
                     text = node.address,
@@ -428,6 +425,7 @@ private fun ServerRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 

@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppSettings
@@ -194,7 +195,13 @@ private fun NodeRow(
             Checkbox(checked = checked, onCheckedChange = { onToggle() })
 
             Column(Modifier.weight(1f)) {
-                Text(node.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                // Same two lines as the server list, for the same reason: the country comes last.
+                Text(
+                    text = node.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Spacer(Modifier.height(3.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -207,6 +214,7 @@ private fun NodeRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

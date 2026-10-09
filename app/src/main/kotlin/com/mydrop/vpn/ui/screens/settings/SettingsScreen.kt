@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -78,6 +79,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppLanguage
@@ -187,16 +189,11 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ThemeMode.entries.forEach { mode ->
-                        ToggleButton(
+                        ChoiceButton(
+                            label = stringResource(mode.labelRes),
                             checked = settings.themeMode == mode,
-                            onCheckedChange = { onUpdate { it.copy(themeMode = mode) } },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                stringResource(mode.labelRes),
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
+                            onClick = { onUpdate { it.copy(themeMode = mode) } },
+                        )
                     }
                 }
 
@@ -210,19 +207,13 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AppLanguage.entries.forEach { language ->
-                        ToggleButton(
+                        // The endonyms stay in their own language in every locale: somebody
+                        // looking for their language recognises "Русский", not "Russian".
+                        ChoiceButton(
+                            label = stringResource(language.labelRes),
                             checked = settings.language == language,
-                            onCheckedChange = { onUpdate { it.copy(language = language) } },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            // The endonyms stay in their own language in every locale: somebody
-                            // looking for their language recognises "Русский", not "Russian".
-                            Text(
-                                stringResource(language.labelRes),
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                            )
-                        }
+                            onClick = { onUpdate { it.copy(language = language) } },
+                        )
                     }
                 }
 
@@ -236,17 +227,11 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Visualizer.entries.forEach { visualizer ->
-                        ToggleButton(
+                        ChoiceButton(
+                            label = stringResource(visualizer.labelRes),
                             checked = settings.visualizer == visualizer,
-                            onCheckedChange = { onUpdate { it.copy(visualizer = visualizer) } },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                stringResource(visualizer.labelRes),
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                            )
-                        }
+                            onClick = { onUpdate { it.copy(visualizer = visualizer) } },
+                        )
                     }
                 }
 
@@ -417,16 +402,11 @@ fun SettingsScreen(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PingMode.entries.forEach { mode ->
-                        ToggleButton(
+                        ChoiceButton(
+                            label = stringResource(mode.labelRes),
                             checked = settings.pingMode == mode,
-                            onCheckedChange = { onUpdate { it.copy(pingMode = mode) } },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                stringResource(mode.labelRes),
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
+                            onClick = { onUpdate { it.copy(pingMode = mode) } },
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -844,6 +824,30 @@ private fun ipv6Subtitle(enabled: Boolean, status: Ipv6Guard.Status): String = w
     status == Ipv6Guard.Status.Active -> stringResource(R.string.settings_ipv6_active)
     status == Ipv6Guard.Status.Unchecked -> stringResource(R.string.settings_ipv6_unchecked)
     else -> stringResource(R.string.settings_ipv6_on)
+}
+
+/**
+ * One option of an equal-width choice row: theme, language, connection picture, ping mode.
+ *
+ * The stock 16 dp side padding left a third of the card on a 360 dp phone 61 dp for its label, and
+ * "Системная" needs 63: it broke into "Системна / я", and "Системный", held to one line, was cut to
+ * "Системны". At 8 dp the label gets 77 dp there; the ellipsis is for screens narrower still.
+ */
+@Composable
+private fun RowScope.ChoiceButton(label: String, checked: Boolean, onClick: () -> Unit) {
+    ToggleButton(
+        checked = checked,
+        onCheckedChange = { onClick() },
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable

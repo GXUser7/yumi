@@ -11,8 +11,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +37,8 @@ fun ProtocolBadge(protocol: Protocol, modifier: Modifier = Modifier) {
     Text(
         text = protocol.label,
         style = MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+        softWrap = false,
         color = if (emphasised) {
             MaterialTheme.colorScheme.onPrimaryContainer
         } else {
@@ -62,6 +64,10 @@ fun FeatureBadge(text: String, modifier: Modifier = Modifier) {
         text = text,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // A chip is a word, never a paragraph: squeezed below its width it must not break
+        // "uTLS:edge" into a letter per line, which is what made rows four times their height.
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier
             .border(
                 width = 1.dp,
@@ -72,13 +78,24 @@ fun FeatureBadge(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Protocol pill and feature chips, wrapping onto another line when the row runs out of width.
+ *
+ * This used to be a plain Row beside the protocol pill. A Row measures each child against whatever
+ * the previous ones left over, so on a 360 dp phone a server with five chips (VLESS, Auto ×3,
+ * REALITY, Vision, uTLS:edge) handed the last one a sliver a letter wide, and the card grew to fit
+ * the word written vertically. The protocol pill is inside the flow rather than beside it so that
+ * the chips can wrap underneath it instead of into a column of their own.
+ */
 @Composable
-fun BadgeRow(badges: List<String>, modifier: Modifier = Modifier) {
-    Row(
+fun BadgeRow(protocol: Protocol, badges: List<String>, modifier: Modifier = Modifier) {
+    FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
+        ProtocolBadge(protocol)
         badges.take(4).forEach { FeatureBadge(it) }
     }
 }
