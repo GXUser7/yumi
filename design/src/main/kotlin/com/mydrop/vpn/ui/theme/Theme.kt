@@ -30,8 +30,6 @@ fun MyDropTheme(
     palette: Palette = Palette.Glacier,
     /** Pure-black surfaces for OLED panels; only meaningful when the resolved theme is dark. */
     amoled: Boolean = false,
-    /** Translucent, blurred panes; false makes them solid. See [GlassColors.solid]. */
-    glassEffects: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val dark = when (themeMode) {
@@ -55,9 +53,6 @@ fun MyDropTheme(
 
     CompositionLocalProvider(
         LocalSemanticColors provides scheme.toSemanticColors(dark),
-        // Derived from the resolved scheme, AMOLED included, so the panes are tinted with the room
-        // they are in; see Glass.kt.
-        LocalGlassColors provides scheme.toGlassColors(dark, solid = !glassEffects),
     ) {
         MaterialExpressiveTheme(
             colorScheme = scheme,

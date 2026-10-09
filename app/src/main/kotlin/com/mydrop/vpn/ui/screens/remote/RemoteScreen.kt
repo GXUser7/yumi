@@ -3,6 +3,7 @@ package com.mydrop.vpn.ui.screens.remote
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,8 @@ import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -40,8 +43,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,14 +54,10 @@ import com.mydrop.vpn.remote.RemoteNode
 import com.mydrop.vpn.remote.RemoteSnapshot
 import com.mydrop.vpn.remote.RemoteTunnelState
 import com.mydrop.vpn.shared.R
-import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.format.formatRate
-import com.mydrop.vpn.ui.theme.Glass
-import com.mydrop.vpn.ui.theme.GlassTone
-import com.mydrop.vpn.ui.theme.glass
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
 import kotlinx.coroutines.delay
@@ -218,10 +215,10 @@ private fun LinkBanner(link: RemoteLinkState, modifier: Modifier = Modifier) {
         else -> null
     }
     AnimatedVisibility(visible = label != null) {
-        GlassCard(
+        Surface(
             modifier = modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
-            style = Glass.style(GlassTone.Thick),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             Row(
                 Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -254,15 +251,14 @@ private fun StatusCard(snapshot: RemoteSnapshot?, online: Boolean, modifier: Mod
         }
     }
 
-    // The tunnel screen's figure in miniature: thin glass while the television is idle, a fuller
-    // pane with the accent in its rim once it is carrying traffic.
-    GlassCard(
+    Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(30.dp),
-        style = Glass.style(
-            tone = if (running) GlassTone.Regular else GlassTone.Thin,
-            rim = if (running) semantic.connected else Color.Unspecified,
+        colors = CardDefaults.cardColors(
+            containerColor = if (running) MaterialTheme.colorScheme.surfaceContainerLow
+            else MaterialTheme.colorScheme.surfaceContainerLowest,
         ),
+        border = if (running) BorderStroke(1.dp, semantic.connected) else null,
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -347,13 +343,13 @@ private fun ControlPill(
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val semantic = LocalSemanticColors.current
     val running = state == RemoteTunnelState.On
     val busy = state == RemoteTunnelState.Warming || state == RemoteTunnelState.Stopping
 
     val container by animateColorAsState(
         when {
-            // Glass once the television is up, as on the tunnel screen.
-            running -> Color.Transparent
+            running -> MaterialTheme.colorScheme.surface
             busy -> MaterialTheme.colorScheme.primaryContainer
             else -> MaterialTheme.colorScheme.primary
         },
@@ -369,17 +365,13 @@ private fun ControlPill(
         label = "remote-control-corner",
     )
 
-    val shape = RoundedCornerShape(corner)
     Button(
         onClick = { if (running) onDisconnect() else onConnect() },
         enabled = enabled,
-        modifier = modifier
-            .fillMaxWidth()
-            .height(ControlHeight)
-            .clip(shape)
-            .glass(Glass.panel(), shape),
-        shape = shape,
+        modifier = modifier.fillMaxWidth().height(ControlHeight),
+        shape = RoundedCornerShape(corner),
         colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
+        border = if (running) BorderStroke(1.5.dp, semantic.connected) else null,
         contentPadding = PaddingValues(0.dp),
     ) {
         when {
@@ -415,26 +407,13 @@ private fun NodeRow(
     onClick: () -> Unit,
 ) {
     val semantic = LocalSemanticColors.current
-    val shape = RoundedCornerShape(20.dp)
     Surface(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .glass(
-                if (selected) {
-                    Glass.style(
-                        tint = MaterialTheme.colorScheme.primaryContainer,
-                        rim = MaterialTheme.colorScheme.primary,
-                    )
-                } else {
-                    Glass.style()
-                },
-                shape,
-            ),
-        shape = shape,
-        color = Color.Transparent,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 14.dp),

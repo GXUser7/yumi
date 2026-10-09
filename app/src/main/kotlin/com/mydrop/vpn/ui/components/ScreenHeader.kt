@@ -18,13 +18,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import com.mydrop.vpn.ui.theme.Glass
-import com.mydrop.vpn.ui.theme.glass
 
 /**
  * The poster headline every screen opens with, in place of an app bar.
@@ -55,24 +51,20 @@ fun ScreenHeader(
 
         Spacer(Modifier.height(10.dp))
 
-        Text(text = title, style = titleStyle, color = MaterialTheme.colorScheme.onBackground)
+        Text(text = title, style = titleStyle)
 
         if (subtitle != null) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
 
-/**
- * Circular glass action, the one control shape that sits above the headline.
- *
- * YouCloud's round button: the panel tone the navigation pill is made of, its mark in the accent.
- */
+/** Circular tonal action, the one control shape that sits above the headline. */
 @Composable
 fun TonalIconButton(
     icon: ImageVector,
@@ -82,20 +74,17 @@ fun TonalIconButton(
 ) {
     FilledIconButton(
         onClick = onClick,
-        modifier = modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .glass(Glass.panel(), CircleShape),
+        modifier = modifier.size(40.dp),
         shape = CircleShape,
         colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.primary,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(19.dp),
         )
     }
 }

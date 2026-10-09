@@ -23,12 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
-import com.mydrop.vpn.ui.theme.MonoStyle
 
 /** Protocol pill. REALITY-capable protocols get the primary accent to stand out in long lists. */
 @Composable
@@ -43,13 +43,11 @@ fun ProtocolBadge(protocol: Protocol, modifier: Modifier = Modifier) {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
         modifier = modifier
-            // Translucent, so the pill sits in the glass of its row rather than on top of it as an
-            // opaque sticker.
             .background(
                 color = if (emphasised) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
+                    MaterialTheme.colorScheme.primaryContainer
                 } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    MaterialTheme.colorScheme.surfaceContainerHighest
                 },
                 shape = RoundedCornerShape(6.dp),
             )
@@ -122,8 +120,9 @@ fun LatencyChip(
     ) { text ->
         Text(
             text = text,
-            style = MonoStyle.copy(fontSize = MaterialTheme.typography.labelLarge.fontSize),
+            style = MaterialTheme.typography.labelMedium,
             color = color,
+            fontFamily = FontFamily.Monospace,
         )
     }
 }

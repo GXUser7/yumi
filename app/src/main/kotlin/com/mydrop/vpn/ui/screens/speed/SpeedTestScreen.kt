@@ -50,16 +50,12 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.ValueAndUnit
 import com.mydrop.vpn.core.model.SpeedPhase
 import com.mydrop.vpn.core.model.SpeedTestState
-import com.mydrop.vpn.ui.components.FrostBehindWindow
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.SpeedGauge
 import com.mydrop.vpn.ui.components.SpeedTrace
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.format.formatMegabits
-import com.mydrop.vpn.ui.theme.Glass
-import com.mydrop.vpn.ui.theme.GlassTone
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
-import com.mydrop.vpn.ui.theme.glass
 import com.mydrop.vpn.ui.theme.MonoStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
@@ -146,10 +142,7 @@ fun SpeedTestScreen(
             AlertDialog(
                 onDismissRequest = { confirmMetered = false },
                 title = { Text(stringResource(R.string.speed_metered_title)) },
-                text = {
-                    FrostBehindWindow()
-                    Text(stringResource(R.string.speed_metered_body))
-                },
+                text = { Text(stringResource(R.string.speed_metered_body)) },
                 confirmButton = {
                     TextButton(
                         onClick = {
@@ -341,8 +334,8 @@ private fun ResultCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(ResultShape)
-            .glass(Glass.style(GlassTone.Regular), ResultShape)
+            .clip(RoundedCornerShape(28.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -389,10 +382,6 @@ private fun ResultCard(
     }
 }
 
-private val ResultShape = RoundedCornerShape(28.dp)
-
-private val ChipShape = RoundedCornerShape(12.dp)
-
 @Composable
 private fun Chip(text: String) {
     Text(
@@ -400,8 +389,8 @@ private fun Chip(text: String) {
         style = MonoStyle.copy(fontSize = MaterialTheme.typography.labelMedium.fontSize),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
-            .clip(ChipShape)
-            .glass(Glass.style(GlassTone.Thin), ChipShape)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 12.dp, vertical = 7.dp),
     )
 }
@@ -418,20 +407,13 @@ private fun Control(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(if (running) 34.dp else ControlHeight / 2)
     Button(
         onClick = if (running) onStop else onStart,
-        // Glass while it runs, like the tunnel control once the tunnel is up: the loud pill is the
-        // one asking to be pressed, and a running test only offers to stop.
-        modifier = modifier
-            .fillMaxWidth()
-            .height(ControlHeight)
-            .clip(shape)
-            .glass(Glass.panel(), shape),
-        shape = shape,
+        modifier = modifier.fillMaxWidth().height(ControlHeight),
+        shape = RoundedCornerShape(if (running) 34.dp else ControlHeight / 2),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (running) {
-                Color.Transparent
+                MaterialTheme.colorScheme.surfaceContainerHigh
             } else {
                 MaterialTheme.colorScheme.primary
             },

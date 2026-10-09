@@ -6,18 +6,13 @@ import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,18 +23,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.ui.format.formatBytes
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
@@ -57,7 +51,8 @@ import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -66,7 +61,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
@@ -78,35 +72,24 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
-import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.model.UpdateState
-import com.mydrop.vpn.ui.components.GlassCard
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
-import com.mydrop.vpn.ui.components.TonalIconButton
-import com.mydrop.vpn.ui.theme.Glass
-import com.mydrop.vpn.ui.theme.GlassTone
-import com.mydrop.vpn.ui.theme.LocalGlassColors
-import com.mydrop.vpn.ui.theme.glass
-import com.mydrop.vpn.ui.theme.scheme
 import com.mydrop.vpn.vpn.TunnelTileService
 
 /**
@@ -194,6 +177,7 @@ fun SettingsScreen(
         item("appearance") {
             SettingsSection(
                 title = stringResource(R.string.settings_appearance),
+                icon = Icons.Rounded.Palette,
             ) {
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -266,14 +250,6 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
-
-                PaletteRow(
-                    selected = settings.palette,
-                    dynamic = settings.dynamicColor,
-                    onSelect = { chosen -> onUpdate { it.copy(palette = chosen) } },
-                )
-
                 Spacer(Modifier.height(4.dp))
 
                 SwitchRow(
@@ -288,24 +264,13 @@ fun SettingsScreen(
                     checked = settings.amoled,
                     onCheckedChange = { onUpdate { s -> s.copy(amoled = it) } },
                 )
-                SwitchRow(
-                    title = stringResource(R.string.settings_background_motion),
-                    subtitle = stringResource(R.string.settings_background_motion_subtitle),
-                    checked = settings.backgroundMotion,
-                    onCheckedChange = { onUpdate { s -> s.copy(backgroundMotion = it) } },
-                )
-                SwitchRow(
-                    title = stringResource(R.string.settings_glass_effects),
-                    subtitle = stringResource(R.string.settings_glass_effects_subtitle),
-                    checked = settings.glassEffects,
-                    onCheckedChange = { onUpdate { s -> s.copy(glassEffects = it) } },
-                )
             }
         }
 
         item("routing") {
             SettingsSection(
                 title = stringResource(R.string.settings_routing),
+                icon = Icons.Rounded.Router,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_bypass_lan),
@@ -344,6 +309,7 @@ fun SettingsScreen(
         item("tunnel") {
             SettingsSection(
                 title = stringResource(R.string.settings_tunnel),
+                icon = Icons.Rounded.Shield,
             ) {
                 SwitchRow(
                     title = "IPv6",
@@ -382,6 +348,7 @@ fun SettingsScreen(
         item("dns") {
             SettingsSection(
                 title = stringResource(R.string.settings_dns),
+                icon = Icons.Rounded.Dns,
             ) {
                 ValidatedField(
                     initial = settings.remoteDns,
@@ -446,6 +413,7 @@ fun SettingsScreen(
         item("ping") {
             SettingsSection(
                 title = stringResource(R.string.settings_latency),
+                icon = Icons.Rounded.NetworkPing,
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PingMode.entries.forEach { mode ->
@@ -479,6 +447,7 @@ fun SettingsScreen(
         item("behaviour") {
             SettingsSection(
                 title = stringResource(R.string.settings_behaviour),
+                icon = Icons.Rounded.Bolt,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_boot),
@@ -555,6 +524,7 @@ fun SettingsScreen(
         item("failover") {
             SettingsSection(
                 title = stringResource(R.string.settings_failover_section),
+                icon = Icons.Rounded.SwapHoriz,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_failover),
@@ -630,6 +600,7 @@ fun SettingsScreen(
         item("diagnostics") {
             SettingsSection(
                 title = stringResource(R.string.settings_diagnostics),
+                icon = Icons.Rounded.Article,
             ) {
                 NavigationRow(
                     title = stringResource(R.string.settings_logs),
@@ -656,6 +627,7 @@ fun SettingsScreen(
         item("geo") {
             SettingsSection(
                 title = stringResource(R.string.settings_geo),
+                icon = Icons.Rounded.Router,
             ) {
                 GeoRow(state = geoAssets, onRefresh = onRefreshGeo)
             }
@@ -664,6 +636,7 @@ fun SettingsScreen(
         item("alerts") {
             SettingsSection(
                 title = stringResource(R.string.settings_alerts_section),
+                icon = Icons.Rounded.NotificationsActive,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_alert_server),
@@ -695,6 +668,7 @@ fun SettingsScreen(
         item("updates") {
             SettingsSection(
                 title = stringResource(R.string.settings_updates),
+                icon = Icons.Rounded.SystemUpdate,
             ) {
                 SwitchRow(
                     title = stringResource(R.string.settings_update_auto),
@@ -742,99 +716,6 @@ fun SettingsScreen(
 }
 
 /**
- * The palettes, shown as what they are.
- *
- * The television has offered these from the start; the phone had the field in its settings and no
- * way to reach it. Swatches rather than names, each painted in its own scheme's accent rather than
- * the current one, so the row is the choice and not a label for it — the same reasoning as the
- * television's row, at a phone's size.
- *
- * Dimmed rather than hidden while wallpaper colours are on. The wallpaper wins then, and a row that
- * vanished would leave somebody who remembers choosing "Rose" wondering where it went.
- */
-@Composable
-private fun PaletteRow(selected: Palette, dynamic: Boolean, onSelect: (Palette) -> Unit) {
-    val dark = LocalGlassColors.current.dark
-
-    val title = stringResource(R.string.settings_palette)
-    Text(
-        text = title + " · " + stringResource(selected.labelRes),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (dynamic) {
-        Text(
-            text = stringResource(R.string.settings_palette_dynamic),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    Spacer(Modifier.height(8.dp))
-    // Spread across the card rather than scrolled: seven swatches are one control, and each takes
-    // its share of the width up to a comfortable size, so a narrow phone shrinks them instead of
-    // hiding the last two past the edge.
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Palette.entries.forEach { option ->
-            val scheme = remember(option, dark) { option.scheme(dark) }
-            PaletteSwatch(
-                accent = scheme.primary,
-                tick = scheme.onPrimary,
-                chosen = option == selected,
-                enabled = !dynamic,
-                label = stringResource(option.labelRes),
-                onClick = { onSelect(option) },
-                modifier = Modifier.weight(1f, fill = false),
-            )
-        }
-    }
-}
-
-/**
- * One swatch. The chosen one morphs from a circle to a rounded square on the scheme's spring —
- * the expressive way of saying "this one" with the shape rather than only with a tick.
- */
-@Composable
-private fun PaletteSwatch(
-    accent: Color,
-    tick: Color,
-    chosen: Boolean,
-    enabled: Boolean,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val corner by animateDpAsState(
-        targetValue = if (chosen) 13.dp else 22.dp,
-        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
-        label = "swatch-corner",
-    )
-    Surface(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier
-            .sizeIn(maxWidth = SwatchSize, maxHeight = SwatchSize)
-            .aspectRatio(1f)
-            .alpha(if (enabled) 1f else 0.4f)
-            .semantics { contentDescription = label },
-        shape = RoundedCornerShape(corner),
-        color = accent,
-        contentColor = tick,
-        border = if (chosen) BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface) else null,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (chosen) {
-                Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(20.dp))
-            }
-        }
-    }
-}
-
-private val SwatchSize = 44.dp
-
-/**
  * The state of the routing databases, and a way to fetch them again.
  *
  * The size is shown rather than a bare "ready", because that is the number that says whether these
@@ -842,12 +723,9 @@ private val SwatchSize = 44.dp
  */
 @Composable
 private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
-    // A row like every other in the panel, with the action as the round glass button the rest of
-    // the app uses. The tonal text button it replaces was the one loud object in the settings, and
-    // it had its own padding on top of the panel's, so it did not even line up.
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -864,53 +742,58 @@ private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
                     stringResource(R.string.settings_geo_missing_subtitle)
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (state.ready) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Spacer(Modifier.width(12.dp))
-        RoundAction(
-            icon = if (state.ready) Icons.Rounded.Refresh else Icons.Rounded.Download,
-            contentDescription = stringResource(
-                if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
-            ),
-            onClick = onRefresh,
-            // Missing databases are the one case worth pressing for: rules and ad blocking are
-            // doing nothing until they arrive.
-            emphasized = !state.ready,
-            busy = state.refreshing,
-        )
+        if (state.refreshing) {
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        } else {
+            FilledTonalButton(onClick = onRefresh) {
+                Text(
+                    stringResource(
+                        if (state.ready) R.string.settings_geo_update else R.string.settings_geo_download,
+                    ),
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun SettingsSection(
     title: String,
+    icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    // YouCloud's settings: the section's name above its panel in the accent, the panel itself a
-    // single sheet of glass. A title inside the card, with an icon beside it, made every section
-    // a small poster of its own.
-    Column(
+    Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
     ) {
-        Text(
-            text = title.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 16.dp),
-        )
-        GlassCard(modifier = Modifier.fillMaxWidth(), shape = SectionShape) {
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), content = content)
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            content()
         }
     }
 }
-
-private val SectionShape = RoundedCornerShape(32.dp)
 
 /**
  * Настройки, подчинённые переключателю над ними.
@@ -921,13 +804,12 @@ private val SectionShape = RoundedCornerShape(32.dp)
  */
 @Composable
 private fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(18.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
-            .clip(shape)
-            .glass(Glass.style(GlassTone.Thin), shape)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 14.dp, vertical = 4.dp),
         content = content,
     )
@@ -1200,43 +1082,6 @@ private fun UpdateRow(
 /** Two-thirds of the tunnel screen’s control: the same shape, sized for a settings card. */
 private val UpdateButtonHeight = 76.dp
 
-/**
- * The round button settings rows end with: the panel glass with the mark in the accent, the accent
- * itself when it is the thing to press next, and a spinner in its place while it works.
- */
-@Composable
-private fun RoundAction(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    emphasized: Boolean = false,
-    busy: Boolean = false,
-) {
-    when {
-        busy -> Box(
-            modifier = Modifier
-                .size(RoundActionSize)
-                .clip(CircleShape)
-                .glass(Glass.panel(), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-        }
-
-        emphasized -> FilledIconButton(
-            onClick = onClick,
-            modifier = Modifier.size(RoundActionSize),
-            shape = CircleShape,
-        ) {
-            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
-        }
-
-        else -> TonalIconButton(icon = icon, contentDescription = contentDescription, onClick = onClick)
-    }
-}
-
-private val RoundActionSize = 44.dp
-
 private fun megabytes(bytes: Long): String =
     ((bytes * 10 / (1024 * 1024)) / 10.0).toString()
 
@@ -1282,7 +1127,7 @@ private fun DnsRow(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                     .padding(horizontal = 8.dp, vertical = 3.dp),
             )
         }
