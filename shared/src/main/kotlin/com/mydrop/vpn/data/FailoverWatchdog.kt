@@ -10,7 +10,6 @@ import com.mydrop.vpn.core.model.NetworkEnvironment
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
-import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import kotlinx.coroutines.CoroutineScope
@@ -810,8 +809,12 @@ class FailoverWatchdog(
                         // almost certainly not the resolver at this point.
                         configs.dnsFallback.value -> if (!dnsReported) {
                             dnsReported = true
-                            logs.warn(R.string.log_dns_fallback_also_dead, resolver)
-                            alerts.dnsDead(resolver)
+                            // The fallback is what is failing now, so that is the name to give:
+                            // the line reads "the fallback resolver (…)", and the chosen one was
+                            // already reported when it was replaced.
+                            val fallback = XrayConfigFactory.fallbackResolver(resolver)
+                            logs.warn(R.string.log_dns_fallback_also_dead, fallback)
+                            alerts.dnsDead(fallback)
                         }
 
                         settings.value.dnsFallback -> {
@@ -916,11 +919,13 @@ class FailoverWatchdog(
         autoChosenId = null
     }
 
-    /** The resolver the tunnel is actually querying, named the way the user chose it. */
-    private fun currentResolver(): String = profiles.selectedDnsProfile()?.url
-        ?: settings.value.let {
-            if (it.routingMode == RoutingMode.Direct) it.directDns else it.remoteDns
-        }
+    /**
+     * The resolver the user chose, named the way they chose it — what the tunnel queries until the
+     * fallback replaces it. Shared with the factory so that the replacement announced here is the
+     * one the rebuilt document carries; see [XrayConfigFactory.chosenResolver].
+     */
+    private fun currentResolver(): String =
+        XrayConfigFactory.chosenResolver(settings.value, profiles.selectedDnsProfile()?.url)
 
     /**
      * Starts the leave cooldown even though nothing moved, so a hopeless situation is not retried
