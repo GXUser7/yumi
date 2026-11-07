@@ -274,7 +274,9 @@ class FailoverWatchdog(
                     remembered != null
                 ) {
                     savedOrdinaryNodeId = null
-                    logs.info(R.string.log_mobile_back, remembered.name, "")
+                    // Its own line, without a delay: nothing was measured on this path, and the
+                    // shared one printed an empty "( ms)".
+                    logs.info(R.string.log_mobile_back_remembered, remembered.name)
                     noteSwitch(remembered)
                     launcher.switchTo(remembered)
                     return true
@@ -292,7 +294,15 @@ class FailoverWatchdog(
                 if (pool.isEmpty()) return true
                 val chosen = measureAndPick(pool) ?: return false
                 savedOrdinaryNodeId = null
-                logs.info(R.string.log_mobile_back, chosen.node.name, chosen.millis.toString())
+                // Named by the network the phone is on. This branch also runs on cellular, when
+                // the ordinary servers go first, and used to say "Wi-Fi is back" there too: a
+                // journal from LTE read as if the phone had been on Wi-Fi.
+                val line = if (transport == NetworkTransport.Wifi) {
+                    R.string.log_mobile_back
+                } else {
+                    R.string.log_mobile_ordinary_first
+                }
+                logs.info(line, chosen.node.name, chosen.millis.toString())
                 noteSwitch(chosen.node)
                 launcher.switchTo(chosen.node)
             }
