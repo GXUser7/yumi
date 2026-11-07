@@ -729,10 +729,16 @@ class FailoverWatchdog(
                 // rebuilds that bought — so the query is not sent, not merely ignored: it is one
                 // DoH round trip every twenty seconds, on somebody's mobile data, to answer a
                 // question nothing is allowed to act on.
-                val policed = !XrayConfigFactory.isShippedResolver(
-                    currentResolver(),
-                    settings.value.routingMode,
-                )
+                //
+                // The resolver judged is the one the running core was handed, not the one the
+                // settings name. With the provider's routing on they are different resolvers.
+                // Judging the user's resolver left a dead provider resolver unpoliced whenever the
+                // user's was the default, and blamed the user's resolver when it was not. A
+                // provider's resolver counts as chosen; see DnsInForce.policed for why.
+                //
+                // No document in force means no probe inbound either, so there is nothing to ask.
+                val dns = configs.dns.value
+                val policed = dns?.policed == true
                 val resolving =
                     if (alive && policed) tunnelHealth.resolves(configs.probe.value) else null
                 when (resolving) {
@@ -795,29 +801,36 @@ class FailoverWatchdog(
                         // Told apart from the `n/a` a dead tunnel produces: same word, opposite
                         // reason, and reading the journal afterwards depends on the difference.
                         (if (!policed) "dns-unpoliced " else "") +
-                        (if (configs.dnsFallback.value) "dns-fallback " else "") +
+                        (if (dns?.provider == true) "dns-provider " else "") +
+                        (if (dns?.fallback == true) "dns-fallback " else "") +
                         (if (movedTo != null) "handover=$movedTo " else "") +
                         "-> $decision",
                 )
 
-                if (dnsFailures >= FailoverPolicy.DNS_FAILURES_BEFORE_FALLBACK) {
+                // Failures are only counted while a document is in force (see `policed`), so
+                // `dns` describes the document whose resolver just failed.
+                if (dns != null && dnsFailures >= FailoverPolicy.DNS_FAILURES_BEFORE_FALLBACK) {
                     dnsFailures = 0
-                    val resolver = currentResolver()
+                    // What the core is querying: the provider's resolver when its routing is on and
+                    // it sent some, the user's otherwise, the fallback once it has taken over.
+                    val resolver = dns.resolver
                     when {
                         // Already on the fallback and it is failing too. There is nothing else to
                         // reach for, and saying so is the only useful thing left: the fault is
                         // almost certainly not the resolver at this point.
-                        configs.dnsFallback.value -> if (!dnsReported) {
+                        dns.fallback -> if (!dnsReported) {
                             dnsReported = true
-                            // The fallback is what is failing now, so that is the name to give:
-                            // the line reads "the fallback resolver (…)", and the chosen one was
-                            // already reported when it was replaced.
-                            val fallback = XrayConfigFactory.fallbackResolver(resolver)
-                            logs.warn(R.string.log_dns_fallback_also_dead, fallback)
-                            alerts.dnsFallbackDead(fallback)
+                            // The fallback is what is failing now, and it is the resolver in
+                            // force. The line reads "the fallback resolver (…)"; the one before
+                            // it was already reported when it was replaced.
+                            logs.warn(R.string.log_dns_fallback_also_dead, resolver)
+                            alerts.dnsFallbackDead(resolver)
                         }
 
                         settings.value.dnsFallback -> {
+                            // Worked out from the resolver in force the same way the factory works
+                            // out what replaces it, so the name given here is the one the rebuilt
+                            // core queries — see XrayConfigFactory.Document.resolver.
                             val replacement = XrayConfigFactory.fallbackResolver(resolver)
                             logs.warn(R.string.log_dns_switching, resolver, replacement)
                             alerts.dnsReplaced(resolver, replacement)
@@ -918,14 +931,6 @@ class FailoverWatchdog(
         homeNode = null
         autoChosenId = null
     }
-
-    /**
-     * The resolver the user chose, named the way they chose it — what the tunnel queries until the
-     * fallback replaces it. Shared with the factory so that the replacement announced here is the
-     * one the rebuilt document carries; see [XrayConfigFactory.chosenResolver].
-     */
-    private fun currentResolver(): String =
-        XrayConfigFactory.chosenResolver(settings.value, profiles.selectedDnsProfile()?.url)
 
     /**
      * Starts the leave cooldown even though nothing moved, so a hopeless situation is not retried
