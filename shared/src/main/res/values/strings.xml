@@ -446,6 +446,8 @@ Send it here: %2$s</string>
     <string name="log_failover_nothing_to_swap">“%1$s” is not answering, and there is nothing to replace it with</string>
     <string name="log_mobile_switch">Cellular network — moving to “%1$s” (%2$s ms)</string>
     <string name="log_mobile_back">Wi-Fi is back — moving to “%1$s” (%2$s ms)</string>
+    <string name="log_mobile_back_remembered">Wi-Fi is back — returning to “%1$s”</string>
+    <string name="log_mobile_ordinary_first">Cellular network, ordinary servers first — moving to “%1$s” (%2$s ms)</string>
     <string name="log_mobile_none_answered">Cellular, but no server on the mobile list answered after %1$d tries — staying</string>
     <string name="log_cellular_ordinary_dead">Ordinary servers stopped answering on cellular — falling back to the mobile list (%1$d)</string>
     <string name="settings_prefer_ordinary_cellular">Ordinary servers first on cellular</string>
