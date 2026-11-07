@@ -277,6 +277,7 @@ class AppContainer(context: Context) {
         latencyTester = latencyTester,
         logs = logs,
         strings = strings,
+        rulesChangeFor = { node -> tunnelConfigs.rulesChangeFor(node) },
     )
 
     /**
