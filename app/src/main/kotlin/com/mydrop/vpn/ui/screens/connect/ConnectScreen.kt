@@ -340,8 +340,10 @@ private fun Headline(state: MainUiState, statsExpanded: Boolean, modifier: Modif
         // The mobile mark answers the question a server nobody chose always raises: why this one.
         // Without it the tunnel silently sits somewhere else after a walk to the shops, and the
         // only explanation is a line in a journal the user has no reason to open.
+        // Only while failover is on: with it off the list is not acting, so a server that happens to
+        // be on it was picked by hand and needs no explaining.
         connected != null -> node?.let {
-            val mobile = it.id in state.settings.mobileNodeIds
+            val mobile = state.settings.autoFailover && it.id in state.settings.mobileNodeIds
             val mark = if (mobile) " · " + stringResource(R.string.connect_mobile_server) else ""
             "${it.name} · ${it.protocol.name}$mark"
         }

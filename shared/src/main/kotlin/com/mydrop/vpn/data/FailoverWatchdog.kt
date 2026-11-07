@@ -19,6 +19,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -126,6 +128,15 @@ class FailoverWatchdog(
      * The screen gate is the second half. Several firmwares switch Wi-Fi off when the screen goes
      * off and fall back to cellular; without waiting for somebody to be looking, every press of
      * the power button would read as leaving the house and move the tunnel twice.
+     *
+     * And all of it sits under the failover switch, because that is where the settings screen puts
+     * the mobile list: nested under "leave a dead server", hidden together with it, and promising
+     * to work only while it is on. This block used to ignore the switch. A journal from the seventh
+     * of November has the result: failover off, a mobile list filled in back when it was on and
+     * invisible since, and the tunnel still moved onto it — on every network change, and every
+     * time the owner picked an ordinary server by hand on LTE, within ten seconds of the tap. Four
+     * taps on the same German server in four minutes, four moves back onto the list, and nothing on
+     * any screen to say which setting was doing it.
      */
     private fun watchTransport() {
         scope.launch {
@@ -133,14 +144,20 @@ class FailoverWatchdog(
                 tunnel.transport,
                 tunnel.screenOn,
                 tunnel.state,
-            ) { transport, awake, state -> Triple(transport, awake, state) }
-                .collectLatest { (transport, awake, state) ->
+                settings.settings.map { it.autoFailover }.distinctUntilChanged(),
+            ) { transport, awake, state, failoverOn ->
+                TransportInputs(transport, awake, state, failoverOn)
+            }
+                .collectLatest { (transport, awake, state, failoverOn) ->
                     // Nothing is applied while the tunnel is down, and — the part that was
                     // missing — nothing is *remembered* as applied either. Marking the transport
                     // confirmed on a dead tunnel meant that turning the VPN on afterwards, still
                     // on the same network, matched the remembered value and was skipped: the
                     // mobile list was never consulted for the network the phone was already on.
-                    if (state !is VpnState.Connected) {
+                    //
+                    // The switch being off is the same case for the same reason: turning it on
+                    // later, still on LTE, has to be asked about the network the phone is on now.
+                    if (state !is VpnState.Connected || !failoverOn) {
                         confirmedTransport = NetworkTransport.None
                         return@collectLatest
                     }
@@ -194,6 +211,10 @@ class FailoverWatchdog(
     /** @return whether the question is settled — false only when a wanted move could not be made. */
     private suspend fun applyTransport(transport: NetworkTransport): Boolean {
         val current = settings.value
+        // Also stopped upstream, in watchTransport; read again here because the switch can go off
+        // inside the settle or between two retries, and a move made after it did is still a move
+        // nobody allowed.
+        if (!current.autoFailover) return true
         if (current.mobileNodeIds.isEmpty()) return true
         if (tunnel.state.value !is VpnState.Connected) return true
         val carrying = profiles.selectedNode() ?: return true
@@ -867,6 +888,14 @@ class FailoverWatchdog(
             }
         }
     }
+
+    /** What [watchTransport] reacts to, as one value so a change in any of them is one question. */
+    private data class TransportInputs(
+        val transport: NetworkTransport,
+        val awake: Boolean,
+        val state: VpnState,
+        val failoverOn: Boolean,
+    )
 
     /** Why the wait between probes ended. */
     private sealed interface Nudge {
