@@ -94,6 +94,10 @@ class TunnelConfigBuilder(
      *
      * Read at [build] time, so the switch happens on the next connection — which is what the
      * watchdog asks for immediately after setting it.
+     *
+     * While it is set the fallback replaces every resolver the document would otherwise name: the
+     * DNS screen's choice, the settings field, and a provider's own resolvers when its routing is
+     * switched on. The provider's rules still apply. See `XrayConfigFactory.build`.
      */
     val dnsFallback: StateFlow<Boolean> = _dnsFallback.asStateFlow()
 
@@ -170,6 +174,7 @@ class TunnelConfigBuilder(
                 geoAvailable = geoAvailable,
                 provider = provider,
                 geoKnown = geoKnown,
+                dnsFallback = _dnsFallback.value,
             )
         }.onSuccess { document ->
             // Said on every connection that uses them, because a provider's rule is the likeliest

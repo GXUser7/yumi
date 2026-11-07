@@ -208,6 +208,11 @@ object XrayConfigFactory {
      *   disk actually hold. Asked only of the provider's rules: this file's own references are to
      *   categories every published database has, and the provider's are to whatever its own client
      *   ships with. One the core cannot find rejects the whole configuration, as above.
+     * @param dnsFallback builds the document with [fallbackResolver] in place of [chosenResolver],
+     *   for when the watchdog has found the chosen one dead. It wins over everything else that
+     *   names a resolver — the DNS screen's choice and [provider]'s resolvers alike — because it is
+     *   only ever set after the resolver in force stopped answering, and handing the core any of
+     *   them again is the outage it exists to end. The provider's rules stay; only its DNS goes.
      */
     fun build(
         nodes: List<ProxyNode>,
@@ -218,6 +223,7 @@ object XrayConfigFactory {
         geoAvailable: Boolean = true,
         provider: ProviderProfile? = null,
         geoKnown: (String) -> Boolean = { true },
+        dnsFallback: Boolean = false,
     ): Document {
         unsupported(selected)?.let {
             throw IllegalArgumentException("Xray cannot carry $it, which ${selected.name} needs")
@@ -225,8 +231,14 @@ object XrayConfigFactory {
 
         val usable = usable(nodes, selected)
         val dialed = members(nodes, selected)
-        val resolved = settings.withDnsOverride(dnsOverride)
-        val applied = provider?.takeIf { settings.routingMode != RoutingMode.Direct }
+        // Override first, fallback second: the fallback replaces whatever the user's choice made
+        // the tunnel query, which is the resolver the watchdog found dead and named in the alert.
+        val resolved = settings.withDnsOverride(dnsOverride).withDnsFallback(dnsFallback)
+        val applied = provider
+            ?.takeIf { settings.routingMode != RoutingMode.Direct }
+            // Without this the flag is inert whenever a provider sent resolvers: buildDns hands
+            // the core the provider's list and never reads the settings the fallback went into.
+            ?.let { if (dnsFallback) it.copy(dns = null) else it }
         val carried = applied?.let { carry(it, geoAvailable, geoKnown) }
 
         return Document(
@@ -372,6 +384,28 @@ object XrayConfigFactory {
         routingMode == RoutingMode.Direct -> copy(directDns = override)
         else -> copy(remoteDns = override)
     }
+
+    /** The fallback in the same field the override went into, for the same reason. */
+    private fun AppSettings.withDnsFallback(active: Boolean): AppSettings = when {
+        !active -> this
+        routingMode == RoutingMode.Direct -> copy(directDns = fallbackResolver(directDns))
+        else -> copy(remoteDns = fallbackResolver(remoteDns))
+    }
+
+    /**
+     * The resolver the user chose for this tunnel: [dnsOverride] — the DNS screen's choice — when
+     * there is one, otherwise the settings field the routing mode queries.
+     *
+     * One definition for both ends of the fallback. The watchdog names this resolver when it
+     * declares it dead and announces `fallbackResolver(chosenResolver(…))` as its replacement;
+     * [build] with `dnsFallback` puts exactly that in its place. Worked out twice, the two could
+     * disagree — a blank profile URL is "no override" here — and the user would be told one
+     * resolver while the core queried another.
+     */
+    fun chosenResolver(settings: AppSettings, dnsOverride: String? = null): String =
+        settings.withDnsOverride(dnsOverride).let {
+            if (it.routingMode == RoutingMode.Direct) it.directDns else it.remoteDns
+        }
 
     private fun buildConfig(
         nodes: List<ProxyNode>,
@@ -1189,8 +1223,9 @@ object XrayConfigFactory {
         resolver == if (mode == RoutingMode.Direct) DEFAULT_DIRECT_DNS else DEFAULT_REMOTE_DNS
 
     /**
-     * The resolver [build] would put in place of [primary]. Exposed so the journal can name it
-     * before the switch happens, rather than leaving the user to infer it from a working tunnel.
+     * The resolver [build] puts in place of [primary] when asked for `dnsFallback`. Exposed so the
+     * journal can name it before the switch happens, rather than leaving the user to infer it from
+     * a working tunnel.
      */
     fun fallbackResolver(primary: String): String =
         if (addressOf(primary) == addressOf(FALLBACK_REMOTE_DNS)) {
