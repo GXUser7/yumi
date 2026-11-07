@@ -96,7 +96,7 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 - **A check through the tunnel:** every twenty seconds the app pulls a page through it — a server can answer on its port while carrying nothing at all. Two failures in a row, the second three seconds after the first, and the tunnel moves to a working server from a replacement list you pick by hand.
 - **It does not blame a server for somebody else's fault:** with no internet (a lift, a tube station) the checks pause, a change of network closes the old connections at once, and when nothing answers at all the app stays put.
 - **Your own servers for mobile data:** on a cellular network the tunnel moves onto these and stays within them; back on Wi-Fi it returns to the ordinary list.
-- **A fallback resolver:** if your DNS stops answering, the app moves to `1.1.1.1` until the next reconnection, and says so.
+- **A fallback resolver:** if your DNS — or, with provider routing on, the provider's — stops answering, the app moves to `1.1.1.1` until the next reconnection, and says so.
 - **Notices about what it repaired by itself** — a replaced server, a replaced resolver, an emptied list, a new version; four separate switches.
 
 </td>
@@ -122,7 +122,8 @@ screen and fall back to cellular.
 
 **Why a fallback resolver.** A dead resolver is the one failure changing servers cannot fix, and the
 least visible: every site stops opening while the tunnel demonstrably carries traffic. So the health
-check has a second half that resolves a name through your own DNS.
+check has a second half that resolves a name through the DNS the tunnel is using: your own, or the
+provider's when provider routing is on and the subscription sent one.
 
 **Why notices.** The whole value of moving off a failed server is that nobody is watching when it
 happens — which is exactly why nobody learns that it did.
