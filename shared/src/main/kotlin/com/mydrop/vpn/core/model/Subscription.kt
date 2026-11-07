@@ -69,6 +69,15 @@ data class Subscription(
      * for a token this way, and there is no other place to put one.
      */
     val headers: Map<String, String> = emptyMap(),
+
+    /**
+     * The routing and DNS the provider wrote into its configuration documents, per server. Kept
+     * whether or not the user has asked for it to be applied — see `AppSettings.providerRouting` —
+     * so turning that on works straight away instead of after the next refresh.
+     *
+     * Null when the provider has never been seen to send any.
+     */
+    val providerRouting: ProviderRouting? = null,
 )
 
 /** Outcome of a refresh, so the UI can distinguish "no change" from "failed" from "updated". */
@@ -78,6 +87,12 @@ sealed interface SubscriptionUpdate {
         val nodes: List<ProxyNode>,
         val addedCount: Int,
         val removedCount: Int,
+        /**
+         * What the provider's documents said this time, or null when no documents could be read —
+         * which is not the same as documents that carry no routing, and must not erase what an
+         * earlier refresh learned.
+         */
+        val providerRouting: ProviderRouting? = null,
     ) : SubscriptionUpdate
 
     data class Failure(val subscriptionId: String, val message: String) : SubscriptionUpdate

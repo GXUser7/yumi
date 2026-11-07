@@ -49,6 +49,7 @@
     <string name="tv_bypass_lan">Обходить локальную сеть</string>
     <string name="tv_block_ads">Блокировать рекламу</string>
     <string name="tv_block_quic">Блокировать QUIC</string>
+    <string name="tv_provider_routing">Маршрутизация провайдера</string>
     <string name="tv_ipv6">IPv6</string>
     <string name="tv_hijack_dns">Перехватывать DNS</string>
     <string name="tv_dns_fallback">Резервный DNS</string>

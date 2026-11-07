@@ -3,6 +3,9 @@ package com.mydrop.vpn.core.xray
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProviderProfile
+import com.mydrop.vpn.core.model.ProviderRule
+import com.mydrop.vpn.core.model.ProviderTarget
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.model.identified
@@ -14,8 +17,11 @@ import com.mydrop.vpn.core.net.isNumericAddress
 import java.net.InetAddress
 import com.mydrop.vpn.core.net.splitHostPort
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -105,6 +111,12 @@ object XrayConfigFactory {
          * that, rather than leaving the user with a server that stopped working after an update.
          */
         val verificationForced: List<String>,
+        /** How many of the provider's rules the document holds; zero when none were applied. */
+        val providerRules: Int = 0,
+        /** Provider rules left out because the core could not have resolved them; see `carry`. */
+        val providerRulesDropped: Int = 0,
+        /** Whether the resolvers in the document are the provider's rather than the user's. */
+        val providerDns: Boolean = false,
     )
 
     /**
@@ -188,6 +200,14 @@ object XrayConfigFactory {
      *   and one it cannot resolve rejects the whole configuration rather than the single rule
      *   (`common/geodata/geodat_loader.go`). A tunnel that routes everything through the proxy
      *   beats one that will not start.
+     * @param provider the routing and DNS [selected]'s provider wrote for it, when the user has
+     *   asked for those to be applied. Its rules go ahead of the user's own and its resolvers
+     *   replace the user's; see [providerRules]. Ignored in [RoutingMode.Direct], which means no
+     *   proxy at all — a provider's "this site through the server" has nowhere to go there.
+     * @param geoKnown whether a `geosite:`/`geoip:` reference names a category the databases on
+     *   disk actually hold. Asked only of the provider's rules: this file's own references are to
+     *   categories every published database has, and the provider's are to whatever its own client
+     *   ships with. One the core cannot find rejects the whole configuration, as above.
      */
     fun build(
         nodes: List<ProxyNode>,
@@ -196,6 +216,8 @@ object XrayConfigFactory {
         probe: ProbeEndpoint? = null,
         dnsOverride: String? = null,
         geoAvailable: Boolean = true,
+        provider: ProviderProfile? = null,
+        geoKnown: (String) -> Boolean = { true },
     ): Document {
         unsupported(selected)?.let {
             throw IllegalArgumentException("Xray cannot carry $it, which ${selected.name} needs")
@@ -204,11 +226,13 @@ object XrayConfigFactory {
         val usable = usable(nodes, selected)
         val dialed = members(nodes, selected)
         val resolved = settings.withDnsOverride(dnsOverride)
+        val applied = provider?.takeIf { settings.routingMode != RoutingMode.Direct }
+        val carried = applied?.let { carry(it, geoAvailable, geoKnown) }
 
         return Document(
             json = json.encodeToString(
                 JsonObject.serializer(),
-                buildConfig(dialed, resolved, probe, geoAvailable),
+                buildConfig(dialed, resolved, probe, geoAvailable, carried),
             ),
             pinnedTag = nodeTag(selected.dialed().first().id),
             // The servers, not their members: this is what the tunnel can be moved onto, and a
@@ -223,7 +247,99 @@ object XrayConfigFactory {
                         tls.pinnedCertSha256.isBlank() && tls.verifyPeerCertByName.isBlank()
                 }
                 .map { it.name },
+            providerRules = carried?.rules?.size ?: 0,
+            providerRulesDropped = (applied?.rules?.size ?: 0) - (carried?.rules?.size ?: 0),
+            providerDns = carried?.dnsServers?.isNotEmpty() == true,
         )
+    }
+
+    /** A provider profile reduced to what this core, with these databases, will accept. */
+    private class CarriedProvider(
+        val rules: List<JsonObject>,
+        val dnsServers: List<JsonElement>,
+        val queryStrategy: String?,
+    )
+
+    /**
+     * The provider's rules and resolvers as this document will hold them, or null when nothing in
+     * them survives.
+     *
+     * Narrowed, never widened. A list entry this core cannot resolve is removed from its rule, and
+     * a rule left with an empty list is removed whole — an empty `domain` is not "no condition",
+     * it is a condition nothing meets, and Xray refuses it outright. The same goes for a resolver
+     * whose `domains` lose every entry: kept, it would answer for every name instead of the few it
+     * was given.
+     */
+    private fun carry(
+        provider: ProviderProfile,
+        geoAvailable: Boolean,
+        geoKnown: (String) -> Boolean,
+    ): CarriedProvider? {
+        val keeps = { entry: String -> keepsEntry(entry, geoAvailable, geoKnown) }
+        val rules = provider.rules.mapNotNull { rule -> providerRule(rule, keeps) }
+        val servers = provider.dns?.servers.orEmpty().mapNotNull { server -> providerResolver(server, keeps) }
+        if (rules.isEmpty() && servers.isEmpty()) return null
+        return CarriedProvider(rules, servers, provider.dns?.queryStrategy)
+    }
+
+    /**
+     * Whether one entry of a provider's list can be carried. Geo references need the databases, and
+     * the category to be in them; `ext:` names a file of the provider's own that is not on this
+     * phone and never will be.
+     */
+    private fun keepsEntry(entry: String, geoAvailable: Boolean, geoKnown: (String) -> Boolean): Boolean {
+        val lower = entry.trim().lowercase()
+        return when {
+            lower.startsWith("ext:") -> false
+            lower.startsWith("geosite:") || lower.startsWith("geoip:") -> geoAvailable && geoKnown(entry.trim())
+            else -> true
+        }
+    }
+
+    /** The conditions a list can hold geo references in. */
+    private val LIST_CONDITIONS = setOf("domain", "ip", "source", "sourceIP")
+
+    private fun providerRule(rule: ProviderRule, keeps: (String) -> Boolean): JsonObject? {
+        val conditions = LinkedHashMap<String, JsonElement>()
+        for ((key, value) in rule.match) {
+            if (key !in LIST_CONDITIONS) {
+                conditions[key] = value
+                continue
+            }
+            val kept = entriesOf(value)?.filter(keeps) ?: return null
+            if (kept.isEmpty()) return null
+            conditions[key] = JsonArray(kept.map { JsonPrimitive(it) })
+        }
+        return buildJsonObject {
+            put("type", "field")
+            conditions.forEach { (key, value) -> put(key, value) }
+            when (rule.target) {
+                ProviderTarget.Proxy -> put("balancerTag", BALANCER_TAG)
+                ProviderTarget.Direct -> put("outboundTag", DIRECT_TAG)
+                ProviderTarget.Block -> put("outboundTag", BLOCK_TAG)
+            }
+        }
+    }
+
+    private fun providerResolver(server: JsonElement, keeps: (String) -> Boolean): JsonElement? {
+        if (server !is JsonObject) return server
+        val narrowed = LinkedHashMap<String, JsonElement>(server)
+        for (key in listOf("domains", "expectIPs")) {
+            val value = server[key] ?: continue
+            val kept = entriesOf(value)?.filter(keeps) ?: return null
+            if (kept.isEmpty()) return null
+            narrowed[key] = JsonArray(kept.map { JsonPrimitive(it) })
+        }
+        return JsonObject(narrowed)
+    }
+
+    /** A condition's entries, written either as a list or as a single string; null for anything else. */
+    private fun entriesOf(value: JsonElement): List<String>? = when (value) {
+        is JsonArray -> value.map { element ->
+            (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+        }
+        is JsonPrimitive -> if (value.isString) listOf(value.content) else null
+        else -> null
     }
 
     /**
@@ -262,6 +378,7 @@ object XrayConfigFactory {
         settings: AppSettings,
         probe: ProbeEndpoint?,
         geoAvailable: Boolean,
+        provider: CarriedProvider?,
     ): JsonObject = buildJsonObject {
         putJsonObject("log") { put("loglevel", settings.logLevel.toXrayLevel()) }
 
@@ -336,7 +453,7 @@ object XrayConfigFactory {
             }
         }
 
-        put("dns", buildDns(settings))
+        put("dns", buildDns(settings, provider))
 
         putJsonArray("inbounds") {
             add(buildTunInbound(settings))
@@ -360,7 +477,7 @@ object XrayConfigFactory {
             }
         }
 
-        put("routing", buildRouting(settings, geoAvailable))
+        put("routing", buildRouting(settings, geoAvailable, provider))
     }
 
     // ------------------------------------------------------------------ Inbounds
@@ -882,9 +999,26 @@ object XrayConfigFactory {
         }
     }
 
-    private fun buildDns(settings: AppSettings): JsonObject = buildJsonObject {
+    private fun buildDns(settings: AppSettings, provider: CarriedProvider?): JsonObject = buildJsonObject {
         val remote = xrayResolver(settings.remoteDns)
         val direct = xrayResolver(settings.directDns)
+        val providers = provider?.dnsServers.orEmpty()
+
+        if (providers.isNotEmpty()) {
+            // The provider's resolvers instead of the user's, not beside them: Xray asks its
+            // servers in order and falls through on failure, so a list of both would put whichever
+            // came first in charge and leave the other answering only when it was down.
+            putJsonArray("servers") { providers.forEach { add(it) } }
+            // Narrowed, never widened. The tunnel may have switched IPv6 off for servers that were
+            // not seen to carry it — see `Ipv6Policy` — and a provider's `UseIP` written for its own
+            // client cannot know that. Handing applications AAAA answers a server cannot reach is
+            // the outage that policy exists to prevent.
+            val strategy = provider?.queryStrategy ?: "UseIP"
+            put("queryStrategy", if (settings.enableIpv6) strategy else "UseIPv4")
+            put("disableCache", false)
+            put("tag", DNS_IN_TAG)
+            return@buildJsonObject
+        }
 
         putJsonArray("servers") {
             when (settings.routingMode) {
@@ -1071,7 +1205,11 @@ object XrayConfigFactory {
 
     // ------------------------------------------------------------------ Routing
 
-    private fun buildRouting(settings: AppSettings, geoAvailable: Boolean): JsonObject =
+    private fun buildRouting(
+        settings: AppSettings,
+        geoAvailable: Boolean,
+        provider: CarriedProvider?,
+    ): JsonObject =
         buildJsonObject {
             put("domainStrategy", "IPIfNonMatch")
 
@@ -1086,7 +1224,8 @@ object XrayConfigFactory {
             }
 
             putJsonArray("rules") {
-                dnsRules(settings)
+                val providerDns = provider?.dnsServers.orEmpty()
+                if (providerDns.isNotEmpty()) providerDnsRules(providerDns) else dnsRules(settings)
 
                 // Unconditional, and that is the difference between a setting and a trapdoor.
                 //
@@ -1186,6 +1325,22 @@ object XrayConfigFactory {
                         put("outboundTag", DIRECT_TAG)
                     }
                 }
+
+                // The provider's rules, ahead of everything the user chose below and behind
+                // everything above, and both halves of that are the design rather than an accident.
+                //
+                // Ahead of the user's: the switch that put them here says "my provider's routing
+                // first, mine for whatever it does not mention" — Quattro's list sends five hundred
+                // Russian domains direct and its torrents around the server, and the rules mode
+                // below still catches what the list does not name.
+                //
+                // Behind the plumbing: the resolver, the probe, the carrier's own names and the
+                // local network are how this tunnel works at all, not opinions about where traffic
+                // should go. A provider rule placed above the probe would decide where the failover
+                // watchdog's health check travels, and one that matched it could make every server
+                // look dead or every dead server look alive. A provider's catch-all placed above the
+                // LAN bypass would send the printer to Germany.
+                provider?.rules?.forEach { add(it) }
 
                 if (settings.blockAds && geoAvailable) {
                     addJsonObject {
@@ -1293,6 +1448,45 @@ object XrayConfigFactory {
             }
         }
 
+        addJsonObject {
+            put("type", "field")
+            putJsonArray("inboundTag") { add(DNS_IN_TAG) }
+            put("balancerTag", BALANCER_TAG)
+        }
+    }
+
+    /**
+     * Where the core's DNS traffic goes when the resolvers are the provider's: through the proxy,
+     * every one of them.
+     *
+     * That is what the provider's own document does with them. Nothing in Quattro's routing names
+     * 8.8.8.8 or 1.1.1.1, so in its client the query falls through to the default outbound, which
+     * is the server. Splitting them the way [dnsRules] splits the user's — a "direct" resolver out
+     * of the physical interface — would send a plain-UDP query for every name past the very
+     * filter the provider is routing around, and get back whatever the filter chose to answer.
+     *
+     * The one exception is the same as there: a resolver named by domain has its own name looked
+     * up directly, because there is no tunnel to resolve it through yet.
+     */
+    private fun JsonArrayBuilder.providerDnsRules(servers: List<JsonElement>) {
+        servers
+            .mapNotNull { server ->
+                val address = when (server) {
+                    is JsonPrimitive -> server.takeIf { it.isString }?.content
+                    is JsonObject -> (server["address"] as? JsonPrimitive)?.content
+                    else -> null
+                }
+                address?.let(::hostOf)?.takeUnless(::isNumericAddress)
+            }
+            .distinct()
+            .forEach { host ->
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("inboundTag") { add(DNS_IN_TAG) }
+                    putJsonArray("domain") { add("full:$host") }
+                    put("outboundTag", DIRECT_TAG)
+                }
+            }
         addJsonObject {
             put("type", "field")
             putJsonArray("inboundTag") { add(DNS_IN_TAG) }

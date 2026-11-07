@@ -98,6 +98,19 @@ data class AppSettings(
 
     // Routing
     val routingMode: RoutingMode = RoutingMode.Rules,
+    /**
+     * Whether a provider's own routing and DNS are applied, for servers whose provider sent any.
+     *
+     * Its rules go first and the user's after them — [routingMode], the ad block, the QUIC block —
+     * for whatever the provider's list does not mention; its resolvers replace the user's for as
+     * long as the tunnel is on that provider's server. See `ProviderProfile` for what is read and
+     * what is left out.
+     *
+     * Off by default, and it has to be: the same subscription that worked yesterday must not start
+     * routing differently because an update learned to read a part of it nobody asked for. Ignored
+     * in [RoutingMode.Direct], which means no proxy at all.
+     */
+    val providerRouting: Boolean = false,
     val bypassLan: Boolean = true,
     val blockAds: Boolean = false,
     /**

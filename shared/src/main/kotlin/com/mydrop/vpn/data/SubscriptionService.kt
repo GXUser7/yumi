@@ -1,9 +1,11 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.shared.R
+import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
+import com.mydrop.vpn.core.parse.ProviderProfileParser
 import com.mydrop.vpn.core.parse.SubscriptionBody
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.core.xray.XrayConfigFactory
@@ -153,7 +155,11 @@ class SubscriptionService(
 
                 // The same subscription as Xray documents, when this list flattened the provider's
                 // auto-select servers into their last resort; see autoSelectVariant.
-                val nodes = autoSelectVariant(subscription, body.nodes) ?: body.nodes
+                val documents = autoSelectVariant(subscription, body.nodes)
+                val nodes = documents?.nodes ?: body.nodes
+                // The provider's routing, from whichever answer was documents: this one, when the
+                // panel already sent them, or the second request above.
+                val profiles = ProviderProfileParser.parse(response.body) ?: documents?.profiles
 
                 // Refused here rather than left to fail at connect time. A protocol the core
                 // cannot speak makes a row that looks like every other row, pings like every other
@@ -203,6 +209,16 @@ class SubscriptionService(
                     nodes = carried,
                     addedCount = 0,
                     removedCount = 0,
+                    providerRouting = profiles?.let { byName ->
+                        ProviderProfileParser.routingFor(carried, byName).also { routing ->
+                            logs.trace(
+                                "YumiSub",
+                                "${subscription.name}: provider routing for " +
+                                    "${routing.byNode.size}/${carried.size} servers, " +
+                                    "${routing.profiles.size} distinct",
+                            )
+                        }
+                    },
                 )
             }
 
@@ -243,8 +259,12 @@ class SubscriptionService(
      * replaces the link of the same name, which keeps its row, its place and — through the name —
      * the selection; a group no link is named after is added at the end. A document without a
      * group, a request that fails, or an answer that is not documents changes nothing.
+     *
+     * The routing and DNS in those documents are read on the way past — see [ProviderProfileParser]
+     * — from the first answer that was documents, groups or not. A provider whose documents carry
+     * rules but no auto-select server still has rules worth keeping.
      */
-    private fun autoSelectVariant(subscription: Subscription, links: List<ProxyNode>): List<ProxyNode>? {
+    private fun autoSelectVariant(subscription: Subscription, links: List<ProxyNode>): DocumentsAnswer? {
         if (links.any { it.group != null }) return null
         val url = runCatching { URL(subscription.url) }.getOrNull() ?: return null
 
@@ -257,10 +277,12 @@ class SubscriptionService(
                 add(Triple("agent", subscription.url, asking))
             }
         }
+        var profiles: Map<String, ProviderProfile>? = null
         for ((how, variantUrl, asking) in variants) {
             val response = runCatching { fetch(variantUrl, asking) }.getOrNull()
-            val body = response?.takeIf { it.code in 200..299 }
-                ?.let { SubscriptionParser.parse(it.body, subscription.id) }
+            val answered = response?.takeIf { it.code in 200..299 }
+            val body = answered?.let { SubscriptionParser.parse(it.body, subscription.id) }
+            if (profiles == null) profiles = answered?.let { ProviderProfileParser.parse(it.body) }
             val groups = (body as? SubscriptionBody.Nodes)?.nodes.orEmpty().filter { it.group != null }
             logs.trace(
                 "YumiSub",
@@ -271,10 +293,17 @@ class SubscriptionService(
                     else -> "${body.nodes.size} servers, ${groups.size} auto-select"
                 },
             )
-            if (groups.isNotEmpty()) return withGroups(links, groups)
+            if (groups.isNotEmpty()) return DocumentsAnswer(withGroups(links, groups), profiles)
         }
-        return null
+        return profiles?.let { DocumentsAnswer(nodes = null, profiles = it) }
     }
+
+    /** What asking for documents produced; see [autoSelectVariant]. */
+    private class DocumentsAnswer(
+        /** The list with its auto-select servers restored, or null when there were none to restore. */
+        val nodes: List<ProxyNode>?,
+        val profiles: Map<String, ProviderProfile>?,
+    )
 
     /** [links] with each of [groups] in the place of the link named after it; see [autoSelectVariant]. */
     private fun withGroups(links: List<ProxyNode>, groups: List<ProxyNode>): List<ProxyNode> {

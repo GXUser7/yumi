@@ -639,6 +639,11 @@ fun TvSettingsScreen(
                 }
             }
             item {
+                ToggleSetting(stringResource(R.string.tv_provider_routing), state.settings.providerRouting) {
+                    onUpdateSettings { s -> s.copy(providerRouting = !s.providerRouting) }
+                }
+            }
+            item {
                 ToggleSetting(stringResource(R.string.tv_bypass_lan), state.settings.bypassLan) {
                     onUpdateSettings { s -> s.copy(bypassLan = !s.bypassLan) }
                 }

@@ -3,6 +3,7 @@ package com.mydrop.vpn.data
 import android.content.Context
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.xray.XrayConfigFactory
@@ -51,6 +52,13 @@ class TunnelConfigBuilder(
      */
     private val ipv6Allowed: (active: List<ProxyNode>, members: List<ProxyNode>) -> Boolean =
         { _, _ -> true },
+    /**
+     * The routing and DNS a server's provider wrote for it; see [ProviderProfile]. Asked only when
+     * the user has switched the provider's routing on.
+     */
+    private val providerProfile: (ProxyNode) -> ProviderProfile? = { null },
+    /** Whether the databases on disk hold a `geosite:`/`geoip:` category; see `GeoAssetStore.knows`. */
+    private val geoKnown: (String) -> Boolean = { false },
 ) {
 
     /** What the running document decided about IPv6, and the members it decided it for. */
@@ -146,6 +154,11 @@ class TunnelConfigBuilder(
         val answersIpv6 = wanted.enableIpv6 &&
             ipv6Allowed(members.filter { it.id in activeIds }, members)
         val effective = if (wanted.enableIpv6 && !answersIpv6) wanted.copy(enableIpv6 = false) else wanted
+        // The server the tunnel starts on decides, for the whole document. A failover that later
+        // moves the tunnel inside it keeps these rules until the next rebuild — and on the
+        // subscriptions this was written against the profiles differ between servers only in
+        // details like whether torrents may pass, not in what the provider wants routed.
+        val provider = if (wanted.providerRouting) providerProfile(node) else null
 
         return runCatching {
             XrayConfigFactory.build(
@@ -155,8 +168,21 @@ class TunnelConfigBuilder(
                 probe = probe,
                 dnsOverride = selectedDns(),
                 geoAvailable = geoAvailable,
+                provider = provider,
+                geoKnown = geoKnown,
             )
         }.onSuccess { document ->
+            // Said on every connection that uses them, because a provider's rule is the likeliest
+            // explanation for a site going somewhere the user's own settings would not send it.
+            if (document.providerRules > 0 || document.providerDns) {
+                logs.info(
+                    if (document.providerDns) R.string.log_provider_routing_dns else R.string.log_provider_routing,
+                    document.providerRules,
+                )
+            }
+            if (document.providerRulesDropped > 0) {
+                logs.warn(R.string.log_provider_rules_dropped, document.providerRulesDropped)
+            }
             // Said once per connection rather than swallowed: Xray removed the "do not verify the
             // certificate" switch outright, so a server that relied on it will fail its handshake
             // and the journal has to be able to say why.

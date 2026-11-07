@@ -149,6 +149,7 @@ happens — which is exactly why nobody learns that it did.
 - **DNS resolvers are objects just like servers:** added by a link (a DoH address, `tcp://`, `udp://`, a bare address or an `sdns://` stamp), stored as a list and switched with a single tap, including on a live tunnel.
 - **No quiet downgrades:** DNS-over-TLS and DNS-over-QUIC are not in this core, so `tls://` and `quic://` are refused when added rather than turned into plain UDP.
 - **"Direct" plus your own DNS** — no VPN, but the resolver you want: traffic leaves from your ordinary address while names are resolved by the service you picked.
+- **Provider routing** (a switch in settings): when a subscription sends its own rules and DNS — the way panels send them to Happ — those go first and your own settings after them. A rule the core could not read is left out on its own instead of taking the tunnel down.
 - **Routing databases** (`geoip.dat` and `geosite.dat`, some 24 MB) are fetched on their own after the first connection; settings show whether they are on disk, with a button to refresh. Until they are there, the country rules are left out of the configuration — and that is shown rather than hidden.
 - **Also:** local network bypass, ad-domain blocking and per-app split tunnelling.
 

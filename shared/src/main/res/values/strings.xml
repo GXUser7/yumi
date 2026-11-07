@@ -274,6 +274,8 @@
     <string name="settings_block_ads_subtitle">Drop requests to known advertising domains</string>
     <string name="settings_block_quic">Block QUIC</string>
     <string name="settings_block_quic_subtitle">Makes browsers fall back to TLS over TCP. Helps where UDP is throttled</string>
+    <string name="settings_provider_routing">Provider routing</string>
+    <string name="settings_provider_routing_subtitle">Rules and DNS from the subscription go first, your settings after them. Only for subscriptions that send their own</string>
     <string name="settings_split_tunnel">Split tunnelling</string>
     <string name="settings_split_tunnel_off">Every app through the VPN</string>
     <string name="settings_split_tunnel_allow">Selected only: %1$d</string>
@@ -299,6 +301,7 @@
     <string name="settings_direct_dns_hint">For domains that bypass the proxy</string>
     <string name="settings_dns_empty_error">The address cannot be empty</string>
     <string name="settings_dns_resolvers">Added resolvers</string>
+    <string name="settings_dns_provider_note">Provider routing is on: on servers whose provider sent its own DNS, that DNS is used. The settings below apply to every other server</string>
     <string name="settings_dns_fallback">Fallback resolver</string>
     <string name="settings_dns_fallback_subtitle">If a resolver you chose stops answering, switch to 1.1.1.1 until the next reconnection. The built-in default is left alone</string>
     <string name="settings_dns_from_settings">From settings</string>
@@ -477,6 +480,9 @@ Send it here: %2$s</string>
     <string name="log_geo_downloaded">Geo database %1$s is ready</string>
     <string name="log_geo_failed">Could not fetch %1$s (%2$s) — routing without it</string>
     <string name="log_tls_verification_forced">%1$s asked for the certificate check to be skipped, which this core cannot do — it will be verified</string>
+    <string name="log_provider_routing">Provider routing: %1$d rules ahead of your own</string>
+    <string name="log_provider_routing_dns">Provider routing: %1$d rules ahead of your own, and the provider\'s DNS</string>
+    <string name="log_provider_rules_dropped">%1$d provider rules left out: they name databases or categories this phone does not have</string>
     <string name="log_probe_port">Speed test port: %1$d</string>
     <string name="log_config_failed">Could not assemble the configuration: %1$s</string>
 
