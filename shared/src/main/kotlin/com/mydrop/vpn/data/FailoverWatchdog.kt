@@ -814,7 +814,7 @@ class FailoverWatchdog(
                             // already reported when it was replaced.
                             val fallback = XrayConfigFactory.fallbackResolver(resolver)
                             logs.warn(R.string.log_dns_fallback_also_dead, fallback)
-                            alerts.dnsDead(fallback)
+                            alerts.dnsFallbackDead(fallback)
                         }
 
                         settings.value.dnsFallback -> {
