@@ -824,7 +824,7 @@ class FailoverWatchdog(
                             // force. The line reads "the fallback resolver (…)"; the one before
                             // it was already reported when it was replaced.
                             logs.warn(R.string.log_dns_fallback_also_dead, resolver)
-                            alerts.dnsDead(resolver)
+                            alerts.dnsFallbackDead(resolver)
                         }
 
                         settings.value.dnsFallback -> {

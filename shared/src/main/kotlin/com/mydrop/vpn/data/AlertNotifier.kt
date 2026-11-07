@@ -72,6 +72,21 @@ class AlertNotifier(
     )
 
     /**
+     * The fallback resolver is in force and has stopped answering too.
+     *
+     * Not [dnsDead]: that one tells the user the fallback is switched off, and here it is the very
+     * thing that failed. Two resolvers going quiet one after the other points away from DNS, and
+     * that is the useful thing to say. Same kind and id, so the DNS switch still silences it and a
+     * second post replaces the first instead of stacking.
+     */
+    fun dnsFallbackDead(fallback: String) = post(
+        kind = AlertKind.Dns,
+        id = ID_DNS,
+        title = strings.get(R.string.alert_dns_dead_title),
+        text = strings.get(R.string.alert_dns_fallback_dead_text, fallback),
+    )
+
+    /**
      * A subscription refresh took away every server on one of the hand-picked lists.
      *
      * Worth waking somebody for, because it is silent and it disarms something they set up. The

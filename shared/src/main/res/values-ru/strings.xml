@@ -560,6 +560,7 @@
     <string name="alert_dns_dead_title">DNS перестал отвечать</string>
     <string name="alert_dns_replaced_text">%1$s перестал резолвить имена. Перешёл на %2$s до следующего переподключения.</string>
     <string name="alert_dns_dead_text">%1$s перестал резолвить имена. Запасной выключен, так что имена резолвиться не будут.</string>
+    <string name="alert_dns_fallback_dead_text">Запасной DNS %1$s тоже не отвечает. Дело, скорее всего, не в резолвере: проверьте сервер или сеть.</string>
 
     <!-- Обновление самого приложения: магазина нет, больше этого никто не сделает. -->
     <string name="settings_updates">Обновления</string>

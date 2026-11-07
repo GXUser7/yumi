@@ -562,6 +562,7 @@ Send it here: %2$s</string>
     <string name="alert_dns_dead_title">DNS stopped answering</string>
     <string name="alert_dns_replaced_text">%1$s stopped resolving names. Switched to %2$s until the next reconnection.</string>
     <string name="alert_dns_dead_text">%1$s stopped resolving names. The fallback is switched off, so names will not resolve.</string>
+    <string name="alert_dns_fallback_dead_text">The fallback resolver %1$s is not answering either. The fault is probably not the resolver: check the server or the network.</string>
 
     <!-- Updating the app itself, which nothing else does: it is distributed outside any store. -->
     <string name="settings_updates">Updates</string>
