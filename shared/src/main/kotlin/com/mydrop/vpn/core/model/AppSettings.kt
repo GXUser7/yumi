@@ -198,6 +198,11 @@ data class AppSettings(
      * "metered". A 5G plan can report itself temporarily unmetered, and a home Wi-Fi can be marked
      * metered by its owner; keying off the meter would switch the feature off and on for reasons
      * that have nothing to do with which network the phone is on.
+     *
+     * Only while [autoFailover] is on. The settings screen nests this list under that switch and
+     * hides it when the switch is off, so a list left filled in from before must not keep moving
+     * the tunnel where nobody can see why. The ids are kept, not cleared: turning failover back on
+     * restores the list exactly as it was.
      */
     val mobileNodeIds: Set<String> = emptySet(),
     /**
