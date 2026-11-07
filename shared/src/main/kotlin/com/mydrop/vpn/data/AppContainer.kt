@@ -178,6 +178,8 @@ class AppContainer(context: Context) {
         // Late-bound for the same reason: the guard needs the launcher, which needs the tunnel,
         // which needs this builder.
         ipv6Allowed = { active, members -> ipv6Guard.allows(active, members) },
+        providerProfile = { node -> profiles.providerProfileFor(node) },
+        geoKnown = { reference -> geoAssets.knows(reference) },
     )
 
     /**
@@ -275,6 +277,7 @@ class AppContainer(context: Context) {
         latencyTester = latencyTester,
         logs = logs,
         strings = strings,
+        rulesChangeFor = { node -> tunnelConfigs.rulesChangeFor(node) },
     )
 
     /**

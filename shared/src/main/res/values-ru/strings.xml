@@ -272,6 +272,8 @@
     <string name="settings_block_ads_subtitle">Отбрасывать запросы к известным рекламным доменам</string>
     <string name="settings_block_quic">Блокировать QUIC</string>
     <string name="settings_block_quic_subtitle">Браузеры перейдут на TLS поверх TCP. Помогает там, где режут UDP</string>
+    <string name="settings_provider_routing">Маршрутизация провайдера</string>
+    <string name="settings_provider_routing_subtitle">Сначала правила и DNS из подписки, потом ваши настройки. Только для подписок, которые их присылают</string>
     <string name="settings_split_tunnel">Раздельное туннелирование</string>
     <string name="settings_split_tunnel_off">Все приложения через VPN</string>
     <string name="settings_split_tunnel_allow">Только выбранные: %1$d</string>
@@ -299,6 +301,7 @@
     <string name="settings_dns_fallback">Запасной DNS</string>
     <string name="settings_dns_fallback_subtitle">Если ваш DNS перестанет отвечать — перейти на 1.1.1.1 до следующего переподключения. DNS по умолчанию не проверяется</string>
     <string name="settings_dns_resolvers">Добавленные резолверы</string>
+    <string name="settings_dns_provider_note">Включена маршрутизация провайдера: на серверах, чей провайдер прислал свой DNS, используется он. Настройки ниже — для остальных серверов</string>
     <string name="settings_dns_from_settings">Из настроек</string>
 
     <string name="settings_latency">Замер задержки</string>
@@ -475,6 +478,9 @@
     <string name="log_geo_downloaded">Гео-база %1$s на месте</string>
     <string name="log_geo_failed">Не удалось скачать %1$s (%2$s) — маршрутизация без неё</string>
     <string name="log_tls_verification_forced">%1$s просит не проверять сертификат, а это ядро так не умеет — сертификат будет проверен</string>
+    <string name="log_provider_routing">Маршрутизация провайдера: %1$d правил перед вашими</string>
+    <string name="log_provider_routing_dns">Маршрутизация провайдера: %1$d правил перед вашими и DNS провайдера</string>
+    <string name="log_provider_rules_dropped">Пропущено правил провайдера: %1$d — в них базы или категории, которых нет на телефоне</string>
     <string name="log_probe_port">Порт для замера скорости: %1$d</string>
     <string name="log_config_failed">Не удалось собрать конфигурацию: %1$s</string>
 

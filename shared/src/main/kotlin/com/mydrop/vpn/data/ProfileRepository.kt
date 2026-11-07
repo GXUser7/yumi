@@ -3,6 +3,8 @@ package com.mydrop.vpn.data
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NodeIdMigration
+import com.mydrop.vpn.core.model.ProviderProfile
+import com.mydrop.vpn.core.model.ProviderRouting
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
@@ -285,6 +287,8 @@ class ProfileRepository(
         userInfo: SubscriptionUserInfo?,
         remoteTitle: String?,
         webPageUrl: String?,
+        /** Null keeps what the last refresh learned; see [SubscriptionUpdate.Success.providerRouting]. */
+        providerRouting: ProviderRouting? = null,
     ): Pair<Int, Int> {
         var added = 0
         var removed = 0
@@ -317,6 +321,10 @@ class ProfileRepository(
                             webPageUrl = webPageUrl ?: sub.webPageUrl,
                             lastUpdatedEpochMillis = System.currentTimeMillis(),
                             lastError = null,
+                            // Pruned to the servers that survived either way: a remembered profile
+                            // keyed by an id the refresh retired is a profile nothing can reach.
+                            providerRouting = (providerRouting ?: sub.providerRouting)
+                                ?.keepingOnly(fetchedIds),
                         )
                     }
                 },
@@ -401,6 +409,18 @@ class ProfileRepository(
 
     /** Null switches back to the resolver configured in settings. */
     fun selectDnsProfile(id: String?) = store.update { it.copy(selectedDnsId = id) }
+
+    /**
+     * The routing and DNS [node]'s provider wrote for it, or null when it came from a provider that
+     * sends none, or was added by hand.
+     */
+    fun providerProfileFor(node: ProxyNode): ProviderProfile? {
+        val subscriptionId = node.subscriptionId ?: return null
+        return store.value.subscriptions
+            .firstOrNull { it.id == subscriptionId }
+            ?.providerRouting
+            ?.profileFor(node.id)
+    }
 
     fun selectedDnsProfile(): DnsProfile? = store.value.let { state ->
         state.dnsProfiles.firstOrNull { it.id == state.selectedDnsId }

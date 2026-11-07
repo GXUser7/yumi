@@ -58,6 +58,7 @@ class TunnelSettingsApplier(
         val remoteDns: String,
         val directDns: String,
         val hijackDns: Boolean,
+        val providerRouting: Boolean,
     )
 
     private fun AppSettings.baked() = Baked(
@@ -71,6 +72,7 @@ class TunnelSettingsApplier(
         remoteDns = remoteDns,
         directDns = directDns,
         hijackDns = hijackDns,
+        providerRouting = providerRouting,
     )
 
     fun start() {

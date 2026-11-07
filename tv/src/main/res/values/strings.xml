@@ -49,6 +49,7 @@
     <string name="tv_bypass_lan">Bypass local network</string>
     <string name="tv_block_ads">Block ads</string>
     <string name="tv_block_quic">Block QUIC</string>
+    <string name="tv_provider_routing">Provider routing</string>
     <string name="tv_ipv6">IPv6</string>
     <string name="tv_hijack_dns">Intercept DNS</string>
     <string name="tv_dns_fallback">Fallback DNS</string>

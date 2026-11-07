@@ -3,6 +3,7 @@ package com.mydrop.vpn.data
 import android.content.Context
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.xray.GeoCategories
 import java.net.Authenticator
 import java.net.InetSocketAddress
 import java.net.PasswordAuthentication
@@ -98,6 +99,34 @@ class GeoAssetStore(
      */
     fun available(): Boolean = ASSETS.all { asset ->
         File(directory, asset.fileName).let { it.isFile && it.length() >= MINIMUM_BYTES }
+    }
+
+    /** The codes read out of each file, and the size and time of the file they were read from. */
+    private data class Codes(val length: Long, val modified: Long, val codes: Set<String>)
+
+    @Volatile private var codes: Map<String, Codes> = emptyMap()
+
+    /**
+     * Whether the database on disk holds the category [reference] names — `geosite:category-ru`,
+     * `geoip:ru`. See [GeoCategories] for why a missing one is worth asking about in advance.
+     *
+     * Read once per file and kept until the file changes, because the answer is needed on every
+     * connect and reading the codes walks a twenty-megabyte file. False when the file cannot be
+     * read: an unknown answer has to leave the rule out, since guessing wrong costs the tunnel.
+     */
+    fun knows(reference: String): Boolean {
+        val code = GeoCategories.codeOf(reference) ?: return false
+        val name = if (GeoCategories.isSiteReference(reference)) GEOSITE_FILE else GEOIP_FILE
+        val file = File(directory, name)
+        val cached = codes[name]
+        val current = if (cached != null && cached.length == file.length() && cached.modified == file.lastModified()) {
+            cached
+        } else {
+            val read = runCatching { file.inputStream().buffered().use(GeoCategories::read) }.getOrNull()
+                ?: return false
+            Codes(file.length(), file.lastModified(), read).also { codes = codes + (name to it) }
+        }
+        return code in current.codes
     }
 
     /**
@@ -267,13 +296,16 @@ class GeoAssetStore(
          * list is published as; the core looks for it under the name `geosite.dat`, so it is
          * renamed on the way in rather than referenced by its published name.
          */
+        const val GEOIP_FILE = "geoip.dat"
+        const val GEOSITE_FILE = "geosite.dat"
+
         val ASSETS = listOf(
             Asset(
-                fileName = "geoip.dat",
+                fileName = GEOIP_FILE,
                 url = "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat",
             ),
             Asset(
-                fileName = "geosite.dat",
+                fileName = GEOSITE_FILE,
                 url = "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
             ),
         )

@@ -9,6 +9,8 @@ import com.mydrop.vpn.core.model.RealityOptions
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.TlsOptions
 import com.mydrop.vpn.core.model.TransportOptions
+import com.mydrop.vpn.core.parse.ProviderFixtures
+import com.mydrop.vpn.core.parse.ProviderProfileParser
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -228,6 +230,40 @@ class XrayConfigDumpTest {
                 geoAvailable = false,
             ),
         )
+
+        // A provider's routing and resolvers, translated: the shapes a Quattro document carries, plus
+        // a resolver object with per-name routing, which is where Xray's schema is least forgiving.
+        val providers = listOf(
+            "provider-ordinary" to ProviderFixtures.ordinary(),
+            "provider-auto" to ProviderFixtures.auto(),
+            "provider-torrent" to ProviderFixtures.torrent(),
+            "provider-dns-object" to """
+                {"remarks": "D", "outbounds": [{"tag": "proxy", "protocol": "vless"}, {"tag": "direct", "protocol": "freedom"}],
+                 "dns": {"servers": [{"address": "https://dns.example.com/dns-query", "domains": ["domain:example.com"]},
+                                     "1.1.1.1"], "queryStrategy": "UseIPv4"},
+                 "routing": {"rules": [{"type": "field", "port": "853", "network": "tcp", "outboundTag": "direct"}]}}
+            """.trimIndent(),
+        )
+        providers.forEach { (name, documentJson) ->
+            val profile = ProviderProfileParser.parse(documentJson)!!.values.single()
+            listOf(
+                name to AppSettings(),
+                "$name-ipv6" to AppSettings(enableIpv6 = true),
+                "$name-global" to AppSettings(routingMode = RoutingMode.Global, blockAds = true, blockQuic = true),
+            ).forEach { (variant, s) ->
+                dump(
+                    variant,
+                    XrayConfigFactory.build(
+                        nodes = listOf(reference),
+                        selected = reference,
+                        settings = s,
+                        probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password"),
+                        geoAvailable = false,
+                        provider = profile,
+                    ),
+                )
+            }
+        }
 
         val written = outputDir.listFiles { f -> f.extension == "json" }?.size ?: 0
         assertTrue("nothing was dumped", written >= nodes.size + settingsMatrix.size)

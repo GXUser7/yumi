@@ -3,7 +3,9 @@ package com.mydrop.vpn.data
 import android.content.Context
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import java.net.InetAddress
@@ -51,6 +53,13 @@ class TunnelConfigBuilder(
      */
     private val ipv6Allowed: (active: List<ProxyNode>, members: List<ProxyNode>) -> Boolean =
         { _, _ -> true },
+    /**
+     * The routing and DNS a server's provider wrote for it; see [ProviderProfile]. Asked only when
+     * the user has switched the provider's routing on.
+     */
+    private val providerProfile: (ProxyNode) -> ProviderProfile? = { null },
+    /** Whether the databases on disk hold a `geosite:`/`geoip:` category; see `GeoAssetStore.knows`. */
+    private val geoKnown: (String) -> Boolean = { false },
 ) {
 
     /** What the running document decided about IPv6, and the members it decided it for. */
@@ -102,7 +111,33 @@ class TunnelConfigBuilder(
         // watchdog keep choosing from servers the next core has never been told about.
         _switchable.value = emptySet()
         _ipv6.value = null
+        _providerInForce.value = null
     }
+
+    /** The provider profile the running document was built with; null for none, or no document. */
+    private val _providerInForce = MutableStateFlow<ProviderProfile?>(null)
+
+    /** What a document built for [node] right now would carry from its provider. */
+    private fun providerFor(node: ProxyNode): ProviderProfile? {
+        val current = settings.value
+        // Direct mode leaves the provider out of the document entirely (see the factory), so two
+        // servers with different profiles build the same document there.
+        if (!current.providerRouting || current.routingMode == RoutingMode.Direct) return null
+        return providerProfile(node)
+    }
+
+    /**
+     * Whether moving the running tunnel onto [node] needs a new document rather than a pointer swap.
+     *
+     * A swap keeps the document, and the provider's rules and resolvers are in the document, not in
+     * the server. Swapped onto a server whose provider wrote different ones, the tunnel would keep
+     * routing by the old server's: a failover from one of Quattro's ordinary servers onto a torrent
+     * server would go on sending every torrent around the server that exists to carry them, and
+     * the reverse would push torrents through a server whose provider asked for them to be kept off
+     * it. Rebuilding costs the open connections; it happens only when the rules really differ,
+     * which on that subscription is a few switches in a hundred.
+     */
+    fun rulesChangeFor(node: ProxyNode): Boolean = providerFor(node) != _providerInForce.value
 
     fun useDnsFallback(active: Boolean) {
         _dnsFallback.value = active
@@ -146,6 +181,9 @@ class TunnelConfigBuilder(
         val answersIpv6 = wanted.enableIpv6 &&
             ipv6Allowed(members.filter { it.id in activeIds }, members)
         val effective = if (wanted.enableIpv6 && !answersIpv6) wanted.copy(enableIpv6 = false) else wanted
+        // The server the tunnel starts on decides, for the whole document. Moving onto a server
+        // whose provider wrote different rules is then not a pointer swap — see [rulesChangeFor].
+        val provider = providerFor(node)
 
         return runCatching {
             XrayConfigFactory.build(
@@ -155,8 +193,21 @@ class TunnelConfigBuilder(
                 probe = probe,
                 dnsOverride = selectedDns(),
                 geoAvailable = geoAvailable,
+                provider = provider,
+                geoKnown = geoKnown,
             )
         }.onSuccess { document ->
+            // Said on every connection that uses them, because a provider's rule is the likeliest
+            // explanation for a site going somewhere the user's own settings would not send it.
+            if (document.providerRules > 0 || document.providerDns) {
+                logs.info(
+                    if (document.providerDns) R.string.log_provider_routing_dns else R.string.log_provider_routing,
+                    document.providerRules,
+                )
+            }
+            if (document.providerRulesDropped > 0) {
+                logs.warn(R.string.log_provider_rules_dropped, document.providerRulesDropped)
+            }
             // Said once per connection rather than swallowed: Xray removed the "do not verify the
             // certificate" switch outright, so a server that relied on it will fail its handshake
             // and the journal has to be able to say why.
@@ -173,6 +224,7 @@ class TunnelConfigBuilder(
                 tag.removePrefix(XrayConfigFactory.nodeTag(""))
             }
             _ipv6.value = Ipv6InForce(answers = answersIpv6, members = members)
+            _providerInForce.value = provider
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
             // when reading a log off the device.

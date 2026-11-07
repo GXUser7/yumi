@@ -257,6 +257,14 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_routing),
                 icon = Icons.Rounded.Router,
             ) {
+                // First, because it decides how much the rows under it still decide: with it on,
+                // the provider's rules are asked before any of them.
+                SwitchRow(
+                    title = stringResource(R.string.settings_provider_routing),
+                    subtitle = stringResource(R.string.settings_provider_routing_subtitle),
+                    checked = settings.providerRouting,
+                    onCheckedChange = { onUpdate { s -> s.copy(providerRouting = it) } },
+                )
                 SwitchRow(
                     title = stringResource(R.string.settings_bypass_lan),
                     subtitle = stringResource(R.string.settings_bypass_lan_subtitle),
@@ -335,6 +343,17 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_dns),
                 icon = Icons.Rounded.Dns,
             ) {
+                // Said rather than enforced by locking the fields: the provider's DNS belongs to
+                // its servers, and a server added by hand or from another subscription still uses
+                // these. Locked, there would be no way to set the resolver those ones get.
+                if (settings.providerRouting) {
+                    Text(
+                        text = stringResource(R.string.settings_dns_provider_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 ValidatedField(
                     initial = settings.remoteDns,
                     label = stringResource(R.string.settings_remote_dns),

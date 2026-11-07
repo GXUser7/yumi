@@ -55,6 +55,7 @@ class SubscriptionRefresher(
                     userInfo = result.subscription.userInfo,
                     remoteTitle = result.subscription.remoteTitle,
                     webPageUrl = result.subscription.webPageUrl,
+                    providerRouting = result.providerRouting,
                 )
                 val counted = strings.plural(R.plurals.servers, result.nodes.size)
                 val detail = when {

@@ -31,6 +31,11 @@ class TunnelLauncher(
     private val latencyTester: LatencyTester,
     private val logs: LogRepository,
     private val strings: Strings,
+    /**
+     * Whether the running document would have to change to carry [ProxyNode] — its provider's
+     * rules differ from the ones in force. See `TunnelConfigBuilder.rulesChangeFor`.
+     */
+    private val rulesChangeFor: (ProxyNode) -> Boolean = { false },
 ) {
 
     suspend fun connect(): ConnectOutcome {
@@ -72,14 +77,25 @@ class TunnelLauncher(
         // resolver came to be announced in the journal on every outage and applied on none of
         // them: the file on disk changed, the core kept querying the resolver that had stopped
         // answering.
-        if (!reloadConfig && tunnel.selectOutbound(node)) return
+        //
+        // The provider's routing is the same kind of thing. Its rules and resolvers are written
+        // into the document for the server the tunnel started on, so moving onto a server whose
+        // provider wrote different ones has to be a rebuild too, or the tunnel keeps routing by
+        // the rules of a server it has left.
+        val rulesChange = !reloadConfig && rulesChangeFor(node)
+        if (!reloadConfig && !rulesChange && tunnel.selectOutbound(node)) return
         // Rebuilding is the fallback for "the pointer could not be moved", and one of the reasons
         // it cannot be moved is that the tunnel is being torn down underneath: the command socket
         // goes away mid-call, the swap reports failure, and the rebuild below would bring back the
         // tunnel the user just asked to stop. A switch has somewhere to go only while there is
         // something to switch.
         if (!tunnel.state.value.isActive) return
-        tunnel.connect(node, if (reloadConfig) "config reload" else "failover")
+        val reason = when {
+            reloadConfig -> "config reload"
+            rulesChange -> "provider rules differ"
+            else -> "failover"
+        }
+        tunnel.connect(node, reason)
     }
 
     fun disconnect() = tunnel.disconnect()
