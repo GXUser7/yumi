@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.LatencyResult
+import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProxyNode
 import java.net.DatagramPacket
@@ -37,7 +38,42 @@ import kotlinx.coroutines.withContext
  */
 class LatencyTester(private val maxConcurrency: Int = 16) {
 
-    suspend fun measure(node: ProxyNode, mode: PingMode = PingMode.Tcp): LatencyResult =
+    suspend fun measure(node: ProxyNode, mode: PingMode = PingMode.Tcp): LatencyResult {
+        val group = node.group
+        if (group != null && group.members.isNotEmpty()) return measureGroup(node, group, mode)
+        return measureOne(node, mode)
+    }
+
+    /**
+     * A group answers for the member that would carry it: every member probed at once, and the
+     * result is the one [NodeGroup.pick] chooses — the provider's order, inside its limit.
+     *
+     * This used to probe the group's own endpoint, which is its first member, and nothing else.
+     * On Quattro's "LTE Авто" servers the first member is the cheapest one, a server abroad, and
+     * the six behind it are relays inside the country — which is the whole point of the group on
+     * a mobile network that lets only domestic addresses through. So exactly where the group
+     * works, its first member is the one address that cannot answer, and the list showed every
+     * one of them as unreachable while the tunnel, choosing among all seven, rode a relay fine.
+     */
+    private suspend fun measureGroup(node: ProxyNode, group: NodeGroup, mode: PingMode): LatencyResult {
+        val results = coroutineScope {
+            group.members.map { member -> async { measureOne(member, mode) } }.awaitAll()
+        }
+        // At least a millisecond: [NodeGroup.pick] reads zero as "did not answer", and a member on
+        // the same network can answer inside one.
+        val delays = results.withIndex()
+            .filter { (_, result) -> !result.failed }
+            .associate { (index, result) -> index to result.millis.coerceAtLeast(1) }
+        val chosen = group.pick(delays)
+        return LatencyResult(
+            nodeId = node.id,
+            millis = chosen?.let(delays::get) ?: 0,
+            measuredAtEpochMillis = System.currentTimeMillis(),
+            failed = chosen == null,
+        )
+    }
+
+    private suspend fun measureOne(node: ProxyNode, mode: PingMode): LatencyResult =
         withContext(Dispatchers.IO) {
             val samples = if (mode == PingMode.Median) MEDIAN_SAMPLES else 1
             val measurements = ArrayList<Int>(samples)
