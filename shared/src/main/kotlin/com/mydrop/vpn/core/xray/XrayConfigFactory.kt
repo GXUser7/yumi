@@ -24,6 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -117,6 +118,19 @@ object XrayConfigFactory {
         val providerRulesDropped: Int = 0,
         /** Whether the resolvers in the document are the provider's rather than the user's. */
         val providerDns: Boolean = false,
+        /**
+         * The resolver the core asks first for a name that no resolver in the document was given
+         * in its own `domains`. The probe's name is one of those, so this is the resolver the
+         * watchdog's DNS check is really testing.
+         *
+         * The provider's when [providerDns] is true (see [primaryResolver]). The fallback when the
+         * document was built with `dnsFallback`. Otherwise the user's choice ([chosenResolver]).
+         * Written the way it was configured, not the way the core reads it, because the journal
+         * shows it to the user. A document built with `dnsFallback` puts
+         * `fallbackResolver(resolver)` in its place, using the value from the same document built
+         * without the flag.
+         */
+        val resolver: String,
     )
 
     /**
@@ -208,11 +222,12 @@ object XrayConfigFactory {
      *   disk actually hold. Asked only of the provider's rules: this file's own references are to
      *   categories every published database has, and the provider's are to whatever its own client
      *   ships with. One the core cannot find rejects the whole configuration, as above.
-     * @param dnsFallback builds the document with [fallbackResolver] in place of [chosenResolver],
-     *   for when the watchdog has found the chosen one dead. It wins over everything else that
-     *   names a resolver — the DNS screen's choice and [provider]'s resolvers alike — because it is
-     *   only ever set after the resolver in force stopped answering, and handing the core any of
-     *   them again is the outage it exists to end. The provider's rules stay; only its DNS goes.
+     * @param dnsFallback builds the document with [fallbackResolver] in place of the resolver it
+     *   would otherwise start on ([Document.resolver]), for when the watchdog has found that one
+     *   dead. It wins over everything else that names a resolver — the DNS screen's choice and
+     *   [provider]'s resolvers alike — because it is only ever set after the resolver in force
+     *   stopped answering, and handing the core any of them again is the outage it exists to end.
+     *   The provider's rules stay; only its DNS goes.
      */
     fun build(
         nodes: List<ProxyNode>,
@@ -231,15 +246,21 @@ object XrayConfigFactory {
 
         val usable = usable(nodes, selected)
         val dialed = members(nodes, selected)
-        // Override first, fallback second: the fallback replaces whatever the user's choice made
-        // the tunnel query, which is the resolver the watchdog found dead and named in the alert.
-        val resolved = settings.withDnsOverride(dnsOverride).withDnsFallback(dnsFallback)
-        val applied = provider
-            ?.takeIf { settings.routingMode != RoutingMode.Direct }
-            // Without this the flag is inert whenever a provider sent resolvers: buildDns hands
-            // the core the provider's list and never reads the settings the fallback went into.
-            ?.let { if (dnsFallback) it.copy(dns = null) else it }
-        val carried = applied?.let { carry(it, geoAvailable, geoKnown) }
+        val applied = provider?.takeIf { settings.routingMode != RoutingMode.Direct }
+        val offered = applied?.let { carry(it, geoAvailable, geoKnown) }
+        // The fallback replaces the resolver this document would otherwise start on: the
+        // provider's if it sent any, the user's choice if not. The watchdog found that resolver
+        // dead and named it in the alert, and it built the replacement it announced from that same
+        // name. Computing the replacement from the user's resolver while the provider's was in
+        // force would bring back the same host after a provider's 1.1.1.1 went dead.
+        val primary = offered?.dnsServers?.let(::primaryResolver)
+            ?: chosenResolver(settings, dnsOverride)
+        // Override first, fallback second, both in the field the routing mode queries.
+        val resolved = settings.withDnsOverride(dnsOverride).withDnsFallback(dnsFallback, primary)
+        // The provider's resolvers have to go too, or the flag does nothing whenever a provider
+        // sent some: buildDns hands the core the provider's list and never reads the settings the
+        // fallback went into. The provider's rules stay.
+        val carried = if (dnsFallback) offered?.withoutDns() else offered
 
         return Document(
             json = json.encodeToString(
@@ -262,6 +283,7 @@ object XrayConfigFactory {
             providerRules = carried?.rules?.size ?: 0,
             providerRulesDropped = (applied?.rules?.size ?: 0) - (carried?.rules?.size ?: 0),
             providerDns = carried?.dnsServers?.isNotEmpty() == true,
+            resolver = carried?.dnsServers?.let(::primaryResolver) ?: chosenResolver(resolved),
         )
     }
 
@@ -270,7 +292,34 @@ object XrayConfigFactory {
         val rules: List<JsonObject>,
         val dnsServers: List<JsonElement>,
         val queryStrategy: String?,
-    )
+    ) {
+        /** The same rules with none of the resolvers; null when the resolvers were all there was. */
+        fun withoutDns(): CarriedProvider? =
+            if (rules.isEmpty()) null else CarriedProvider(rules, emptyList(), null)
+    }
+
+    /**
+     * The address of the resolver the core asks first, out of a provider's [servers], for a name
+     * that none of their `domains` match. Null when [servers] is empty.
+     *
+     * Xray asks for such a name every server in order except those marked `skipFallback`, and asks
+     * the first server only if every one of them is marked that way (`sortClients` in
+     * `app/dns/dns.go`). It moves to the next server when one fails, so the probe fails only when
+     * all of them fail. Naming the first is still honest: every lookup starts with it, and it
+     * failed along with the rest.
+     */
+    private fun primaryResolver(servers: List<JsonElement>): String? =
+        (servers.firstOrNull { !skipsFallback(it) } ?: servers.firstOrNull())?.let(::resolverAddress)
+
+    private fun skipsFallback(server: JsonElement): Boolean =
+        ((server as? JsonObject)?.get("skipFallback") as? JsonPrimitive)?.booleanOrNull == true
+
+    /** A `dns.servers` entry's address, written either bare or as the object form's `address`. */
+    private fun resolverAddress(server: JsonElement): String? = when (server) {
+        is JsonPrimitive -> server.takeIf { it.isString }?.content
+        is JsonObject -> (server["address"] as? JsonPrimitive)?.content
+        else -> null
+    }
 
     /**
      * The provider's rules and resolvers as this document will hold them, or null when nothing in
@@ -385,22 +434,23 @@ object XrayConfigFactory {
         else -> copy(remoteDns = override)
     }
 
-    /** The fallback in the same field the override went into, for the same reason. */
-    private fun AppSettings.withDnsFallback(active: Boolean): AppSettings = when {
-        !active -> this
-        routingMode == RoutingMode.Direct -> copy(directDns = fallbackResolver(directDns))
-        else -> copy(remoteDns = fallbackResolver(remoteDns))
-    }
+    /**
+     * The fallback for [primary], in the same field the override went into and for the same
+     * reason. [primary] is not always this field's value: a provider's resolver is replaced here
+     * too, once its own list has been taken out of the document.
+     */
+    private fun AppSettings.withDnsFallback(active: Boolean, primary: String): AppSettings =
+        if (active) withDnsOverride(fallbackResolver(primary)) else this
 
     /**
      * The resolver the user chose for this tunnel: [dnsOverride] — the DNS screen's choice — when
      * there is one, otherwise the settings field the routing mode queries.
      *
-     * One definition for both ends of the fallback. The watchdog names this resolver when it
-     * declares it dead and announces `fallbackResolver(chosenResolver(…))` as its replacement;
-     * [build] with `dnsFallback` puts exactly that in its place. Worked out twice, the two could
-     * disagree — a blank profile URL is "no override" here — and the user would be told one
-     * resolver while the core queried another.
+     * This is what [Document.resolver] holds while no provider's resolvers are in force, and so
+     * the resolver the watchdog names when it declares the user's one dead. [build] works it out
+     * here once rather than in two places: computed twice, the two answers could disagree (a
+     * blank profile URL means "no override" here), and the user would be told one resolver while
+     * the core queried another.
      */
     fun chosenResolver(settings: AppSettings, dnsOverride: String? = null): String =
         settings.withDnsOverride(dnsOverride).let {
@@ -1218,14 +1268,19 @@ object XrayConfigFactory {
      * Matched on the string the tunnel actually queries, so it holds whether the value arrived as
      * the untouched default, as the same URL typed into the field by hand, or as a DNS profile that
      * happens to name it.
+     *
+     * Only asked about a resolver the user's own settings put in the document. A provider's
+     * resolvers are policed whatever they are, because they are not the app's default; see
+     * `TunnelConfigBuilder.DnsInForce.policed`.
      */
     fun isShippedResolver(resolver: String, mode: RoutingMode): Boolean =
         resolver == if (mode == RoutingMode.Direct) DEFAULT_DIRECT_DNS else DEFAULT_REMOTE_DNS
 
     /**
-     * The resolver [build] puts in place of [primary] when asked for `dnsFallback`. Exposed so the
-     * journal can name it before the switch happens, rather than leaving the user to infer it from
-     * a working tunnel.
+     * The resolver [build] puts in place of [primary] when asked for `dnsFallback`, where [primary]
+     * is the [Document.resolver] of the same document built without it. That can be the user's
+     * resolver or the provider's. Exposed so the journal can name the replacement before the
+     * switch happens, rather than leaving the user to infer it from a working tunnel.
      */
     fun fallbackResolver(primary: String): String =
         if (addressOf(primary) == addressOf(FALLBACK_REMOTE_DNS)) {
@@ -1505,14 +1560,7 @@ object XrayConfigFactory {
      */
     private fun JsonArrayBuilder.providerDnsRules(servers: List<JsonElement>) {
         servers
-            .mapNotNull { server ->
-                val address = when (server) {
-                    is JsonPrimitive -> server.takeIf { it.isString }?.content
-                    is JsonObject -> (server["address"] as? JsonPrimitive)?.content
-                    else -> null
-                }
-                address?.let(::hostOf)?.takeUnless(::isNumericAddress)
-            }
+            .mapNotNull { server -> resolverAddress(server)?.let(::hostOf)?.takeUnless(::isNumericAddress) }
             .distinct()
             .forEach { host ->
                 addJsonObject {

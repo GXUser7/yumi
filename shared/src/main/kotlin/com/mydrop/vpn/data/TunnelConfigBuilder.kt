@@ -79,6 +79,47 @@ class TunnelConfigBuilder(
      */
     val ipv6: StateFlow<Ipv6InForce?> = _ipv6.asStateFlow()
 
+    /** Which resolver the running document starts on, and whose it is. */
+    data class DnsInForce(
+        /** What the running core asks first; see [XrayConfigFactory.Document.resolver]. */
+        val resolver: String,
+        /**
+         * Whether [resolver] is the provider's (its routing is on and it sent resolvers) rather
+         * than one from the user's settings.
+         */
+        val provider: Boolean,
+        /** Whether [resolver] is the fallback, put there because the one before it stopped answering. */
+        val fallback: Boolean,
+        /** The routing mode the document was built for, which decides what the shipped default is. */
+        val mode: RoutingMode,
+    ) {
+        /**
+         * Whether the watchdog's DNS check applies to [resolver]. True for anything except the
+         * app's own default, which is not checked (see [XrayConfigFactory.isShippedResolver]).
+         *
+         * A provider's resolver counts as chosen, whatever it is. The app did not pick it: the
+         * provider wrote it, and the user switched the provider's routing on. It is usually plain
+         * UDP through the server, which breaks more easily than any other resolver a document can
+         * hold, and that outage is what the fallback exists for. Judged by the user's resolver
+         * instead, a dead one went unnoticed whenever the user's was the default.
+         *
+         * The fallback is checked too. It is only ever there because the resolver before it
+         * failed, and a dead fallback is reported once and never causes a rebuild.
+         */
+        val policed: Boolean
+            get() = provider || fallback || !XrayConfigFactory.isShippedResolver(resolver, mode)
+    }
+
+    private val _dns = MutableStateFlow<DnsInForce?>(null)
+
+    /**
+     * Null while no document is in force. Recorded rather than recomputed, like [ipv6]. The
+     * resolver to police and to name is the one the core was handed. The DNS screen, the settings
+     * field and the provider's profile can all have changed since then. With the provider's
+     * routing on, the user's own resolver is not in the document at all.
+     */
+    val dns: StateFlow<DnsInForce?> = _dns.asStateFlow()
+
     private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
 
     private val _switchable = MutableStateFlow<Set<String>>(emptySet())
@@ -115,6 +156,7 @@ class TunnelConfigBuilder(
         // watchdog keep choosing from servers the next core has never been told about.
         _switchable.value = emptySet()
         _ipv6.value = null
+        _dns.value = null
         _providerInForce.value = null
     }
 
@@ -188,6 +230,9 @@ class TunnelConfigBuilder(
         // The server the tunnel starts on decides, for the whole document. Moving onto a server
         // whose provider wrote different rules is then not a pointer swap — see [rulesChangeFor].
         val provider = providerFor(node)
+        // Read once, so the record below describes the document this call built even if the
+        // watchdog changes the flag while the build is running.
+        val dnsFallback = _dnsFallback.value
 
         return runCatching {
             XrayConfigFactory.build(
@@ -199,7 +244,7 @@ class TunnelConfigBuilder(
                 geoAvailable = geoAvailable,
                 provider = provider,
                 geoKnown = geoKnown,
-                dnsFallback = _dnsFallback.value,
+                dnsFallback = dnsFallback,
             )
         }.onSuccess { document ->
             // Said on every connection that uses them, because a provider's rule is the likeliest
@@ -229,6 +274,12 @@ class TunnelConfigBuilder(
                 tag.removePrefix(XrayConfigFactory.nodeTag(""))
             }
             _ipv6.value = Ipv6InForce(answers = answersIpv6, members = members)
+            _dns.value = DnsInForce(
+                resolver = document.resolver,
+                provider = document.providerDns,
+                fallback = dnsFallback,
+                mode = effective.routingMode,
+            )
             _providerInForce.value = provider
             // The port, never the credentials. An inbound that fails to bind takes the whole
             // tunnel with it, and this line is the only way to tell that apart from a bad server
