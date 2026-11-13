@@ -57,6 +57,7 @@ internal data class InstalledApp(
 @Composable
 fun SplitTunnelScreen(
     settings: AppSettings,
+    appsRevision: Long,
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
     onBack: () -> Unit,
     contentPadding: PaddingValues,
@@ -66,7 +67,11 @@ fun SplitTunnelScreen(
     var query by remember { mutableStateOf("") }
 
     // Loading and rasterising a few hundred launcher icons is far too slow for the main thread.
-    val apps by produceState<List<InstalledApp>?>(initialValue = null) {
+    val apps by produceState<List<InstalledApp>?>(
+        initialValue = null,
+        key1 = context,
+        key2 = appsRevision,
+    ) {
         value = withContext(Dispatchers.IO) { loadApps(context.packageManager) }
     }
 
@@ -160,7 +165,7 @@ fun SplitTunnelScreen(
                     onToggle = {
                         onUpdate { current ->
                             current.copy(
-                                splitTunnelPackages = if (checked) {
+                                splitTunnelPackages = if (app.packageName in current.splitTunnelPackages) {
                                     current.splitTunnelPackages - app.packageName
                                 } else {
                                     current.splitTunnelPackages + app.packageName

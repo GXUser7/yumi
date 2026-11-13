@@ -37,6 +37,7 @@ class AppContainer(context: Context) {
     private val writeFailure: (Throwable) -> Unit = { reportWriteFailure(it) }
 
     val settings = SettingsRepository(context.filesDir, applicationScope, writeFailure)
+    val installedApps = InstalledApps(appContext, settings)
     val strings = Strings(context) { settings.value.language }
     /**
      * Whether this build is debuggable — the flag Android itself sets, so no build plumbing and
@@ -372,6 +373,7 @@ class AppContainer(context: Context) {
     /** Hands a running tunnel a new configuration when a setting it was built from changes. */
     val tunnelSettingsApplier = TunnelSettingsApplier(
         settings = settings,
+        installedApps = installedApps,
         profiles = profiles,
         tunnel = tunnel,
         launcher = tunnelLauncher,
@@ -402,6 +404,7 @@ class AppContainer(context: Context) {
         failoverWatchdog.start()
         ipv6Guard.start()
         staleSelectionPruner.start()
+        installedApps.start()
         tunnelSettingsApplier.start()
         subscriptionScheduler.start()
         updateScheduler.start()

@@ -24,4 +24,15 @@ class SettingsRepository(
     val value: AppSettings get() = store.value
 
     fun update(transform: (AppSettings) -> AppSettings) = store.update(transform)
+
+    fun onPackageRemoved(packageName: String, replacing: Boolean) {
+        if (replacing || packageName !in value.splitTunnelPackages) return
+        update { it.copy(splitTunnelPackages = it.splitTunnelPackages - packageName) }
+    }
+
+    fun pruneSplitTunnelPackages(installed: (String) -> Boolean) {
+        val missing = value.splitTunnelPackages.filterNot(installed).toSet()
+        if (missing.isEmpty()) return
+        update { it.copy(splitTunnelPackages = it.splitTunnelPackages - missing) }
+    }
 }

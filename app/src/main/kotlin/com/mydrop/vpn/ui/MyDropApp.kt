@@ -330,8 +330,10 @@ fun MyDropApp(viewModel: MainViewModel) {
 
 
             composable(Routes.SPLIT_TUNNEL) {
+                val appsRevision by viewModel.installedAppsChanges.collectAsStateWithLifecycle()
                 SplitTunnelScreen(
                     settings = state.settings,
+                    appsRevision = appsRevision,
                     onUpdate = viewModel::updateSettings,
                     onBack = { navController.popBackStack() },
                     contentPadding = contentPadding,
