@@ -2,13 +2,16 @@ package com.mydrop.vpn.data
 
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppSettings
-import com.mydrop.vpn.core.model.SplitTunnelMode
+import com.mydrop.vpn.core.model.SplitTunnelRules
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -33,6 +36,7 @@ import kotlinx.coroutines.launch
  */
 class TunnelSettingsApplier(
     private val settings: SettingsRepository,
+    private val installedApps: InstalledApps,
     private val profiles: ProfileRepository,
     private val tunnel: TunnelController,
     private val launcher: TunnelLauncher,
@@ -48,8 +52,8 @@ class TunnelSettingsApplier(
      * stops working.
      */
     private data class Baked(
-        val splitTunnelMode: SplitTunnelMode,
-        val splitTunnelPackages: Set<String>,
+        // Names alone miss a reinstall: Builder retains the old UID until re-established.
+        val splitTunnelRules: SplitTunnelRules,
         val bypassLan: Boolean,
         val blockAds: Boolean,
         val blockQuic: Boolean,
@@ -62,8 +66,7 @@ class TunnelSettingsApplier(
     )
 
     private fun AppSettings.baked() = Baked(
-        splitTunnelMode = splitTunnelMode,
-        splitTunnelPackages = splitTunnelPackages,
+        splitTunnelRules = installedApps.rules(this),
         bypassLan = bypassLan,
         blockAds = blockAds,
         blockQuic = blockQuic,
@@ -78,9 +81,9 @@ class TunnelSettingsApplier(
     fun start() {
         scope.launch {
             var known: Baked? = null
-            settings.settings
-                .map { it.baked() }
+            combine(settings.settings, installedApps.changes) { current, _ -> current.baked() }
                 .distinctUntilChanged()
+                .flowOn(Dispatchers.IO)
                 .collectLatest { current ->
                     // The first value is whatever the app started with, not a change to it.
                     if (known == null) {
@@ -90,10 +93,11 @@ class TunnelSettingsApplier(
                     delay(SETTLE_MILLIS)
                     known = current
 
-                    // Nothing to hand the configuration to. The next connection builds it from
-                    // these values anyway, which is the whole reason this only matters while a
-                    // tunnel is already up.
-                    if (tunnel.state.value !is VpnState.Connected) return@collectLatest
+                    // A package can change after a connecting service has already established
+                    // its interface. Wait for that start to finish instead of losing the change.
+                    // A disconnect/failure ends the wait without bringing the tunnel back up.
+                    val state = tunnel.state.first { it !is VpnState.Connecting }
+                    if (state !is VpnState.Connected) return@collectLatest
                     val carrying = profiles.selectedNode() ?: return@collectLatest
 
                     logs.info(R.string.log_settings_reapplied)

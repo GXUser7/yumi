@@ -82,6 +82,8 @@ private data class TransientState(
 
 class MainViewModel(private val container: AppContainer) : ViewModel() {
 
+    val installedAppsChanges = container.installedApps.changes
+
     private val transient = MutableStateFlow(TransientState())
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)

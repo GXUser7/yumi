@@ -38,6 +38,7 @@ import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.net.interfaceCidr
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.core.model.SplitTunnelMode
+import com.mydrop.vpn.core.model.SplitTunnelRules
 import com.mydrop.vpn.data.GeoAssetStore
 import java.io.File
 import java.net.Inet4Address
@@ -360,8 +361,9 @@ class MyDropVpnService : VpnService() {
      *
      * Kept because they cannot be read back off the interface, and because they are the one part of
      * a reload the core has nothing to do with — see [tunnelFor].
+     * UIDs belong in this snapshot too: a reinstalled package can keep its name and get a new UID.
      */
-    private var tunAppRules: Pair<SplitTunnelMode, Set<String>>? = null
+    private var tunAppRules: SplitTunnelRules? = null
 
     /** Polls the core's byte counters; see [startTrafficPolling] for why polling at all. */
     private var trafficJob: Job? = null
@@ -1305,8 +1307,8 @@ class MyDropVpnService : VpnService() {
      * rules themselves changed — the one case where keeping the old interface is the wrong answer.
      */
     private fun tunnelFor(): ParcelFileDescriptor {
-        val settings = (application as MyDropApplication).container.settings.value
-        val wanted = settings.splitTunnelMode to settings.splitTunnelPackages
+        val container = (application as MyDropApplication).container
+        val wanted = container.installedApps.rules(container.settings.value)
         val existing = tunDescriptor ?: return establishTunnel()
         if (wanted == tunAppRules) return existing
 
@@ -1336,7 +1338,9 @@ class MyDropVpnService : VpnService() {
      * what happens to the captured traffic is then decided in the routing rules.
      */
     private fun establishTunnel(): ParcelFileDescriptor {
-        val settings = (application as MyDropApplication).container.settings.value
+        val container = (application as MyDropApplication).container
+        val settings = container.settings.value
+        val appRules = container.installedApps.rules(settings)
         val builder = Builder()
         builder.setSession(nodeName.ifEmpty { "Yumi" })
         builder.setMtu(settings.mtu)
@@ -1429,7 +1433,7 @@ class MyDropVpnService : VpnService() {
         val descriptor = builder.establish()
             ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
         tunDescriptor = descriptor
-        tunAppRules = settings.splitTunnelMode to settings.splitTunnelPackages
+        tunAppRules = appRules
         return descriptor
     }
 
