@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 1x1 Tunnel Widget — Variant B API 31-33 Light dynamic tonal tokens -->
+    <color name="widget_bg_off">@android:color/system_accent2_100</color>
+    <color name="widget_mark_off">@android:color/system_accent1_600</color>
+    <color name="widget_cue_off">@android:color/system_neutral2_500</color>
+
+    <color name="widget_bg_connecting">@android:color/system_accent1_100</color>
+    <color name="widget_connecting_stroke">@android:color/system_accent1_600</color>
+    <color name="widget_mark_connecting">@android:color/system_accent1_800</color>
+    <color name="widget_cue_connecting">@android:color/system_accent1_600</color>
+
+    <color name="widget_bg_on">@android:color/system_accent1_600</color>
+    <color name="widget_mark_on">@android:color/system_accent1_0</color>
+    <color name="widget_cue_on">@android:color/system_accent1_200</color>
+
+    <color name="widget_bg_failed">#FFFFDAD6</color>
+    <color name="widget_mark_failed">#FF410002</color>
+    <color name="widget_cue_failed">#FFBA1A1A</color>
+</resources>

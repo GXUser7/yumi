@@ -77,6 +77,17 @@ class WorldMapTest {
     }
 
     @Test
+    fun `flagOf converts valid country codes and rejects invalid ones`() {
+        assertEquals("🇱🇻", WorldMap.flagOf("LV"))
+        assertEquals("🇳🇱", WorldMap.flagOf("nl"))
+        assertEquals("DE", WorldMap.countryCodeOf("${WorldMap.flagOf("DE")} Germany"))
+        assertNull(WorldMap.flagOf(""))
+        assertNull(WorldMap.flagOf("L"))
+        assertNull(WorldMap.flagOf("USA"))
+        assertNull(WorldMap.flagOf("1A"))
+    }
+
+    @Test
     fun `label points land where the country is`() {
         val latvia = WorldMap.centroidOf("LV")
         assertNotNull(latvia)

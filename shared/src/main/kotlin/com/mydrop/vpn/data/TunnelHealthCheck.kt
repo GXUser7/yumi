@@ -1,10 +1,15 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProbeTargets
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URI
 import java.util.Base64
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -30,15 +35,21 @@ import kotlinx.coroutines.withContext
  * number: putting a full-chain figure next to direct handshake times in the server list would
  * make the working server look like the slow one.
  */
-class TunnelHealthCheck(private val logs: LogRepository? = null) {
+class TunnelHealthCheck(
+    private val logs: LogRepository? = null,
+    private val probeUrl: () -> String = { ProbeTargets.DEFAULT_URL },
+    private val timeoutMillis: () -> Int = { DEFAULT_TIMEOUT_MILLIS },
+) {
 
     /**
      * @return true when traffic flows, false when it does not, and null when there is nothing to
      *   ask — no probe inbound means no tunnel to interrogate, and the caller should fall back to
      *   a direct measurement rather than read the absence as a failure.
      */
-    suspend fun passes(probe: ProbeEndpoint?): Boolean? =
-        ask(probe, ProbeTargets.TUNNEL, "through tunnel")
+    suspend fun passes(probe: ProbeEndpoint?): Boolean? {
+        val target = probeUrl().takeIf(ProbeTargets::isValidProbeUrl) ?: ProbeTargets.DEFAULT_URL
+        return askUrl(probe, target, "through tunnel")
+    }
 
     /**
      * Whether names resolve, asked the same way and separated from [passes] by one routing rule.
@@ -53,20 +64,24 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
      * reading that as a DNS fault would swap the resolver to fix somebody else's outage.
      */
     suspend fun resolves(probe: ProbeEndpoint?): Boolean? =
-        ask(probe, ProbeTargets.DNS, "dns")
+        askUrl(probe, ProbeTargets.url(ProbeTargets.DNS), "dns")
 
-    private suspend fun ask(probe: ProbeEndpoint?, host: String, what: String): Boolean? {
+    private suspend fun askUrl(probe: ProbeEndpoint?, targetUrl: String, what: String): Boolean? {
         probe ?: run {
             trace(TAG, "no probe inbound — falling back to the direct measurement")
             return null
         }
+        val timeout = timeoutMillis().coerceIn(
+            AppSettings.MIN_PROBE_TIMEOUT_MILLIS,
+            AppSettings.MAX_PROBE_TIMEOUT_MILLIS,
+        )
         return withContext(Dispatchers.IO) {
             val started = System.nanoTime()
-            runCatching { fetch(probe, host) }
+            runCatching { fetch(probe, targetUrl, timeout) }
                 .onSuccess {
                     trace(
                         TAG,
-                        "$what: ${if (it) "204 ok" else "wrong status"} " +
+                        "$what: ${if (it) "ok" else "wrong status"} " +
                             "in ${(System.nanoTime() - started) / 1_000_000} ms",
                     )
                 }
@@ -84,40 +99,111 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
     }
 
     /**
-     * Plain HTTP through the mixed inbound, as an absolute-URI GET.
+     * HTTP or HTTPS through the mixed inbound.
      *
-     * No TLS: the request is already inside an encrypted tunnel, and a handshake on top would
-     * only add a round trip to a check that runs every twenty seconds. The absolute URI is what
-     * makes this an ordinary HTTP proxy request, so no `CONNECT` is needed — unlike the speed
-     * test, which has to tunnel TLS and therefore does.
+     * Plain HTTP uses an absolute-URI GET with no `CONNECT`; HTTPS establishes a `CONNECT` tunnel
+     * with Basic proxy credentials and performs a TLS handshake over it.
      */
-    private fun fetch(probe: ProbeEndpoint, host: String): Boolean = Socket().use { socket ->
-        socket.soTimeout = TIMEOUT_MILLIS
-        socket.connect(InetSocketAddress("127.0.0.1", probe.port), TIMEOUT_MILLIS)
-
+    private fun fetch(probe: ProbeEndpoint, targetUrl: String, timeout: Int): Boolean {
+        val parsed = URI(targetUrl.trim())
+        val host = parsed.host?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Invalid probe URL: $targetUrl")
+        val isHttps = parsed.scheme.equals("https", ignoreCase = true)
+        val explicitPort = parsed.port
+        val effectivePort = if (explicitPort > 0) explicitPort else if (isHttps) 443 else 80
+        val hostHeader = if (explicitPort > 0) "$host:$explicitPort" else host
+        val authority = "$host:$effectivePort"
         val credentials = Base64.getEncoder()
             .encodeToString("${probe.username}:${probe.password}".toByteArray())
-        socket.outputStream.write(
-            (
-                "GET ${ProbeTargets.url(host)} HTTP/1.1\r\n" +
-                    "Host: $host\r\n" +
-                    "Proxy-Authorization: Basic $credentials\r\n" +
-                    "User-Agent: Yumi\r\n" +
-                    // Nothing is reused, and leaving the socket open would hold an outbound
-                    // connection on the server for the whole idle timeout.
-                    "Connection: close\r\n\r\n"
-                ).toByteArray(),
-        )
+
+        return Socket().use { socket ->
+            socket.soTimeout = timeout
+            socket.connect(InetSocketAddress("127.0.0.1", probe.port), timeout)
+
+            if (isHttps) {
+                socket.outputStream.write(
+                    (
+                        "CONNECT $authority HTTP/1.1\r\n" +
+                            "Host: $authority\r\n" +
+                            "Proxy-Authorization: Basic $credentials\r\n\r\n"
+                        ).toByteArray(),
+                )
+                socket.outputStream.flush()
+
+                val connectStatus = readHead(socket.inputStream).lineSequence().firstOrNull().orEmpty()
+                check(" 200" in connectStatus) {
+                    "proxy CONNECT failed: ${connectStatus.trim()}"
+                }
+
+                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+                val tls = (sslFactory.createSocket(
+                    socket,
+                    host,
+                    effectivePort,
+                    true,
+                ) as SSLSocket).apply {
+                    soTimeout = timeout
+                    startHandshake()
+                }
+                tls.use { ssl ->
+                    val rawPath = parsed.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
+                    val rawQuery = parsed.rawQuery?.let { "?$it" }.orEmpty()
+                    sendGetAndCheck(ssl, "$rawPath$rawQuery", hostHeader, proxyCredentials = null, targetUrl)
+                }
+            } else {
+                sendGetAndCheck(socket, targetUrl.trim(), hostHeader, proxyCredentials = credentials, targetUrl)
+            }
+        }
+    }
+
+    private fun sendGetAndCheck(
+        socket: Socket,
+        requestTarget: String,
+        hostHeader: String,
+        proxyCredentials: String?,
+        targetUrl: String,
+    ): Boolean {
+        val request = buildString {
+            append("GET $requestTarget HTTP/1.1\r\n")
+            append("Host: $hostHeader\r\n")
+            proxyCredentials?.let { append("Proxy-Authorization: Basic $it\r\n") }
+            append("User-Agent: Yumi\r\n")
+            // Nothing is reused, and leaving the socket open would hold an outbound
+            // connection on the server for the whole idle timeout.
+            append("Connection: close\r\n\r\n")
+        }
+        socket.outputStream.write(request.toByteArray())
         socket.outputStream.flush()
 
-        val stream = socket.inputStream
-        val status = stream.bufferedReader().readLine().orEmpty()
-        // Exactly 204, not "any 2xx". An endpoint that promises an empty response and returns a
-        // page instead is not the endpoint answering — it is a portal, an injected block page, or
-        // something else that replaced the response, and none of those mean the tunnel works.
-        val ok = status.split(' ').getOrNull(1) == "204"
-        drain(stream)
-        ok
+        val statusLine = readHead(socket.inputStream).lineSequence().firstOrNull().orEmpty()
+        val ok = isExpectedStatus(statusLine, targetUrl)
+        drain(socket.inputStream)
+        return ok
+    }
+
+    private fun isExpectedStatus(statusLine: String, targetUrl: String): Boolean {
+        val code = statusLine.trim().split(' ').getOrNull(1)?.toIntOrNull() ?: return false
+        // Exactly 204 for 204 endpoints, not "any 2xx". An endpoint that promises an empty response
+        // and returns a page instead is a portal or an injected block page.
+        return if (targetUrl.contains("204")) code == 204 else code in 200..299
+    }
+
+    /** Byte at a time so a buffered reader cannot swallow the start of a TLS ServerHello after CONNECT. */
+    private fun readHead(stream: InputStream): String {
+        val head = StringBuilder()
+        var newlines = 0
+        while (newlines < 2 && head.length < DRAIN_LIMIT_BYTES) {
+            val byte = stream.read()
+            if (byte < 0) break
+            val symbol = byte.toChar()
+            head.append(symbol)
+            when (symbol) {
+                '\n' -> newlines++
+                '\r' -> Unit
+                else -> newlines = 0
+            }
+        }
+        return head.toString()
     }
 
     /**
@@ -131,7 +217,7 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
      * and all of them noise sitting on top of the ones that mean something.
      *
      * Bounded twice over: both probe targets answer `204` with no body, the response carries
-     * `Connection: close`, and [TIMEOUT_MILLIS] still applies — but a far end that ignores all of
+     * `Connection: close`, and [DEFAULT_TIMEOUT_MILLIS] still applies — but a far end that ignores all of
      * that must not hold the watchdog. Failures are swallowed on purpose; the answer is already in
      * hand, and a probe that worked must not be reported as a failure because of the goodbye.
      */
@@ -163,7 +249,7 @@ class TunnelHealthCheck(private val logs: LogRepository? = null) {
          * works; it is measuring whether the exit is fast, and then reporting the answer as death.
          * Eight leaves the failing probe and its confirmation inside one twenty-second cycle.
          */
-        const val TIMEOUT_MILLIS = 8_000
+        const val DEFAULT_TIMEOUT_MILLIS = 8_000
 
         /**
          * Far more than a `204` and its headers, far less than a page somebody wants to send us.

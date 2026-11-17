@@ -13,6 +13,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class ProfileState(
@@ -40,14 +41,23 @@ data class ProfileState(
      * Servers added by hand carry no [ProxyNode.subscriptionId] and belong to no switch, so they
      * are never hidden.
      */
+    @Volatile
+    @Transient
+    private var _visibleNodes: List<ProxyNode>? = null
+
     val visibleNodes: List<ProxyNode>
-        get() {
-            val off = subscriptions.asSequence()
-                .filterNot { it.enabled }
-                .map { it.id }
-                .toSet()
-            return if (off.isEmpty()) nodes else nodes.filterNot { it.subscriptionId in off }
+        get() = _visibleNodes ?: computeVisibleNodes().also { _visibleNodes = it }
+
+    private fun computeVisibleNodes(): List<ProxyNode> {
+        var off: MutableSet<String>? = null
+        for (subscription in subscriptions) {
+            if (!subscription.enabled) {
+                if (off == null) off = HashSet()
+                off.add(subscription.id)
+            }
         }
+        return if (off == null) nodes else nodes.filterNot { it.subscriptionId in off }
+    }
 }
 
 class ProfileRepository(

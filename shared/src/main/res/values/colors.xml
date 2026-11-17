@@ -3,4 +3,22 @@
     <color name="window_background">#FFF7F2FA</color>
     <!-- Indigo ground from the Yumi mark; the adaptive background must be opaque. -->
     <color name="launcher_background">#FF5052B7</color>
+
+    <!-- 1x1 Tunnel Widget — Variant B API 26-30 warm Material You fallbacks -->
+    <color name="widget_bg_off">#FF3F2D17</color>
+    <color name="widget_mark_off">#FFEEBE8C</color>
+    <color name="widget_cue_off">#FFB89874</color>
+
+    <color name="widget_bg_connecting">#FF613F19</color>
+    <color name="widget_connecting_stroke">#FFEEBE8C</color>
+    <color name="widget_mark_connecting">#FFEEBE8C</color>
+    <color name="widget_cue_connecting">#FFEEBE8C</color>
+
+    <color name="widget_bg_on">#FFEEBE8C</color>
+    <color name="widget_mark_on">#FF2C1800</color>
+    <color name="widget_cue_on">#FF3F2D17</color>
+
+    <color name="widget_bg_failed">#FF5C1914</color>
+    <color name="widget_mark_failed">#FFFFDAD6</color>
+    <color name="widget_cue_failed">#FFFFB4AB</color>
 </resources>

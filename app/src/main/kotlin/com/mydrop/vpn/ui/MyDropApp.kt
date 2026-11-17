@@ -241,8 +241,9 @@ fun MyDropApp(viewModel: MainViewModel) {
             }
 
             composable(Routes.SERVERS) {
+                val serversState by viewModel.serversUiState.collectAsStateWithLifecycle()
                 ServersScreen(
-                    state = state,
+                    state = serversState,
                     onSelect = viewModel::selectNode,
                     onPing = viewModel::pingNode,
                     onRemove = viewModel::removeNode,

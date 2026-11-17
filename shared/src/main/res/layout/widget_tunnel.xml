@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg_off"
+    android:clipToOutline="true"
+    android:contentDescription="@string/app_name"
+    tools:targetApi="s">
+
+    <ImageView
+        android:id="@+id/widget_border_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/ic_widget_connecting_border"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_horizontal"
+        android:importantForAccessibility="no"
+        android:orientation="vertical"
+        android:paddingStart="14dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="14.5dp">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="12"
+            android:importantForAccessibility="no" />
+
+        <ImageView
+            android:id="@+id/widget_mark"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="46"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_widget_yumi_off" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="12"
+            android:importantForAccessibility="no" />
+
+        <ImageView
+            android:id="@+id/widget_status_cue"
+            android:layout_width="20dp"
+            android:layout_height="6dp"
+            android:importantForAccessibility="no"
+            android:scaleType="center"
+            android:src="@drawable/ic_widget_cue_off" />
+    </LinearLayout>
+</FrameLayout>

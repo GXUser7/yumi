@@ -1,5 +1,7 @@
 package com.mydrop.vpn.core.model
 
+import java.net.URI
+
 /**
  * The loopback proxy the app dials to reach its own tunnel.
  *
@@ -54,5 +56,22 @@ object ProbeTargets {
      */
     const val IPV6_URL = "http://[2606:4700::6810:84e5]/generate_204"
 
+    val DEFAULT_URL: String = url(TUNNEL)
+
     fun url(host: String) = "http://$host/generate_204"
+
+    /**
+     * Checks whether [raw] is a usable HTTP or HTTPS URL with a non-blank host for connectivity
+     * and latency checks.
+     */
+    fun isValidProbeUrl(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) &&
+            !trimmed.startsWith("https://", ignoreCase = true)
+        ) {
+            return false
+        }
+        val uri = runCatching { URI(trimmed) }.getOrNull() ?: return false
+        return !uri.host.isNullOrBlank()
+    }
 }

@@ -96,7 +96,10 @@ fun BadgeRow(protocol: Protocol, badges: List<String>, modifier: Modifier = Modi
         itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         ProtocolBadge(protocol)
-        badges.take(4).forEach { FeatureBadge(it) }
+        val badgeCount = minOf(badges.size, 4)
+        for (i in 0 until badgeCount) {
+            FeatureBadge(badges[i])
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package com.mydrop.vpn.core.model
 
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * One dialable server. A subscription refresh replaces nodes wholesale, so [id] is derived from
@@ -31,9 +32,15 @@ data class ProxyNode(
 
     val address: String get() = "$server:$port"
 
+    @Volatile
+    @Transient
+    private var _badges: List<String>? = null
+
     /** Badges shown under the server name: protocol details that actually change behaviour. */
     val badges: List<String>
-        get() = buildList {
+        get() = _badges ?: computeBadges().also { _badges = it }
+
+    private fun computeBadges(): List<String> = buildList {
             // First, because it changes what every other badge describes: only the first member.
             group?.let { add("Auto ×${it.members.size}") }
             (settings as? ProxySettings.Raw)?.declaredType

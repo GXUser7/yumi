@@ -65,6 +65,20 @@ object WorldMap {
     }
 
     /**
+     * Converts an ISO 3166-1 alpha-2 country code into its flag emoji (two Regional Indicator
+     * Symbols), or null when [code] is not two ASCII letters.
+     */
+    fun flagOf(code: String): String? {
+        if (code.length != 2) return null
+        val firstChar = code[0].uppercaseChar()
+        val secondChar = code[1].uppercaseChar()
+        if (firstChar !in 'A'..'Z' || secondChar !in 'A'..'Z') return null
+        val first = REGIONAL_FIRST + (firstChar - 'A')
+        val second = REGIONAL_FIRST + (secondChar - 'A')
+        return String(intArrayOf(first, second), 0, 2)
+    }
+
+    /**
      * Latitude and longitude for an ISO country code, or null for one that is not in the table.
      *
      * These are Natural Earth's own label points rather than computed centroids, and the

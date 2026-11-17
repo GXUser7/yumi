@@ -182,6 +182,10 @@
     <string name="servers_ping_all">Measure all</string>
     <string name="servers_latency_failed">none</string>
     <string name="servers_latency_value">%1$d ms</string>
+    <string name="servers_filter_protocols">Protocols</string>
+    <string name="servers_filter_countries">Countries</string>
+    <string name="servers_filter_countries_selected">Selected: %1$d</string>
+    <string name="servers_filter_clear">Reset</string>
 
     <!-- ================================================ Subscriptions screen -->
 
@@ -308,6 +312,12 @@
 
     <string name="settings_latency">Latency probe</string>
     <string name="settings_quic_note">Hysteria2 and TUIC run over QUIC and have no TCP port — a UDP probe always checks them, whatever is chosen above.</string>
+    <string name="settings_probe_url">Probe URL</string>
+    <string name="settings_probe_url_hint">An http:// or https:// URL used to verify the tunnel</string>
+    <string name="settings_probe_url_error">Enter a valid http:// or https:// URL</string>
+    <string name="settings_probe_timeout">Probe timeout (ms)</string>
+    <string name="settings_probe_timeout_hint">From 500 to 30000 ms</string>
+    <string name="settings_probe_timeout_error">Allowed range is 500 to 30000 ms</string>
 
     <string name="settings_behaviour">Behaviour</string>
     <string name="settings_boot">Connect on boot</string>
@@ -335,6 +345,8 @@ Send it here: %2$s</string>
     <string name="settings_failover_manual">Chosen by hand: %1$d</string>
     <string name="settings_auto_update">Refresh subscriptions</string>
     <string name="settings_auto_update_subtitle">Re-read the server list from time to time</string>
+    <string name="settings_auto_update_on_start">Refresh on launch</string>
+    <string name="settings_auto_update_on_start_subtitle">Re-read enabled subscriptions when opening the app</string>
     <string name="settings_interval">How often</string>
     <string name="settings_interval_note">Refreshing happens while the app is running — an alarm clock for the sake of re-reading a server list is not worth the battery</string>
     <string name="settings_interval_30m">30 min</string>
@@ -374,6 +386,9 @@ Send it here: %2$s</string>
     <string name="settings_tile">Quick settings tile</string>
     <string name="settings_tile_subtitle">Add a tunnel toggle to the quick settings</string>
     <string name="settings_tile_manual">Added by hand: shade → pencil → drag “Yumi” in</string>
+    <string name="settings_widget">1×1 widget</string>
+    <string name="settings_widget_subtitle">Add a 1×1 tunnel toggle to the home screen</string>
+    <string name="settings_widget_manual">Added by hand: long-press home screen → Widgets → Yumi</string>
 
     <!-- ================================================== Snackbar / messages -->
 
@@ -631,4 +646,9 @@ Send it here: %2$s</string>
     <string name="remote_needs_consent">Confirm the VPN request on the TV screen</string>
     <string name="remote_paired">Remote linked to %1$s</string>
     <string name="remote_pair_failed">Could not link the TV. Check that both devices are on the same Wi-Fi.</string>
+
+    <!-- ======================================================= 1x1 widget -->
+
+    <string name="widget_description">1×1 tunnel toggle</string>
+    <string name="widget_content_description">%1$s: %2$s</string>
 </resources>

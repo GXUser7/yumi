@@ -2,6 +2,7 @@ package com.mydrop.vpn.ui
 
 import android.content.Intent
 import androidx.annotation.StringRes
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -28,6 +29,7 @@ import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.data.ConnectOutcome
+import com.mydrop.vpn.data.ProfileState
 import com.mydrop.vpn.data.describe
 import com.mydrop.vpn.pairing.PairingInvite
 import com.mydrop.vpn.pairing.SubscriptionTransfer
@@ -42,6 +44,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -68,6 +72,54 @@ data class MainUiState(
         node.subscriptionId == null || subscriptions.none { it.id == node.subscriptionId }
     }
 }
+
+@Immutable
+data class ServersUiState(
+    val nodes: List<ProxyNode> = emptyList(),
+    val subscriptions: List<Subscription> = emptyList(),
+    val selectedNodeId: String? = null,
+    val latencies: Map<String, LatencyResult> = emptyMap(),
+    val collapsedGroupIds: Set<String> = emptySet(),
+    val pingingNodeIds: Set<String> = emptySet(),
+) {
+    /** Servers not attached to any subscription, shown as a synthetic "added manually" group. */
+    fun manualNodes(): List<ProxyNode> = nodes.filter { node ->
+        node.subscriptionId == null || subscriptions.none { it.id == node.subscriptionId }
+    }
+}
+
+internal class VisibleNodesCache {
+    private var lastNodes: List<ProxyNode>? = null
+    private var lastDisabledIds: Set<String> = emptySet()
+    private var lastVisibleNodes: List<ProxyNode> = emptyList()
+
+    @Synchronized
+    fun resolve(profiles: ProfileState): List<ProxyNode> {
+        var disabledIds: MutableSet<String>? = null
+        for (sub in profiles.subscriptions) {
+            if (!sub.enabled) {
+                if (disabledIds == null) disabledIds = HashSet()
+                disabledIds.add(sub.id)
+            }
+        }
+        val currentDisabled = disabledIds ?: emptySet()
+        if (lastNodes === profiles.nodes && currentDisabled == lastDisabledIds) {
+            return lastVisibleNodes
+        }
+        val resolved = profiles.visibleNodes
+        lastNodes = profiles.nodes
+        lastDisabledIds = currentDisabled
+        lastVisibleNodes = resolved
+        return resolved
+    }
+}
+
+private data class ServersProfileSlice(
+    val nodes: List<ProxyNode>,
+    val subscriptions: List<Subscription>,
+    val selectedNodeId: String?,
+    val latencies: Map<String, LatencyResult>,
+)
 
 /** What an external link wants to add, and where it says it came from. */
 data class PendingImport(
@@ -147,6 +199,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun checkForUpdate() = container.updates.check(manual = true)
 
+    fun onAppOpened() = container.subscriptionScheduler.onAppOpened()
+
     fun downloadUpdate() = container.updates.download()
 
     /**
@@ -158,17 +212,23 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun dismissUpdate() = container.updates.clear()
 
+    private val uiNodesCache = VisibleNodesCache()
+    private val serversNodesCache = VisibleNodesCache()
+
     val uiState: StateFlow<MainUiState> = combine(
         container.profiles.state,
         container.settings.settings,
         container.tunnel.state,
         container.tunnel.traffic,
-        transient,
+        combine(transient, container.subscriptionRefresher.running) { state, running ->
+            state.copy(refreshingSubscriptionIds = state.refreshingSubscriptionIds + running)
+        },
     ) { profiles, settings, vpnState, traffic, transient ->
+        val visibleNodes = uiNodesCache.resolve(profiles)
         MainUiState(
-            nodes = profiles.visibleNodes,
+            nodes = visibleNodes,
             subscriptions = profiles.subscriptions,
-            selectedNode = profiles.visibleNodes.firstOrNull { it.id == profiles.selectedNodeId },
+            selectedNode = visibleNodes.firstOrNull { it.id == profiles.selectedNodeId },
             latencies = profiles.latencies,
             vpnState = vpnState,
             traffic = traffic,
@@ -180,6 +240,47 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             tunnelIsSimulated = !container.tunnel.isReal,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
+
+    val serversUiState: StateFlow<ServersUiState> = combine(
+        container.profiles.state
+            .map { profiles ->
+                ServersProfileSlice(
+                    nodes = serversNodesCache.resolve(profiles),
+                    subscriptions = profiles.subscriptions,
+                    selectedNodeId = profiles.selectedNodeId,
+                    latencies = profiles.latencies,
+                )
+            }
+            .distinctUntilChanged(),
+        container.settings.settings
+            .map { it.collapsedGroupIds }
+            .distinctUntilChanged(),
+        transient
+            .map { it.pingingNodeIds }
+            .distinctUntilChanged(),
+    ) { profile, collapsedGroupIds, pingingNodeIds ->
+        ServersUiState(
+            nodes = profile.nodes,
+            subscriptions = profile.subscriptions,
+            selectedNodeId = profile.selectedNodeId,
+            latencies = profile.latencies,
+            collapsedGroupIds = collapsedGroupIds,
+            pingingNodeIds = pingingNodeIds,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = container.profiles.state.value.let { profiles ->
+            ServersUiState(
+                nodes = serversNodesCache.resolve(profiles),
+                subscriptions = profiles.subscriptions,
+                selectedNodeId = profiles.selectedNodeId,
+                latencies = profiles.latencies,
+                collapsedGroupIds = container.settings.value.collapsedGroupIds,
+                pingingNodeIds = transient.value.pingingNodeIds,
+            )
+        },
+    )
 
     // --------------------------------------------------------- Speed test
 

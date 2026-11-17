@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import com.mydrop.vpn.shared.R
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.ProxyNode
@@ -34,6 +35,7 @@ class XrayTunnelController(
     private val context: Context,
     private val configs: TunnelConfigBuilder,
     private val logs: LogRepository,
+    private val settings: SettingsRepository? = null,
 ) : TunnelController {
 
     override val state: StateFlow<VpnState> = MyDropVpnService.state
@@ -128,8 +130,10 @@ class XrayTunnelController(
         val owners = nodes.flatMap { node ->
             node.dialed().map { XrayConfigFactory.nodeTag(it.id) to node.id }
         }.toMap()
+        val timeout = effectiveTimeoutMillis()
+        val probeUrl = effectiveProbeUrl()
         val delays = withContext(Dispatchers.IO) {
-            XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS)
+            XrayCore.measureOutbounds(owners.keys, timeout, probeUrl)
         }
         return delays.entries
             .mapNotNull { (tag, millis) ->
@@ -146,13 +150,15 @@ class XrayTunnelController(
         if (state.value !is VpnState.Connected || members.isEmpty()) return emptyMap()
 
         val owners = members.associateBy { XrayConfigFactory.nodeTag(it.id) }
+        val timeout = effectiveTimeoutMillis()
+        val probeUrl = effectiveProbeUrl()
         // Both questions at once, each already parallel inside: the pair costs one timeout.
         val (ipv4, ipv6) = coroutineScope {
             val plain = async(Dispatchers.IO) {
-                XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS)
+                XrayCore.measureOutbounds(owners.keys, timeout, probeUrl)
             }
             val literal = async(Dispatchers.IO) {
-                XrayCore.measureOutbounds(owners.keys, MEASURE_TIMEOUT_MILLIS, ProbeTargets.IPV6_URL)
+                XrayCore.measureOutbounds(owners.keys, timeout, ProbeTargets.IPV6_URL)
             }
             plain.await() to literal.await()
         }
@@ -162,6 +168,15 @@ class XrayTunnelController(
             member.id to ((ipv6[tag] ?: -1) > 0)
         }.toMap()
     }
+
+    private fun effectiveTimeoutMillis(): Int =
+        settings?.value?.probeTimeoutMillis?.coerceIn(
+            AppSettings.MIN_PROBE_TIMEOUT_MILLIS,
+            AppSettings.MAX_PROBE_TIMEOUT_MILLIS,
+        ) ?: MEASURE_TIMEOUT_MILLIS
+
+    private fun effectiveProbeUrl(): String =
+        settings?.value?.probeUrl?.takeIf(ProbeTargets::isValidProbeUrl) ?: ProbeTargets.DEFAULT_URL
 
     override fun disconnect() {
         MyDropVpnService.stop(context)

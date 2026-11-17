@@ -171,6 +171,8 @@ data class AppSettings(
      * and for REALITY it is the difference between "the port is open" and "the disguise works".
      */
     val pingMode: PingMode = PingMode.Tls,
+    val probeUrl: String = ProbeTargets.DEFAULT_URL,
+    val probeTimeoutMillis: Int = LatencyResult.TIMEOUT_MILLIS,
     val autoConnectOnBoot: Boolean = false,
     val autoSelectFastest: Boolean = false,
     // Hands the core a group of servers instead of one, so a server that stops answering is
@@ -242,6 +244,7 @@ data class AppSettings(
      */
     val restoreWifiNodeOnWifi: Boolean = false,
     val subscriptionAutoUpdate: Boolean = true,
+    val subscriptionUpdateOnStart: Boolean = false,
     /**
      * How often subscriptions refresh themselves, in minutes.
      *
@@ -308,4 +311,9 @@ data class AppSettings(
      * would turn one question into nagging.
      */
     val batteryPromptShown: Boolean = false,
-)
+) {
+    companion object {
+        const val MIN_PROBE_TIMEOUT_MILLIS = 500
+        const val MAX_PROBE_TIMEOUT_MILLIS = 30_000
+    }
+}

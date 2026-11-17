@@ -1,5 +1,6 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.PingMode
@@ -36,7 +37,10 @@ import kotlinx.coroutines.withContext
  * get a UDP probe, because they have no TCP port to connect to and used to be reported as
  * unmeasurable for that reason.
  */
-class LatencyTester(private val maxConcurrency: Int = 16) {
+class LatencyTester(
+    private val maxConcurrency: Int = 16,
+    private val timeoutProvider: () -> Int = { LatencyResult.TIMEOUT_MILLIS },
+) {
 
     suspend fun measure(node: ProxyNode, mode: PingMode = PingMode.Tcp): LatencyResult {
         val group = node.group
@@ -95,17 +99,21 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
 
     /** One probe. Returns the round trip in milliseconds, or null if it did not answer. */
     private fun probe(node: ProxyNode, mode: PingMode): Int? {
+        val timeout = timeoutProvider().coerceIn(
+            AppSettings.MIN_PROBE_TIMEOUT_MILLIS,
+            AppSettings.MAX_PROBE_TIMEOUT_MILLIS,
+        )
         val start = System.nanoTime()
         val ok = when {
-            node.protocol.isQuicBased -> quicProbe(node)
-            mode == PingMode.Tls -> tlsHandshake(node)
-            else -> tcpHandshake(node)
+            node.protocol.isQuicBased -> quicProbe(node, timeout)
+            mode == PingMode.Tls -> tlsHandshake(node, timeout)
+            else -> tcpHandshake(node, timeout)
         }
         return if (ok) ((System.nanoTime() - start) / 1_000_000).toInt() else null
     }
 
-    private fun tcpHandshake(node: ProxyNode): Boolean = runCatching {
-        Socket().use { it.connect(InetSocketAddress(node.server, node.port), TIMEOUT) }
+    private fun tcpHandshake(node: ProxyNode, timeout: Int): Boolean = runCatching {
+        Socket().use { it.connect(InetSocketAddress(node.server, node.port), timeout) }
     }.isSuccess
 
     /**
@@ -116,13 +124,13 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
      * Certificates are not validated: see [probeSocketFactory] for why that is the only setting
      * under which this mode measures anything at all.
      */
-    private fun tlsHandshake(node: ProxyNode): Boolean = runCatching {
+    private fun tlsHandshake(node: ProxyNode, timeout: Int): Boolean = runCatching {
         Socket().use { raw ->
-            raw.connect(InetSocketAddress(node.server, node.port), TIMEOUT)
+            raw.connect(InetSocketAddress(node.server, node.port), timeout)
             val name = node.tls?.serverName?.takeIf(String::isNotEmpty) ?: node.server
             (probeSocketFactory.createSocket(raw, name, node.port, false)
                 as SSLSocket).use { tls ->
-                tls.soTimeout = TIMEOUT
+                tls.soTimeout = timeout
                 tls.startHandshake()
             }
         }
@@ -157,9 +165,9 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
      * drop it, and endpoints with obfuscation (Hysteria2's salamander, say) will not answer at
      * all, so those still read as unreachable.
      */
-    private fun quicProbe(node: ProxyNode): Boolean = runCatching {
+    private fun quicProbe(node: ProxyNode, timeout: Int): Boolean = runCatching {
         DatagramSocket().use { socket ->
-            socket.soTimeout = TIMEOUT
+            socket.soTimeout = timeout
             val address = InetAddress.getByName(node.server)
             val packet = versionNegotiationProbe()
             socket.send(DatagramPacket(packet, packet.size, address, node.port))
@@ -199,7 +207,6 @@ class LatencyTester(private val maxConcurrency: Int = 16) {
     }
 
     private companion object {
-        const val TIMEOUT = LatencyResult.TIMEOUT_MILLIS
         const val MEDIAN_SAMPLES = 3
         const val QUIC_DATAGRAM_SIZE = 1200
     }

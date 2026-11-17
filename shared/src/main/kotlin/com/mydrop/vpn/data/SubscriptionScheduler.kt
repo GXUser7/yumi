@@ -6,6 +6,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Refreshes subscriptions on the cadence chosen in settings.
@@ -45,6 +47,7 @@ class SubscriptionScheduler(
     private data class Attempt(val atMillis: Long, val failures: Int)
 
     private val attempts = mutableMapOf<String, Attempt>()
+    private val mutex = Mutex()
 
     fun start() {
         scope.launch {
@@ -52,7 +55,7 @@ class SubscriptionScheduler(
             // the app opens, and a minute of waiting is a minute spent offering servers that may
             // have been withdrawn — on a television, that minute is the whole of somebody's
             // patience for why the film has not started.
-            if (refreshOnStart) {
+            if (refreshOnStart || settings.value.subscriptionUpdateOnStart) {
                 runCatching { refreshDue(startup = true) }
                     .onFailure { logs.warn(R.string.log_auto_update_failed, it.message.orEmpty()) }
             }
@@ -64,10 +67,24 @@ class SubscriptionScheduler(
         }
     }
 
-    private suspend fun refreshDue(startup: Boolean = false) {
+    /** Triggers a startup subscription refresh when the user opens the app, if enabled. */
+    fun onAppOpened() {
+        if (!refreshOnStart && !settings.value.subscriptionUpdateOnStart) return
+        scope.launch {
+            runCatching { refreshDue(startup = true) }
+                .onFailure { logs.warn(R.string.log_auto_update_failed, it.message.orEmpty()) }
+        }
+    }
+
+    private suspend fun refreshDue(startup: Boolean = false) = mutex.withLock {
         val current = settings.value
-        if (!current.subscriptionAutoUpdate) return
-        val interval = current.subscriptionUpdateMinutes.takeIf { it > 0 } ?: return
+        if (startup) {
+            if (!refreshOnStart && !current.subscriptionUpdateOnStart) return
+        } else {
+            if (!current.subscriptionAutoUpdate) return
+        }
+        val interval = current.subscriptionUpdateMinutes
+        if (!startup && interval <= 0) return
 
         val subscriptions = profiles.state.value.subscriptions
         // Otherwise the map keeps a row for every subscription the user ever deleted.
@@ -97,7 +114,11 @@ class SubscriptionScheduler(
         // Opening the app overrides the interval, but not the floor. Without one, a set that
         // crash-loops, or a user closing and reopening the app while a subscription refuses to
         // load, would fetch as fast as the process can restart.
-        if (startup) return now - (lastUpdatedEpochMillis ?: 0L) >= STARTUP_FLOOR_MILLIS
+        if (startup) {
+            val lastAttemptAt = attempts[id]?.atMillis ?: 0L
+            return now - (lastUpdatedEpochMillis ?: 0L) >= STARTUP_FLOOR_MILLIS &&
+                now - lastAttemptAt >= STARTUP_FLOOR_MILLIS
+        }
         // A subscription that has never answered has no timestamp to count from. Treating it as
         // due keeps a first fetch that failed from waiting out the whole interval, and the
         // backoff below is what stops that turning into a retry every ten minutes forever.

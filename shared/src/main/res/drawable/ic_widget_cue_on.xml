@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="6dp"
+    android:viewportWidth="20"
+    android:viewportHeight="6">
+    <path
+        android:fillColor="@color/widget_cue_on"
+        android:pathData="M2.8,1.2 L17.2,1.2 A1.8,1.8 0 0 1 19,3 A1.8,1.8 0 0 1 17.2,4.8 L2.8,4.8 A1.8,1.8 0 0 1 1,3 A1.8,1.8 0 0 1 2.8,1.2 Z" />
+</vector>

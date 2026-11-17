@@ -180,6 +180,10 @@
     <string name="servers_ping_all">Проверить все</string>
     <string name="servers_latency_failed">нет</string>
     <string name="servers_latency_value">%1$d мс</string>
+    <string name="servers_filter_protocols">Протоколы</string>
+    <string name="servers_filter_countries">Страны</string>
+    <string name="servers_filter_countries_selected">Выбрано: %1$d</string>
+    <string name="servers_filter_clear">Сбросить</string>
 
     <!-- ================================================ Экран подписок -->
 
@@ -306,6 +310,12 @@
 
     <string name="settings_latency">Замер задержки</string>
     <string name="settings_quic_note">Hysteria2 и TUIC работают поверх QUIC и TCP-порта не имеют — их всегда проверяет UDP-проба, независимо от выбора выше.</string>
+    <string name="settings_probe_url">URL проверки</string>
+    <string name="settings_probe_url_hint">Адрес http:// или https:// для проверки связи через туннель</string>
+    <string name="settings_probe_url_error">Укажите корректный адрес http:// или https://</string>
+    <string name="settings_probe_timeout">Тайм-аут проверки (мс)</string>
+    <string name="settings_probe_timeout_hint">От 500 до 30000 мс</string>
+    <string name="settings_probe_timeout_error">Допустимо от 500 до 30000 мс</string>
 
     <string name="settings_behaviour">Поведение</string>
     <string name="settings_boot">Подключаться при загрузке</string>
@@ -333,6 +343,8 @@
     <string name="settings_failover_manual">Выбрано вручную: %1$d</string>
     <string name="settings_auto_update">Автообновление подписок</string>
     <string name="settings_auto_update_subtitle">Периодически перечитывать список серверов</string>
+    <string name="settings_auto_update_on_start">Обновлять при запуске</string>
+    <string name="settings_auto_update_on_start_subtitle">Перечитывать активные подписки при открытии приложения</string>
     <string name="settings_interval">Как часто</string>
     <string name="settings_interval_note">Обновление происходит, пока приложение запущено — будильник ради перечитывания списка серверов не стоит расхода батареи</string>
     <string name="settings_interval_30m">30 мин</string>
@@ -372,6 +384,9 @@
     <string name="settings_tile">Плитка в шторке</string>
     <string name="settings_tile_subtitle">Добавить переключатель туннеля в быстрые настройки</string>
     <string name="settings_tile_manual">Добавляется вручную: шторка → карандаш → перетащить «Yumi»</string>
+    <string name="settings_widget">Виджет 1×1</string>
+    <string name="settings_widget_subtitle">Добавить кнопку туннеля 1×1 на рабочий стол</string>
+    <string name="settings_widget_manual">Добавляется вручную: зажать рабочий стол → Виджеты → Yumi</string>
 
     <!-- ================================================== Сообщения -->
 
@@ -629,4 +644,9 @@
     <string name="remote_needs_consent">Подтвердите запрос VPN на экране телевизора</string>
     <string name="remote_paired">Пульт привязан к %1$s</string>
     <string name="remote_pair_failed">Не удалось привязать телевизор. Проверьте, что оба устройства в одной Wi-Fi сети.</string>
+
+    <!-- ======================================================= Виджет 1x1 -->
+
+    <string name="widget_description">Переключатель туннеля 1×1</string>
+    <string name="widget_content_description">%1$s: %2$s</string>
 </resources>

@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         builtWithLanguage = (application as MyDropApplication).container.settings.value.language
 
+        if (savedInstanceState == null) viewModel.onAppOpened()
         handleIntent(intent)
         requestNotificationPermissionIfNeeded()
         askToIgnoreBatteryOptimisationsOnce()

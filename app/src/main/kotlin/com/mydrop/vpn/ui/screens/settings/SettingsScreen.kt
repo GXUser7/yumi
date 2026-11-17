@@ -1,6 +1,7 @@
 package com.mydrop.vpn.ui.screens.settings
 
 import android.app.StatusBarManager
+import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.os.Build
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
@@ -78,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,6 +89,7 @@ import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.PingMode
+import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.core.model.Visualizer
@@ -93,6 +97,7 @@ import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.vpn.TunnelTileService
+import com.mydrop.vpn.vpn.TunnelWidgetProvider
 
 /**
  * A text setting that only reaches storage once it is valid.
@@ -111,6 +116,7 @@ private fun ValidatedField(
     error: String,
     isValid: (String) -> Boolean,
     onCommit: (String) -> Unit,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     var text by rememberSaveable { mutableStateOf(initial) }
     val valid = isValid(text)
@@ -125,6 +131,7 @@ private fun ValidatedField(
         supportingText = { Text(if (valid) hint else error) },
         isError = !valid,
         singleLine = true,
+        keyboardOptions = keyboardOptions,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
     )
@@ -440,6 +447,31 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(12.dp))
+                ValidatedField(
+                    initial = settings.probeUrl,
+                    label = stringResource(R.string.settings_probe_url),
+                    hint = stringResource(R.string.settings_probe_url_hint),
+                    error = stringResource(R.string.settings_probe_url_error),
+                    isValid = ProbeTargets::isValidProbeUrl,
+                    onCommit = { value -> onUpdate { s -> s.copy(probeUrl = value.trim()) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                )
+                Spacer(Modifier.height(8.dp))
+                ValidatedField(
+                    initial = settings.probeTimeoutMillis.toString(),
+                    label = stringResource(R.string.settings_probe_timeout),
+                    hint = stringResource(R.string.settings_probe_timeout_hint),
+                    error = stringResource(R.string.settings_probe_timeout_error),
+                    isValid = {
+                        it.trim().toIntOrNull() in
+                            AppSettings.MIN_PROBE_TIMEOUT_MILLIS..AppSettings.MAX_PROBE_TIMEOUT_MILLIS
+                    },
+                    onCommit = { raw ->
+                        onUpdate { s -> s.copy(probeTimeoutMillis = raw.trim().toInt()) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
             }
         }
 
@@ -465,6 +497,12 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_auto_update_subtitle),
                     checked = settings.subscriptionAutoUpdate,
                     onCheckedChange = { onUpdate { s -> s.copy(subscriptionAutoUpdate = it) } },
+                )
+                SwitchRow(
+                    title = stringResource(R.string.settings_auto_update_on_start),
+                    subtitle = stringResource(R.string.settings_auto_update_on_start_subtitle),
+                    checked = settings.subscriptionUpdateOnStart,
+                    onCheckedChange = { onUpdate { s -> s.copy(subscriptionUpdateOnStart = it) } },
                 )
 
                 AnimatedVisibility(visible = settings.subscriptionAutoUpdate) {
@@ -608,6 +646,7 @@ fun SettingsScreen(
                     onClick = onOpenLogs,
                 )
                 QuickTileRow()
+                WidgetRow()
             }
         }
 
@@ -1182,6 +1221,37 @@ private fun QuickTileRow() {
         icon = Icons.Rounded.Widgets,
         trailingIcon = if (supported) Icons.Rounded.AddCircleOutline else Icons.Rounded.ChevronRight,
         onClick = { if (supported) requestQuickTile(context) },
+    )
+}
+
+@Composable
+private fun WidgetRow() {
+    val context = LocalContext.current
+    val appWidgetManager = remember(context) {
+        runCatching { AppWidgetManager.getInstance(context) }.getOrNull()
+    }
+    val supported = appWidgetManager?.isRequestPinAppWidgetSupported == true
+
+    NavigationRow(
+        title = stringResource(R.string.settings_widget),
+        subtitle = if (supported) {
+            stringResource(R.string.settings_widget_subtitle)
+        } else {
+            stringResource(R.string.settings_widget_manual)
+        },
+        icon = Icons.Rounded.Widgets,
+        trailingIcon = if (supported) Icons.Rounded.AddCircleOutline else Icons.Rounded.ChevronRight,
+        onClick = {
+            if (supported) {
+                runCatching {
+                    appWidgetManager.requestPinAppWidget(
+                        ComponentName(context, TunnelWidgetProvider::class.java),
+                        null,
+                        null,
+                    )
+                }
+            }
+        },
     )
 }
 

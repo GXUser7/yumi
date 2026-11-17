@@ -107,8 +107,12 @@ class AppContainer(context: Context) {
 
     val logs = LogRepository(strings, diagnostics)
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
-    val latencyTester = LatencyTester()
-    val tunnelHealth = TunnelHealthCheck(logs)
+    val latencyTester = LatencyTester(timeoutProvider = { settings.value.probeTimeoutMillis })
+    val tunnelHealth = TunnelHealthCheck(
+        logs = logs,
+        probeUrl = { settings.value.probeUrl },
+        timeoutMillis = { settings.value.probeTimeoutMillis },
+    )
     val speedTester = SpeedTester(logs, strings)
     val pairingClient = PairingClient(appContext)
 
@@ -245,6 +249,7 @@ class AppContainer(context: Context) {
         context = context.applicationContext,
         configs = tunnelConfigs,
         logs = logs,
+        settings = settings,
     )
 
     /**
@@ -408,6 +413,11 @@ class AppContainer(context: Context) {
         tunnelSettingsApplier.start()
         subscriptionScheduler.start()
         updateScheduler.start()
+        applicationScope.launch {
+            tunnel.state.collect { state ->
+                com.mydrop.vpn.vpn.TunnelWidgetProvider.updateAll(appContext, state)
+            }
+        }
     }
 
     /** Whether the current connection is metered; see MainViewModel.speedTestIsMetered. */

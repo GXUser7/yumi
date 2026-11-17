@@ -190,6 +190,20 @@
             </intent-filter>
         </receiver>
 
+        <!-- 1x1 home screen widget for toggling the tunnel. -->
+        <receiver
+            android:name=".vpn.TunnelWidgetProvider"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.mydrop.vpn.action.WIDGET_TOGGLE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/tunnel_widget_info" />
+        </receiver>
+
         <!--
           The one file the package installer is allowed to read: the APK just downloaded. Scoped
           to a single directory in @xml/update_paths, and not exported.
