@@ -22,8 +22,8 @@ android {
         applicationId = "com.mydrop.vpn.tv"
         minSdk = 28
         targetSdk = 36
-        versionCode = 37
-        versionName = "2.1.10"
+        versionCode = 38
+        versionName = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

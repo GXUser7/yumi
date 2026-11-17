@@ -11,6 +11,10 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
+import com.mydrop.vpn.core.model.GeoSample
+import com.mydrop.vpn.core.model.GeoZoneCluster
+import com.mydrop.vpn.core.model.GeoZoneStoreState
+import com.mydrop.vpn.core.model.LatLon
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.ProxyNode
@@ -21,6 +25,7 @@ import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.model.ZoneProximity
 import com.mydrop.vpn.core.parse.DeepLinkParser
 import com.mydrop.vpn.core.parse.DeepLinkPayload
 import com.mydrop.vpn.core.parse.DnsUriParser
@@ -29,6 +34,7 @@ import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.data.ConnectOutcome
+import com.mydrop.vpn.data.MapTileStore
 import com.mydrop.vpn.data.ProfileState
 import com.mydrop.vpn.data.describe
 import com.mydrop.vpn.pairing.PairingInvite
@@ -415,6 +421,33 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     /** Whether the running tunnel hands out IPv6, and why not; see [Ipv6Guard]. */
     val ipv6: StateFlow<Ipv6Guard.Status> = container.ipv6Guard.status
+
+    val geoZonesState: StateFlow<GeoZoneStoreState> = container.geoZones.state
+    val geoClusters: StateFlow<List<GeoZoneCluster>> = container.geoZones.clusters
+    val geoProximity: StateFlow<ZoneProximity> = container.geoMonitor.proximity
+    val geoLocationSample: StateFlow<GeoSample?> = container.geoMonitor.currentSample
+    val geoLastValidCoord: StateFlow<LatLon?> = container.geoMonitor.lastValidLatLon
+    val geoHasPermission: StateFlow<Boolean> = container.geoMonitor.hasPermission
+    val geoSpoofDetected: StateFlow<Boolean> = container.geoMonitor.spoofDetected
+    val mapTiles: MapTileStore = container.mapTiles
+
+    fun setGeoMapActive(active: Boolean) = container.geoMonitor.setMapScreenActive(active)
+
+    fun refreshGeoPermission() = container.geoMonitor.refreshPermission()
+
+    fun addManualGeoZone(latitude: Double, longitude: Double) {
+        container.geoZones.addManualZone(latitude, longitude)
+        emit(R.string.zones_added_manual)
+    }
+
+    fun togglePinGeoCluster(clusterId: String) = container.geoZones.togglePinCluster(clusterId)
+
+    fun removeGeoCluster(clusterId: String) = container.geoZones.removeCluster(clusterId)
+
+    fun clearGeoZones() {
+        container.geoZones.clearAll()
+        emit(R.string.zones_cleared)
+    }
 
     /**
      * Fetches the routing databases again, whether or not they are already there.

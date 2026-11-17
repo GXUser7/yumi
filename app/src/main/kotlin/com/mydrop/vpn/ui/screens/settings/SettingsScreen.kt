@@ -1,10 +1,15 @@
 package com.mydrop.vpn.ui.screens.settings
 
+import android.Manifest
 import android.app.StatusBarManager
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -42,6 +47,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
@@ -160,6 +167,10 @@ fun SettingsScreen(
     onOpenSplitTunnel: () -> Unit,
     onOpenFailover: () -> Unit,
     onOpenMobileNodes: () -> Unit,
+    geoZonesCount: Int = 0,
+    geoHasPermission: Boolean = true,
+    onGeoPermissionChanged: () -> Unit = {},
+    onOpenZonesMap: () -> Unit = {},
     geoAssets: GeoAssetStore.State,
     onRefreshGeo: () -> Unit,
     ipv6: Ipv6Guard.Status,
@@ -630,6 +641,118 @@ fun SettingsScreen(
                             onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
                         )
                     }
+                }
+            }
+        }
+
+        item("geozones") {
+            val context = LocalContext.current
+            val locationPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions(),
+            ) { permissions ->
+                onGeoPermissionChanged()
+                val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                onUpdate { s -> s.copy(geoZonesEnabled = granted) }
+            }
+            SettingsSection(
+                title = stringResource(R.string.settings_geozones),
+                icon = Icons.Rounded.Explore,
+            ) {
+                SwitchRow(
+                    title = stringResource(R.string.settings_geozones),
+                    subtitle = if (settings.geoZonesEnabled && !geoHasPermission) {
+                        stringResource(R.string.settings_geozones_permission_needed)
+                    } else {
+                        stringResource(R.string.settings_geozones_subtitle)
+                    },
+                    subtitleColor = if (settings.geoZonesEnabled && !geoHasPermission) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    checked = settings.geoZonesEnabled,
+                    onCheckedChange = { enabled ->
+                        if (!enabled) {
+                            onUpdate { s -> s.copy(geoZonesEnabled = false) }
+                        } else {
+                            val hasFine = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            val hasCoarse = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (hasFine || hasCoarse) {
+                                onUpdate { s -> s.copy(geoZonesEnabled = true) }
+                                onGeoPermissionChanged()
+                            } else {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                )
+                AnimatedVisibility(visible = settings.geoZonesEnabled) {
+                    DependentGroup {
+                        SwitchRow(
+                            title = stringResource(R.string.settings_geozones_preemptive),
+                            subtitle = stringResource(R.string.settings_geozones_preemptive_subtitle),
+                            checked = settings.geoPreemptiveSwitch,
+                            onCheckedChange = {
+                                onUpdate { s -> s.copy(geoPreemptiveSwitch = it) }
+                            },
+                        )
+                        GroupDivider()
+                        SwitchRow(
+                            title = stringResource(R.string.settings_geozones_auto_return),
+                            subtitle = stringResource(R.string.settings_geozones_auto_return_subtitle),
+                            checked = settings.geoAutoReturnOrdinary,
+                            onCheckedChange = {
+                                onUpdate { s -> s.copy(geoAutoReturnOrdinary = it) }
+                            },
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = onOpenZonesMap,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(UpdateButtonHeight),
+                    shape = RoundedCornerShape(UpdateButtonHeight / 2),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Map,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = if (geoZonesCount > 0) {
+                            stringResource(R.string.settings_geozones_open_map_button_count, geoZonesCount)
+                        } else {
+                            stringResource(R.string.settings_geozones_open_map_button)
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }

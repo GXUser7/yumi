@@ -184,6 +184,26 @@
     <string name="servers_filter_countries">Страны</string>
     <string name="servers_filter_countries_selected">Выбрано: %1$d</string>
     <string name="servers_filter_clear">Сбросить</string>
+    <string name="servers_filters_title">Фильтры</string>
+    <string name="servers_filters_reset_all">Сбросить всё</string>
+    <string name="servers_filter_protocol_label">Протокол</string>
+    <string name="servers_filter_all">Все</string>
+    <string name="servers_filter_countries_all">Все страны</string>
+    <string name="servers_filter_countries_chosen">выбрано %1$d</string>
+    <string name="servers_filter_countries_available">%1$d доступно</string>
+    <string name="servers_filter_sort_label">Сортировка</string>
+    <string name="servers_filter_sort_default_short">Обычно</string>
+    <string name="servers_filter_sort_latency_short">По пингу</string>
+    <string name="servers_filter_sort_name_short">По имени</string>
+    <string name="servers_filter_sort_protocol_short">Протокол</string>
+    <string name="servers_filter_country_title">Страна</string>
+    <string name="servers_filter_reset_count">Сбросить (%1$d)</string>
+    <string name="servers_filter_country_search_placeholder">Название или код, напр. «Герм» / DE</string>
+    <string name="servers_filter_selected_section">Выбрано</string>
+    <string name="servers_filter_popular_section">Популярные</string>
+    <string name="servers_filter_all_countries_az">Все страны · А–Я</string>
+    <string name="servers_filter_country_not_found">Страна «%1$s» не найдена</string>
+    <string name="servers_filter_show_results">Показать %1$s</string>
 
     <!-- ================================================ Экран подписок -->
 
@@ -649,4 +669,72 @@
 
     <string name="widget_description">Переключатель туннеля 1×1</string>
     <string name="widget_content_description">%1$s: %2$s</string>
+
+    <!-- ======================================================= Гео-зоны и карта -->
+
+    <string name="log_geozone_spoof_detected">Гео-зоны: замечен скачок GPS (вероятно РЭБ), перехожу на опору по сотовой вышке</string>
+    <string name="log_geozone_prewarmed">На подлёте к зоне белого списка (~%1$d м) — проверил мобильный список заранее, наготове «%2$s» (%3$d мс)</string>
+    <string name="log_geozone_switched_in">Вход в зону белого списка — заранее переключаюсь на «%1$s» (%2$d мс)</string>
+    <string name="log_geozone_switched_tower">Обнаружена сотовая вышка зоны белого списка — переключаюсь на «%1$s» (%2$d мс)</string>
+    <string name="log_geozone_returned_ordinary">Вышли из зоны белого списка — возвращаюсь на обычный сервер «%1$s» (%2$d мс)</string>
+    <string name="log_geozone_learned">Гео-зоны: сота %1$s помечена как зона белого списка (сбоев: %2$d, моб. успехов: %3$d)</string>
+    <string name="log_geozone_healed">Гео-зоны: сота %1$s снова пропускает обычные серверы — снята с карты сбоев</string>
+    <string name="log_geozone_deadspot">Гео-зоны: сота %1$s помечена как глушняк — не отвечают ни обычные, ни мобильные серверы</string>
+    <string name="log_geozone_manual_added">Гео-зоны: вручную отмечена зона вокруг соты %1$s (%2$d сот)</string>
+    <string name="log_geozone_home_wifi_learned">Гео-зоны: сеть Wi‑Fi «%1$s» (сота %2$s) запомнена как частая домашняя точка — защищает от ложных сбоев и подмены GPS</string>
+
+    <string name="settings_geozones">Гео-зоны белых списков</string>
+    <string name="settings_geozones_subtitle">Запоминать районы, где обычные серверы падают на мобильной сети, и переключаться заранее</string>
+    <string name="settings_geozones_permission_needed">Нужно разрешение на геолокацию — включите переключатель, чтобы выдать</string>
+    <string name="settings_geozones_map">Карта зон города</string>
+    <string name="settings_geozones_map_empty">Зоны пока не найдены — откройте интерактивную карту</string>
+    <string name="settings_geozones_map_count">Нанесено зон: %1$d</string>
+    <string name="settings_geozones_open_map_button">Открыть карту зон</string>
+    <string name="settings_geozones_open_map_button_count">Открыть карту зон (%1$d)</string>
+    <string name="settings_geozones_preemptive">Переключать на подлёте к зоне</string>
+    <string name="settings_geozones_preemptive_subtitle">Фоном проверять мобильный список перед границей зоны и переезжать без ожидания сбоя</string>
+    <string name="settings_geozones_auto_return">Возвращать обычный сервер вне зоны</string>
+    <string name="settings_geozones_auto_return_subtitle">Когда телефон выходит в чистый район, проверять прежний сервер и возвращаться на него</string>
+
+    <string name="connect_zones_map">Карта зон города</string>
+    <string name="connect_zone_inside">В зоне белого списка</string>
+    <string name="connect_zone_inside_tower">Зона белого списка · по вышке</string>
+    <string name="connect_zone_approaching">Подлёт к зоне · %1$d м</string>
+
+    <string name="zones_map_title">Карта зон</string>
+    <string name="zones_map_subtitle_count">Зон на карте: %1$d · долгое нажатие добавит зону вручную</string>
+    <string name="zones_map_subtitle_empty">Пока чисто · долгое нажатие по карте отметит зону вручную</string>
+    <string name="zones_permission_title">Нужен доступ к геолокации</string>
+    <string name="zones_permission_body">Нужен только на устройстве: строить гексагоны сбоев, узнавать сотовые вышки при РЭБ и переезжать на мобильный список до обрыва.</string>
+    <string name="zones_permission_grant">Разрешить</string>
+    <string name="zones_status_outside">Чистая зона</string>
+    <string name="zones_status_approaching">Подлёт к зоне · %1$d м</string>
+    <string name="zones_status_inside">В зоне белого списка</string>
+    <string name="zones_status_tower">РЭБ-защита · зона по вышке</string>
+    <string name="zones_status_spoof">Подмена GPS (РЭБ) отфильтрована</string>
+    <string name="zones_action_my_location">Моё место</string>
+    <string name="zones_action_zoom_in">Приблизить</string>
+    <string name="zones_action_zoom_out">Отдалить</string>
+    <string name="zones_action_mark_here">Отметить здесь</string>
+    <string name="zones_action_clear_all">Очистить карту</string>
+    <string name="zones_kind_whitelist">Белый список</string>
+    <string name="zones_kind_suspect">Под вопросом</string>
+    <string name="zones_kind_dead">Глушняк / РЭБ</string>
+    <string name="zones_kind_healthy">Чистая зона</string>
+    <string name="zones_badge_pinned">Закреплена</string>
+    <string name="zones_default_name">Зона %1$s</string>
+    <string name="zones_metrics">%1$d сот · радиус ~%2$d м</string>
+    <string name="zones_stats_row">Сбоев: %1$d · моб. успехов: %2$d · вышек: %3$d</string>
+    <string name="zones_working_servers">Проверенные серверы в зоне</string>
+    <string name="zones_working_servers_empty">Пока не зафиксированы — появятся, как только мобильный сервер успешно сработает внутри</string>
+    <string name="zones_action_pin">Закрепить</string>
+    <string name="zones_action_unpin">Открепить</string>
+    <string name="zones_action_delete">Удалить</string>
+    <string name="zones_added_manual">Зона белого списка добавлена на карту</string>
+    <string name="zones_cleared">Карта зон очищена</string>
+    <string name="zones_hint_no_fix">Координаты ещё не получены — включите геопозицию или удерживайте палец на карте</string>
+    <string name="zones_legend_whitelist">Белый список</string>
+    <string name="zones_legend_approach">Подлёт</string>
+    <string name="zones_legend_dead">Глушняк</string>
+    <string name="zones_legend_healthy">Чисто</string>
 </resources>

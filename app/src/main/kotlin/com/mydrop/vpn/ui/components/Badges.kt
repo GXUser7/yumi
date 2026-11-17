@@ -119,7 +119,6 @@ fun LatencyChip(
     val (label, color) = when {
         isMeasuring -> "…" to semantic.latencyDead
         result == null -> "—" to semantic.latencyDead
-        result.failed && unmeasurableHint -> "UDP" to semantic.latencyDead
         result.failed -> stringResource(R.string.servers_latency_failed) to semantic.latencySlow
         result.millis < 150 ->
             stringResource(R.string.servers_latency_value, result.millis) to semantic.latencyFast

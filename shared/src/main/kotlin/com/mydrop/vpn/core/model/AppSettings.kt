@@ -243,6 +243,13 @@ data class AppSettings(
      * — predictable, at the cost of one more switch.
      */
     val restoreWifiNodeOnWifi: Boolean = false,
+    /**
+     * Tracks cellular drop / whitelist zones by location and cell tower so the tunnel can
+     * pre-warm and switch onto [mobileNodeIds] when entering a known zone.
+     */
+    val geoZonesEnabled: Boolean = false,
+    val geoPreemptiveSwitch: Boolean = true,
+    val geoAutoReturnOrdinary: Boolean = true,
     val subscriptionAutoUpdate: Boolean = true,
     val subscriptionUpdateOnStart: Boolean = false,
     /**

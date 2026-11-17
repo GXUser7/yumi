@@ -2,33 +2,43 @@ package com.mydrop.vpn.ui.screens.servers
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
@@ -36,23 +46,29 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppGood
 import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.NetworkPing
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,15 +78,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,12 +101,17 @@ import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.format.pluralServers
 import com.mydrop.vpn.ui.format.pluralSources
+import java.text.Collator
+import java.util.Locale
 
-enum class ServerSort(@StringRes val labelRes: Int) {
-    Default(R.string.servers_sort_default),
-    Latency(R.string.servers_sort_latency),
-    Name(R.string.servers_sort_name),
-    Protocol(R.string.servers_sort_protocol),
+enum class ServerSort(
+    @param:StringRes val labelRes: Int,
+    @param:StringRes val shortLabelRes: Int,
+) {
+    Default(R.string.servers_sort_default, R.string.servers_filter_sort_default_short),
+    Latency(R.string.servers_sort_latency, R.string.servers_filter_sort_latency_short),
+    Name(R.string.servers_sort_name, R.string.servers_filter_sort_name_short),
+    Protocol(R.string.servers_sort_protocol, R.string.servers_filter_sort_protocol_short),
 }
 
 internal data class ProtocolFacet(
@@ -112,12 +131,14 @@ internal data class ServerGroup(
     val nodes: List<ProxyNode>,
 )
 
+private enum class FilterSheetPage {
+    All,
+    Country,
+}
+
 private enum class ServersContentType {
     ScreenHeader,
-    SearchAndSort,
-    ProtocolsFilter,
-    CountriesFilterHeader,
-    CountriesFilterRow,
+    SearchAndFilter,
     EmptyState,
     GroupHeader,
     ServerRow,
@@ -140,8 +161,7 @@ fun ServersScreen(
     var sort by rememberSaveable { mutableStateOf(ServerSort.Default) }
     var selectedProtocols by rememberSaveable { mutableStateOf(emptySet<Protocol>()) }
     var selectedCountries by rememberSaveable { mutableStateOf(emptySet<String>()) }
-    var protocolsExpanded by rememberSaveable { mutableStateOf(false) }
-    var countriesExpanded by rememberSaveable { mutableStateOf(false) }
+    var filterSheetOpen by rememberSaveable { mutableStateOf(false) }
 
     val protocolFacets = remember(state.nodes) { extractProtocolFacets(state.nodes) }
     val countryFacets = remember(state.nodes) { extractSubscriptionCountryFacets(state.nodes) }
@@ -167,6 +187,9 @@ fun ServersScreen(
             selectedCountries.filterTo(HashSet()) { it in availableCountrySet }
         }
     }
+    val activeFilterCount = activeProtocols.size +
+        activeCountries.size +
+        if (sort != ServerSort.Default) 1 else 0
 
     // Read outside the remember block: it is not a composition, so it cannot resolve resources,
     // and the label is the only thing in there that depends on the language.
@@ -193,176 +216,125 @@ fun ServersScreen(
             manualGroupTitle = manualGroupTitle,
         )
     }
+    val filteredServerCount = remember(groups) { groups.sumOf { it.nodes.size } }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        val layoutDirection = LocalLayoutDirection.current
-        val countryGridWidth = (
-            maxWidth -
-                contentPadding.calculateStartPadding(layoutDirection) -
-                contentPadding.calculateEndPadding(layoutDirection)
-            ).coerceAtLeast(0.dp)
-        val countryColumns = countryGridColumns(countryGridWidth, density.fontScale)
-        val countryRows = remember(countryFacets, countryColumns, countriesExpanded) {
-            if (countriesExpanded && countryFacets.isNotEmpty()) {
-                countryFacets.chunked(countryColumns)
-            } else {
-                emptyList()
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = contentPadding,
+    ) {
+        item(key = "header", contentType = ServersContentType.ScreenHeader) {
+            ScreenHeader(
+                title = stringResource(R.string.servers_title),
+                subtitle = stringResource(
+                    R.string.servers_subtitle,
+                    pluralServers(state.nodes.size),
+                    pluralSources(state.subscriptions.size),
+                ),
+                modifier = Modifier.padding(bottom = 14.dp),
+            )
+        }
+
+        item(key = "search", contentType = ServersContentType.SearchAndFilter) {
+            SearchAndFilterRow(
+                query = query,
+                onQueryChange = { query = it },
+                activeFilterCount = activeFilterCount,
+                onOpenFilters = { filterSheetOpen = true },
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
+            )
+        }
+
+        if (groups.isEmpty()) {
+            item(key = "empty", contentType = ServersContentType.EmptyState) {
+                EmptyState(
+                    hasNodes = state.nodes.isNotEmpty(),
+                    modifier = Modifier.padding(32.dp),
+                )
             }
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
-        ) {
-            item(key = "header", contentType = ServersContentType.ScreenHeader) {
-                ScreenHeader(
-                    title = stringResource(R.string.servers_title),
-                    subtitle = stringResource(
-                        R.string.servers_subtitle,
-                        pluralServers(state.nodes.size),
-                        pluralSources(state.subscriptions.size),
-                    ),
-                    modifier = Modifier.padding(bottom = 14.dp),
-                )
-            }
+        groups.forEach { group ->
+            // Settings rather than local state: folding a three-hundred-server subscription
+            // shut is a decision, and it used to come undone on every trip to another tab.
+            val collapsed = group.id in state.collapsedGroupIds
 
-            item(key = "search", contentType = ServersContentType.SearchAndSort) {
-                SearchAndSortRow(
-                    query = query,
-                    onQueryChange = { query = it },
-                    sort = sort,
-                    onSortChange = { sort = it },
+            item(key = "header-${group.id}", contentType = ServersContentType.GroupHeader) {
+                GroupHeader(
+                    title = group.title,
+                    count = group.nodes.size,
+                    collapsed = collapsed,
+                    onToggle = { onToggleGroup(group.id) },
+                    headerTestTag = "group-header-${group.id}",
+                    chevronTestTag = "group-header-${group.id}-chevron",
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
                 )
             }
 
-            if (protocolFacets.isNotEmpty()) {
-                item(key = "filter-protocols", contentType = ServersContentType.ProtocolsFilter) {
-                    ProtocolsFilterCard(
-                        facets = protocolFacets,
-                        selectedProtocols = activeProtocols,
-                        expanded = protocolsExpanded,
-                        onToggleExpand = { protocolsExpanded = !protocolsExpanded },
-                        onToggleProtocol = { protocol ->
-                            selectedProtocols = if (protocol in selectedProtocols) {
-                                selectedProtocols - protocol
-                            } else {
-                                selectedProtocols + protocol
-                            }
-                        },
-                        onClearProtocols = { selectedProtocols = emptySet() },
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+            if (!collapsed) {
+                items(
+                    items = group.nodes,
+                    key = { it.id },
+                    contentType = { ServersContentType.ServerRow },
+                ) { node ->
+                    ServerRow(
+                        node = node,
+                        selected = node.id == state.selectedNodeId,
+                        latency = state.latencies[node.id],
+                        isMeasuring = node.id in state.pingingNodeIds,
+                        onSelect = { onSelect(node.id) },
+                        onPing = { onPing(node.id) },
+                        onRemove = { onRemove(node.id) },
+                        onSetTlsInsecure = node.tls
+                            ?.takeIf { it.enabled && it.reality == null }
+                            ?.let { tls -> { onSetTlsInsecure(node.id, !tls.insecure) } },
+                        onShare = node.sourceUri?.let { { sharing = node } },
+                        modifier = Modifier
+                            .padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                            .testTag("server-row-${node.id}"),
                     )
                 }
-            }
-
-            if (countryFacets.isNotEmpty()) {
-                item(
-                    key = "filter-countries-header",
-                    contentType = ServersContentType.CountriesFilterHeader,
-                ) {
-                    CountriesFilterHeader(
-                        totalCount = countryFacets.size,
-                        selectedCount = activeCountries.size,
-                        expanded = countriesExpanded,
-                        hasRows = countryRows.isNotEmpty(),
-                        onToggleExpand = { countriesExpanded = !countriesExpanded },
-                        onClearCountries = { selectedCountries = emptySet() },
-                        modifier = Modifier.padding(
-                            start = 16.dp,
-                            end = 16.dp,
-                            bottom = if (countryRows.isEmpty()) 6.dp else 0.dp,
-                        ),
-                    )
-                }
-
-                if (countryRows.isNotEmpty()) {
-                    itemsIndexed(
-                        items = countryRows,
-                        key = { _, row -> "country-row-${row.first().code}" },
-                        contentType = { _, _ -> ServersContentType.CountriesFilterRow },
-                    ) { rowIndex, row ->
-                        CountryGridRow(
-                            rowIndex = rowIndex,
-                            row = row,
-                            columns = countryColumns,
-                            isFirstRow = rowIndex == 0,
-                            isLastRow = rowIndex == countryRows.lastIndex,
-                            selectedCountries = activeCountries,
-                            onToggleCountry = { code ->
-                                selectedCountries = if (code in selectedCountries) {
-                                    selectedCountries - code
-                                } else {
-                                    selectedCountries + code
-                                }
-                            },
-                            modifier = Modifier.padding(
-                                start = 16.dp,
-                                end = 16.dp,
-                                bottom = if (rowIndex == countryRows.lastIndex) 6.dp else 0.dp,
-                            ),
-                        )
-                    }
-                }
-            }
-
-            if (groups.isEmpty()) {
-                item(key = "empty", contentType = ServersContentType.EmptyState) {
-                    EmptyState(
-                        hasNodes = state.nodes.isNotEmpty(),
-                        modifier = Modifier.padding(32.dp),
-                    )
-                }
-            }
-
-            groups.forEach { group ->
-                // Settings rather than local state: folding a three-hundred-server subscription
-                // shut is a decision, and it used to come undone on every trip to another tab.
-                val collapsed = group.id in state.collapsedGroupIds
-
-                item(key = "header-${group.id}", contentType = ServersContentType.GroupHeader) {
-                    GroupHeader(
-                        title = group.title,
-                        count = group.nodes.size,
-                        collapsed = collapsed,
-                        onToggle = { onToggleGroup(group.id) },
-                        headerTestTag = "group-header-${group.id}",
-                        chevronTestTag = "group-header-${group.id}-chevron",
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
-                    )
-                }
-
-                if (!collapsed) {
-                    items(
-                        items = group.nodes,
-                        key = { it.id },
-                        contentType = { ServersContentType.ServerRow },
-                    ) { node ->
-                        ServerRow(
-                            node = node,
-                            selected = node.id == state.selectedNodeId,
-                            latency = state.latencies[node.id],
-                            isMeasuring = node.id in state.pingingNodeIds,
-                            onSelect = { onSelect(node.id) },
-                            onPing = { onPing(node.id) },
-                            onRemove = { onRemove(node.id) },
-                            onSetTlsInsecure = node.tls
-                                ?.takeIf { it.enabled && it.reality == null }
-                                ?.let { tls -> { onSetTlsInsecure(node.id, !tls.insecure) } },
-                            onShare = node.sourceUri?.let { { sharing = node } },
-                            modifier = Modifier
-                                .padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
-                                .testTag("server-row-${node.id}"),
-                        )
-                    }
-                }
-            }
-
-            item(key = "tail", contentType = ServersContentType.TailSpacer) {
-                Spacer(Modifier.height(88.dp))
             }
         }
+
+        item(key = "tail", contentType = ServersContentType.TailSpacer) {
+            Spacer(Modifier.height(88.dp))
+        }
+    }
+
+    if (filterSheetOpen) {
+        ServersFilterBottomSheet(
+            totalServersCount = state.nodes.size,
+            filteredServersCount = filteredServerCount,
+            protocolFacets = protocolFacets,
+            countryFacets = countryFacets,
+            selectedProtocols = activeProtocols,
+            selectedCountries = activeCountries,
+            sort = sort,
+            activeFilterCount = activeFilterCount,
+            onToggleProtocol = { protocol ->
+                selectedProtocols = if (protocol in selectedProtocols) {
+                    selectedProtocols - protocol
+                } else {
+                    selectedProtocols + protocol
+                }
+            },
+            onClearProtocols = { selectedProtocols = emptySet() },
+            onToggleCountry = { code ->
+                selectedCountries = if (code in selectedCountries) {
+                    selectedCountries - code
+                } else {
+                    selectedCountries + code
+                }
+            },
+            onClearCountries = { selectedCountries = emptySet() },
+            onSortChange = { sort = it },
+            onResetAll = {
+                selectedProtocols = emptySet()
+                selectedCountries = emptySet()
+                sort = ServerSort.Default
+            },
+            onDismiss = { filterSheetOpen = false },
+        )
     }
 
     sharing?.let { node ->
@@ -512,17 +484,17 @@ internal fun buildGroups(
 }
 
 @Composable
-private fun SearchAndSortRow(
+private fun SearchAndFilterRow(
     query: String,
     onQueryChange: (String) -> Unit,
-    sort: ServerSort,
-    onSortChange: (ServerSort) -> Unit,
+    activeFilterCount: Int,
+    onOpenFilters: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
-
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -546,131 +518,78 @@ private fun SearchAndSortRow(
             shape = RoundedCornerShape(18.dp),
         )
 
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(
-                    Icons.Rounded.SwapVert,
-                    contentDescription = stringResource(R.string.action_sort),
-                )
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                ServerSort.entries.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(stringResource(option.labelRes)) },
-                        onClick = {
-                            onSortChange(option)
-                            menuOpen = false
-                        },
-                        trailingIcon = {
-                            if (option == sort) {
-                                Icon(Icons.Rounded.Bolt, contentDescription = null)
-                            }
-                        },
-                    )
-                }
-            }
-        }
+        FilterTriggerButton(
+            activeFilterCount = activeFilterCount,
+            onClick = onOpenFilters,
+        )
     }
 }
 
 @Composable
-private fun FilterBlockHeader(
-    title: String,
-    totalCount: Int,
-    selectedCount: Int,
-    expanded: Boolean,
-    headerShape: Shape,
-    headerTestTag: String,
-    onToggleExpand: () -> Unit,
-    onClear: () -> Unit,
+private fun FilterTriggerButton(
+    activeFilterCount: Int,
+    onClick: () -> Unit,
 ) {
-    Column(
+    val active = activeFilterCount > 0
+    val shape = RoundedCornerShape(18.dp)
+    val containerColor by animateColorAsState(
+        targetValue = if (active) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "filter-trigger-bg",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (active) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        label = "filter-trigger-fg",
+    )
+
+    Surface(
+        shape = shape,
+        color = containerColor,
+        contentColor = contentColor,
+        border = if (active) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        } else {
+            null
+        },
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(headerShape)
-            .testTag(headerTestTag)
-            .clickable(onClick = onToggleExpand)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .fillMaxHeight()
+            .heightIn(min = OutlinedTextFieldDefaults.MinHeight)
+            .widthIn(min = OutlinedTextFieldDefaults.MinHeight)
+            .clip(shape)
+            .testTag("servers-filter-button")
+            .clickable(onClick = onClick),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.padding(horizontal = if (active) 14.dp else 0.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "$totalCount",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier
-                        .background(
-                            MaterialTheme.colorScheme.surfaceContainerHighest,
-                            RoundedCornerShape(8.dp),
-                        )
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
             Icon(
-                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                contentDescription = stringResource(
-                    if (expanded) R.string.action_collapse else R.string.action_expand,
-                ),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(24.dp)
-                    .testTag("$headerTestTag-chevron"),
+                imageVector = Icons.Rounded.Tune,
+                contentDescription = stringResource(R.string.servers_filters_title),
+                modifier = Modifier.size(22.dp),
             )
-        }
-        if (selectedCount > 0) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = stringResource(R.string.servers_filter_countries_selected, selectedCount),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .padding(end = 8.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            RoundedCornerShape(8.dp),
-                        )
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                        .testTag("$headerTestTag-selected"),
-                )
+            if (active) {
+                Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
-                        .heightIn(min = 36.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onClear)
-                        .padding(horizontal = 8.dp)
-                        .testTag("$headerTestTag-clear"),
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .testTag("servers-filter-button-count"),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stringResource(R.string.servers_filter_clear),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        text = activeFilterCount.toString(),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onPrimary,
                         maxLines = 1,
                         softWrap = false,
                     )
@@ -681,226 +600,842 @@ private fun FilterBlockHeader(
 }
 
 @Composable
-private fun ProtocolsFilterCard(
-    facets: List<ProtocolFacet>,
+private fun ServersFilterBottomSheet(
+    totalServersCount: Int,
+    filteredServersCount: Int,
+    protocolFacets: List<ProtocolFacet>,
+    countryFacets: List<CountryFacet>,
     selectedProtocols: Set<Protocol>,
-    expanded: Boolean,
-    onToggleExpand: () -> Unit,
+    selectedCountries: Set<String>,
+    sort: ServerSort,
+    activeFilterCount: Int,
     onToggleProtocol: (Protocol) -> Unit,
     onClearProtocols: () -> Unit,
-    modifier: Modifier = Modifier,
+    onToggleCountry: (String) -> Unit,
+    onClearCountries: () -> Unit,
+    onSortChange: (ServerSort) -> Unit,
+    onResetAll: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("protocol-filter-block"),
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var page by rememberSaveable { mutableStateOf(FilterSheetPage.All) }
+    var countryQuery by rememberSaveable { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            FilterBlockHeader(
-                title = stringResource(R.string.servers_filter_protocols),
-                totalCount = facets.size,
-                selectedCount = selectedProtocols.size,
-                expanded = expanded,
-                headerShape = if (expanded) {
-                    RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-                } else {
-                    RoundedCornerShape(12.dp)
-                },
-                headerTestTag = "protocol-filter-header",
-                onToggleExpand = onToggleExpand,
-                onClear = onClearProtocols,
-            )
-            if (expanded) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            when (page) {
+                FilterSheetPage.All -> {
+                    MainFilterSheetContent(
+                        totalServersCount = totalServersCount,
+                        filteredServersCount = filteredServersCount,
+                        protocolFacets = protocolFacets,
+                        countryFacets = countryFacets,
+                        selectedProtocols = selectedProtocols,
+                        selectedCountries = selectedCountries,
+                        sort = sort,
+                        activeFilterCount = activeFilterCount,
+                        onToggleProtocol = onToggleProtocol,
+                        onClearProtocols = onClearProtocols,
+                        onOpenCountries = {
+                            countryQuery = ""
+                            page = FilterSheetPage.Country
+                        },
+                        onSortChange = onSortChange,
+                        onResetAll = onResetAll,
+                        onApply = onDismiss,
+                    )
+                }
+
+                FilterSheetPage.Country -> {
+                    CountryPickerSheetContent(
+                        filteredServersCount = filteredServersCount,
+                        countryFacets = countryFacets,
+                        selectedCountries = selectedCountries,
+                        query = countryQuery,
+                        onQueryChange = { countryQuery = it },
+                        onToggleCountry = onToggleCountry,
+                        onClearCountries = onClearCountries,
+                        onBack = { page = FilterSheetPage.All },
+                        onApply = onDismiss,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MainFilterSheetContent(
+    totalServersCount: Int,
+    filteredServersCount: Int,
+    protocolFacets: List<ProtocolFacet>,
+    countryFacets: List<CountryFacet>,
+    selectedProtocols: Set<Protocol>,
+    selectedCountries: Set<String>,
+    sort: ServerSort,
+    activeFilterCount: Int,
+    onToggleProtocol: (Protocol) -> Unit,
+    onClearProtocols: () -> Unit,
+    onOpenCountries: () -> Unit,
+    onSortChange: (ServerSort) -> Unit,
+    onResetAll: () -> Unit,
+    onApply: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 12.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.servers_filters_title),
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            modifier = Modifier.weight(1f),
+        )
+        if (activeFilterCount > 0) {
+            TextButton(
+                onClick = onResetAll,
+                modifier = Modifier.testTag("servers-filter-reset-all"),
+            ) {
+                Text(stringResource(R.string.servers_filters_reset_all))
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 460.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        if (protocolFacets.isNotEmpty()) {
+            SheetSectionTitle(title = stringResource(R.string.servers_filter_protocol_label))
+            val totalButtons = protocolFacets.size + 1
+            if (totalButtons <= 3) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .testTag("servers-filter-protocols"),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    ProtocolGroupButton(
+                        label = stringResource(R.string.servers_filter_all),
+                        count = totalServersCount,
+                        selected = selectedProtocols.isEmpty(),
+                        isFirst = true,
+                        isLast = protocolFacets.isEmpty(),
+                        onClick = onClearProtocols,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("servers-filter-protocol-all"),
+                    )
+                    protocolFacets.forEachIndexed { index, facet ->
+                        ProtocolGroupButton(
+                            label = facet.protocol.label,
+                            count = facet.count,
+                            selected = facet.protocol in selectedProtocols,
+                            isFirst = false,
+                            isLast = index == protocolFacets.lastIndex,
+                            onClick = { onToggleProtocol(facet.protocol) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("protocol-chip-${facet.protocol.name}"),
+                        )
+                    }
+                }
+            } else {
                 FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .padding(horizontal = 16.dp)
+                        .testTag("servers-filter-protocols"),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    facets.forEach { facet ->
-                        FilterChip(
+                    ProtocolGroupButton(
+                        label = stringResource(R.string.servers_filter_all),
+                        count = totalServersCount,
+                        selected = selectedProtocols.isEmpty(),
+                        isFirst = true,
+                        isLast = false,
+                        onClick = onClearProtocols,
+                        modifier = Modifier.testTag("servers-filter-protocol-all"),
+                    )
+                    protocolFacets.forEachIndexed { index, facet ->
+                        ProtocolGroupButton(
+                            label = facet.protocol.label,
+                            count = facet.count,
                             selected = facet.protocol in selectedProtocols,
+                            isFirst = false,
+                            isLast = index == protocolFacets.lastIndex,
                             onClick = { onToggleProtocol(facet.protocol) },
-                            label = {
-                                Text(
-                                    text = "${facet.protocol.label} · ${facet.count}",
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            },
                             modifier = Modifier.testTag("protocol-chip-${facet.protocol.name}"),
                         )
                     }
                 }
             }
         }
+
+        if (countryFacets.isNotEmpty()) {
+            SheetSectionTitle(title = stringResource(R.string.servers_filter_countries))
+            val sortedSelectedCodes = remember(selectedCountries) { selectedCountries.sorted() }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("servers-filter-countries-row")
+                    .clickable(onClick = onOpenCountries)
+                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Public,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (sortedSelectedCodes.isNotEmpty()) {
+                            sortedSelectedCodes.joinToString(", ")
+                        } else {
+                            stringResource(R.string.servers_filter_countries_all)
+                        },
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = if (sortedSelectedCodes.isNotEmpty()) {
+                            stringResource(R.string.servers_filter_countries_chosen, sortedSelectedCodes.size)
+                        } else {
+                            stringResource(R.string.servers_filter_countries_available, countryFacets.size)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        SheetSectionTitle(title = stringResource(R.string.servers_filter_sort_label))
+        Row(
+            modifier = Modifier
+                .padding(start = 16.dp, end = 16.dp, bottom = 18.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(4.dp)
+                .testTag("servers-filter-sort-bar"),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ServerSort.entries.forEach { option ->
+                val isSelected = option == sort
+                val bgColor by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    label = "sort-seg-bg",
+                )
+                val fgColor by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    label = "sort-seg-fg",
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(19.dp))
+                        .background(bgColor)
+                        .testTag("servers-filter-sort-${option.name}")
+                        .clickable { onSortChange(option) }
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(option.shortLabelRes),
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = fgColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
     }
+
+    SheetApplyFooter(
+        filteredServersCount = filteredServersCount,
+        onClick = onApply,
+    )
 }
 
 @Composable
-private fun CountriesFilterHeader(
-    totalCount: Int,
-    selectedCount: Int,
-    expanded: Boolean,
-    hasRows: Boolean,
-    onToggleExpand: () -> Unit,
-    onClearCountries: () -> Unit,
+private fun ProtocolGroupButton(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = if (expanded && hasRows) {
-        RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-    } else {
-        RoundedCornerShape(12.dp)
-    }
+    val outer = 23.dp
+    val inner = 10.dp
+    val startCorner by animateDpAsState(if (selected || isFirst) outer else inner, label = "pg-start")
+    val endCorner by animateDpAsState(if (selected || isLast) outer else inner, label = "pg-end")
+    val shape = RoundedCornerShape(
+        topStart = startCorner,
+        bottomStart = startCorner,
+        topEnd = endCorner,
+        bottomEnd = endCorner,
+    )
+    val bg by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+        label = "pg-bg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        label = "pg-fg",
+    )
+
     Surface(
         shape = shape,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = bg,
+        contentColor = fg,
         modifier = modifier
-            .fillMaxWidth()
-            .testTag("country-filter-block"),
+            .height(46.dp)
+            .clip(shape)
+            .clickable(onClick = onClick),
     ) {
-        FilterBlockHeader(
-            title = stringResource(R.string.servers_filter_countries),
-            totalCount = totalCount,
-            selectedCount = selectedCount,
-            expanded = expanded,
-            headerShape = shape,
-            headerTestTag = "country-filter-header",
-            onToggleExpand = onToggleExpand,
-            onClear = onClearCountries,
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+        ) {
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = fg.copy(alpha = 0.72f),
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
     }
 }
 
 @Composable
-private fun CountryGridRow(
-    rowIndex: Int,
-    row: List<CountryFacet>,
-    columns: Int,
-    isFirstRow: Boolean,
-    isLastRow: Boolean,
+private fun CountryPickerSheetContent(
+    filteredServersCount: Int,
+    countryFacets: List<CountryFacet>,
     selectedCountries: Set<String>,
+    query: String,
+    onQueryChange: (String) -> Unit,
     onToggleCountry: (String) -> Unit,
+    onClearCountries: () -> Unit,
+    onBack: () -> Unit,
+    onApply: () -> Unit,
+) {
+    val config = LocalConfiguration.current
+    val displayLocale = remember(config) {
+        config.locales.takeIf { !it.isEmpty }?.get(0) ?: Locale.getDefault()
+    }
+
+    val localizedCountries = remember(countryFacets, displayLocale) {
+        val collator = Collator.getInstance(displayLocale)
+        countryFacets
+            .map { facet ->
+                facet to countryDisplayName(facet.code, displayLocale)
+            }
+            .sortedWith { a, b -> collator.compare(a.second, b.second) }
+    }
+    val trimmedQuery = query.trim()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 12.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier.testTag("servers-filter-country-back"),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = stringResource(R.string.action_back),
+            )
+        }
+        Text(
+            text = stringResource(R.string.servers_filter_country_title),
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            modifier = Modifier.weight(1f),
+        )
+        if (selectedCountries.isNotEmpty()) {
+            TextButton(
+                onClick = onClearCountries,
+                modifier = Modifier.testTag("servers-filter-countries-clear"),
+            ) {
+                Text(stringResource(R.string.servers_filter_reset_count, selectedCountries.size))
+            }
+        }
+    }
+
+    CompactSheetSearchBar(
+        query = query,
+        onQueryChange = onQueryChange,
+        placeholder = stringResource(R.string.servers_filter_country_search_placeholder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 420.dp),
+        contentPadding = PaddingValues(bottom = 8.dp),
+    ) {
+        if (trimmedQuery.isNotEmpty()) {
+            val matched = localizedCountries.filter { (facet, name) ->
+                matchesCountrySearch(facet.code, name, trimmedQuery)
+            }
+            if (matched.isEmpty()) {
+                item(key = "country-empty") {
+                    Text(
+                        text = stringResource(R.string.servers_filter_country_not_found, trimmedQuery),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 28.dp),
+                    )
+                }
+            } else {
+                items(
+                    items = matched,
+                    key = { (facet, _) -> "search-${facet.code}" },
+                ) { (facet, name) ->
+                    CountrySheetRow(
+                        facet = facet,
+                        displayName = name,
+                        selected = facet.code in selectedCountries,
+                        onClick = { onToggleCountry(facet.code) },
+                    )
+                }
+            }
+        } else {
+            val selectedItems = localizedCountries.filter { (facet, _) -> facet.code in selectedCountries }
+            if (selectedItems.isNotEmpty()) {
+                item(key = "sect-selected") {
+                    SheetSectionTitle(title = stringResource(R.string.servers_filter_selected_section))
+                }
+                items(
+                    items = selectedItems,
+                    key = { (facet, _) -> "sel-${facet.code}" },
+                ) { (facet, name) ->
+                    CountrySheetRow(
+                        facet = facet,
+                        displayName = name,
+                        selected = true,
+                        onClick = { onToggleCountry(facet.code) },
+                    )
+                }
+            }
+
+            val popularRows = countryFacets.take(9).chunked(3)
+            if (popularRows.isNotEmpty()) {
+                item(key = "sect-popular") {
+                    SheetSectionTitle(title = stringResource(R.string.servers_filter_popular_section))
+                }
+                items(
+                    items = popularRows,
+                    key = { row -> "pop-row-${row.first().code}" },
+                ) { row ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { facet ->
+                            PopularCountryTile(
+                                facet = facet,
+                                selected = facet.code in selectedCountries,
+                                onClick = { onToggleCountry(facet.code) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        repeat(3 - row.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
+            val remaining = localizedCountries.filter { (facet, _) -> facet.code !in selectedCountries }
+            if (remaining.isNotEmpty()) {
+                item(key = "sect-all") {
+                    SheetSectionTitle(
+                        title = stringResource(R.string.servers_filter_all_countries_az),
+                        badgeCount = countryFacets.size,
+                    )
+                }
+                items(
+                    items = remaining,
+                    key = { (facet, _) -> "all-${facet.code}" },
+                ) { (facet, name) ->
+                    CountrySheetRow(
+                        facet = facet,
+                        displayName = name,
+                        selected = false,
+                        onClick = { onToggleCountry(facet.code) },
+                    )
+                }
+            }
+        }
+    }
+
+    SheetApplyFooter(
+        filteredServersCount = filteredServersCount,
+        onClick = onApply,
+    )
+}
+
+@Composable
+private fun CompactSheetSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    placeholder: String,
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        shape = if (isLastRow) {
-            RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)
-        } else {
-            RectangleShape
-        },
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("country-grid-row-$rowIndex"),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier.height(44.dp),
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = 12.dp,
-                    end = 12.dp,
-                    top = if (isFirstRow) 0.dp else 3.dp,
-                    bottom = if (isLastRow) 12.dp else 3.dp,
-                ),
-            horizontalArrangement = Arrangement.spacedBy(if (columns == 3) 6.dp else 8.dp),
+                .fillMaxSize()
+                .padding(start = 14.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            row.forEach { facet ->
-                CountryTile(
-                    facet = facet,
-                    selected = facet.code in selectedCountries,
-                    onClick = { onToggleCountry(facet.code) },
-                    modifier = Modifier.weight(1f),
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("servers-filter-country-search"),
                 )
             }
-            repeat(columns - row.size) {
-                Spacer(Modifier.weight(1f))
+            if (query.isNotEmpty()) {
+                IconButton(
+                    onClick = { onQueryChange("") },
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.action_clear),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun CountryTile(
+private fun PopularCountryTile(
     facet: CountryFacet,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val density = LocalDensity.current
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
+    val corner by animateDpAsState(if (selected) 24.dp else 16.dp, label = "pop-tile-radius")
+    val shape = RoundedCornerShape(corner)
+    val bg by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary
         } else {
             MaterialTheme.colorScheme.surfaceContainerHigh
         },
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (selected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-            },
-        ),
+        label = "pop-tile-bg",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        label = "pop-tile-fg",
+    )
+
+    Surface(
+        shape = shape,
+        color = bg,
+        contentColor = fg,
         modifier = modifier
-            .heightIn(min = 40.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .heightIn(min = 42.dp)
+            .clip(shape)
             .testTag("country-tile-${facet.code}")
             .clickable(onClick = onClick),
     ) {
-        CompositionLocalProvider(
-            LocalDensity provides Density(
-                density = density.density,
-                fontScale = minOf(density.fontScale, 1.15f),
-            ),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 3.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
-            ) {
-                if (facet.flag.isNotEmpty()) {
-                    Text(
-                        text = facet.flag,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                }
+            if (facet.flag.isNotEmpty()) {
                 Text(
-                    text = facet.code,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    text = facet.flag,
+                    fontSize = 16.sp,
                     maxLines = 1,
                     softWrap = false,
-                    overflow = TextOverflow.Clip,
                 )
-                Text(
-                    text = facet.count.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+            }
+            Text(
+                text = facet.code,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                maxLines = 1,
+                softWrap = false,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = facet.count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = fg.copy(alpha = 0.72f),
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CountrySheetRow(
+    facet: CountryFacet,
+    displayName: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("country-row-${facet.code}")
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        if (facet.flag.isNotEmpty()) {
+            Text(
+                text = facet.flag,
+                fontSize = 24.sp,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = facet.code,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = facet.count.toString(),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .then(
+                    if (selected) {
+                        Modifier.background(MaterialTheme.colorScheme.primary)
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        Modifier.border(
+                            width = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            shape = RoundedCornerShape(7.dp),
+                        )
                     },
-                    maxLines = 1,
-                    softWrap = false,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(15.dp),
                 )
             }
         }
     }
 }
+
+@Composable
+private fun SheetSectionTitle(
+    title: String,
+    badgeCount: Int? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.primary,
+        )
+        if (badgeCount != null) {
+            Text(
+                text = badgeCount.toString(),
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        RoundedCornerShape(8.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SheetApplyFooter(
+    filteredServersCount: Int,
+    onClick: () -> Unit,
+) {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+    ) {
+        Button(
+            onClick = onClick,
+            shape = RoundedCornerShape(26.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .testTag("servers-filter-apply"),
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.servers_filter_show_results,
+                    pluralServers(filteredServersCount),
+                ),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            )
+        }
+    }
+}
+
+private fun countryDisplayName(code: String, locale: Locale): String =
+    runCatching {
+        Locale.Builder().setRegion(code).build().getDisplayCountry(locale)
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: code
+
+private fun matchesCountrySearch(
+    code: String,
+    localizedName: String,
+    query: String,
+): Boolean {
+    if (code.contains(query, ignoreCase = true)) return true
+    if (localizedName.contains(query, ignoreCase = true)) return true
+    val ruName = countryDisplayName(code, LOCALE_RU)
+    if (ruName.contains(query, ignoreCase = true)) return true
+    val enName = countryDisplayName(code, Locale.ENGLISH)
+    return enName.contains(query, ignoreCase = true)
+}
+
+private val LOCALE_RU: Locale = Locale.forLanguageTag("ru")
 
 @Composable
 private fun GroupHeader(

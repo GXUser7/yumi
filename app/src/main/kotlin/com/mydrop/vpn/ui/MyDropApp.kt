@@ -68,6 +68,7 @@ import com.mydrop.vpn.ui.screens.settings.SettingsScreen
 import com.mydrop.vpn.ui.screens.speed.SpeedTestScreen
 import com.mydrop.vpn.ui.screens.subscriptions.AddSubscriptionSheet
 import com.mydrop.vpn.ui.screens.subscriptions.SubscriptionsScreen
+import com.mydrop.vpn.ui.screens.zones.ZonesMapScreen
 
 object Routes {
     const val CONNECT = "connect"
@@ -81,6 +82,7 @@ object Routes {
     const val FAILOVER = "failover"
     const val MOBILE_NODES = "mobile-nodes"
     const val REMOTE = "remote"
+    const val ZONES_MAP = "zones-map"
 }
 
 private enum class TopLevel(
@@ -103,6 +105,13 @@ fun MyDropApp(viewModel: MainViewModel) {
     val updates by viewModel.updates.collectAsStateWithLifecycle()
     val geoAssets by viewModel.geoAssets.collectAsStateWithLifecycle()
     val ipv6 by viewModel.ipv6.collectAsStateWithLifecycle()
+    val geoZonesState by viewModel.geoZonesState.collectAsStateWithLifecycle()
+    val geoClusters by viewModel.geoClusters.collectAsStateWithLifecycle()
+    val geoProximity by viewModel.geoProximity.collectAsStateWithLifecycle()
+    val geoLocationSample by viewModel.geoLocationSample.collectAsStateWithLifecycle()
+    val geoLastValidCoord by viewModel.geoLastValidCoord.collectAsStateWithLifecycle()
+    val geoHasPermission by viewModel.geoHasPermission.collectAsStateWithLifecycle()
+    val geoSpoofDetected by viewModel.geoSpoofDetected.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -276,6 +285,10 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
                     onOpenFailover = { navController.navigate(Routes.FAILOVER) },
                     onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
+                    geoZonesCount = geoClusters.size,
+                    geoHasPermission = geoHasPermission,
+                    onGeoPermissionChanged = viewModel::refreshGeoPermission,
+                    onOpenZonesMap = { navController.navigate(Routes.ZONES_MAP) },
                     geoAssets = geoAssets,
                     onRefreshGeo = viewModel::refreshGeoAssets,
                     ipv6 = ipv6,
@@ -336,6 +349,28 @@ fun MyDropApp(viewModel: MainViewModel) {
                     settings = state.settings,
                     appsRevision = appsRevision,
                     onUpdate = viewModel::updateSettings,
+                    onBack = { navController.popBackStack() },
+                    contentPadding = contentPadding,
+                )
+            }
+
+            composable(Routes.ZONES_MAP) {
+                ZonesMapScreen(
+                    zonesState = geoZonesState,
+                    clusters = geoClusters,
+                    proximity = geoProximity,
+                    locationSample = geoLocationSample,
+                    lastValidCoord = geoLastValidCoord,
+                    hasLocationPermission = geoHasPermission,
+                    spoofDetected = geoSpoofDetected,
+                    mapTiles = viewModel.mapTiles,
+                    nodes = state.nodes,
+                    onSetMapActive = viewModel::setGeoMapActive,
+                    onPermissionUpdated = viewModel::refreshGeoPermission,
+                    onAddManualZone = viewModel::addManualGeoZone,
+                    onTogglePinCluster = viewModel::togglePinGeoCluster,
+                    onRemoveCluster = viewModel::removeGeoCluster,
+                    onClearAll = viewModel::clearGeoZones,
                     onBack = { navController.popBackStack() },
                     contentPadding = contentPadding,
                 )

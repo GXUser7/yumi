@@ -186,6 +186,26 @@
     <string name="servers_filter_countries">Countries</string>
     <string name="servers_filter_countries_selected">Selected: %1$d</string>
     <string name="servers_filter_clear">Reset</string>
+    <string name="servers_filters_title">Filters</string>
+    <string name="servers_filters_reset_all">Reset all</string>
+    <string name="servers_filter_protocol_label">Protocol</string>
+    <string name="servers_filter_all">All</string>
+    <string name="servers_filter_countries_all">All countries</string>
+    <string name="servers_filter_countries_chosen">%1$d selected</string>
+    <string name="servers_filter_countries_available">%1$d available</string>
+    <string name="servers_filter_sort_label">Sort by</string>
+    <string name="servers_filter_sort_default_short">Default</string>
+    <string name="servers_filter_sort_latency_short">By ping</string>
+    <string name="servers_filter_sort_name_short">By name</string>
+    <string name="servers_filter_sort_protocol_short">Protocol</string>
+    <string name="servers_filter_country_title">Country</string>
+    <string name="servers_filter_reset_count">Reset (%1$d)</string>
+    <string name="servers_filter_country_search_placeholder">Name or code, e.g. Germany / DE</string>
+    <string name="servers_filter_selected_section">Selected</string>
+    <string name="servers_filter_popular_section">Popular</string>
+    <string name="servers_filter_all_countries_az">All countries · A–Z</string>
+    <string name="servers_filter_country_not_found">No country matching “%1$s”</string>
+    <string name="servers_filter_show_results">Show %1$s</string>
 
     <!-- ================================================ Subscriptions screen -->
 
@@ -651,4 +671,72 @@ Send it here: %2$s</string>
 
     <string name="widget_description">1×1 tunnel toggle</string>
     <string name="widget_content_description">%1$s: %2$s</string>
+
+    <!-- ======================================================= Geo-zones & map -->
+
+    <string name="log_geozone_spoof_detected">Geo-zones: GPS jump detected (likely EW spoofing), falling back to cell tower matching</string>
+    <string name="log_geozone_prewarmed">Approaching whitelist zone (~%1$d m) — pre-measured mobile pool, “%2$s” ready (%3$d ms)</string>
+    <string name="log_geozone_switched_in">Entered whitelist zone — switching early to “%1$s” (%2$d ms)</string>
+    <string name="log_geozone_switched_tower">Matched whitelist zone cell tower — switching to “%1$s” (%2$d ms)</string>
+    <string name="log_geozone_returned_ordinary">Left whitelist zone — returning to ordinary server “%1$s” (%2$d ms)</string>
+    <string name="log_geozone_learned">Geo-zones: hex %1$s marked as a whitelist zone (drops: %2$d, mobile hits: %3$d)</string>
+    <string name="log_geozone_healed">Geo-zones: hex %1$s carries ordinary traffic again — cleared from drop map</string>
+    <string name="log_geozone_deadspot">Geo-zones: hex %1$s marked as a dead spot — neither ordinary nor mobile servers answer</string>
+    <string name="log_geozone_manual_added">Geo-zones: manually pinned zone around hex %1$s (%2$d hexes)</string>
+    <string name="log_geozone_home_wifi_learned">Geo-zones: Wi‑Fi “%1$s” (hex %2$s) learned as a frequent home anchor — protects against false drops and GPS spoofing</string>
+
+    <string name="settings_geozones">Whitelist geo-zones</string>
+    <string name="settings_geozones_subtitle">Map cellular drop zones locally and pre-switch to mobile servers before connections stall</string>
+    <string name="settings_geozones_permission_needed">Location permission needed — toggle on to grant</string>
+    <string name="settings_geozones_map">City zones map</string>
+    <string name="settings_geozones_map_empty">No zones mapped yet — open the interactive map</string>
+    <string name="settings_geozones_map_count">Zones mapped: %1$d</string>
+    <string name="settings_geozones_open_map_button">Open zones map</string>
+    <string name="settings_geozones_open_map_button_count">Open zones map (%1$d)</string>
+    <string name="settings_geozones_preemptive">Pre-switch when approaching a zone</string>
+    <string name="settings_geozones_preemptive_subtitle">Pre-warm mobile servers in the buffer ring and switch upon entry without waiting for drops</string>
+    <string name="settings_geozones_auto_return">Return to ordinary server outside zones</string>
+    <string name="settings_geozones_auto_return_subtitle">Switch back from mobile relays once back in a clean area</string>
+
+    <string name="connect_zones_map">City zones map</string>
+    <string name="connect_zone_inside">Inside whitelist zone</string>
+    <string name="connect_zone_inside_tower">Whitelist zone · cell tower</string>
+    <string name="connect_zone_approaching">Approaching zone · %1$d m</string>
+
+    <string name="zones_map_title">City zones</string>
+    <string name="zones_map_subtitle_count">Zones mapped: %1$d · long-press the map to mark one</string>
+    <string name="zones_map_subtitle_empty">Clear so far · long-press on the map to add a zone</string>
+    <string name="zones_permission_title">Location access needed</string>
+    <string name="zones_permission_body">Stays on your phone: maps cellular drop hexes, matches cell towers under GPS jamming, and pre-switches to mobile servers.</string>
+    <string name="zones_permission_grant">Grant</string>
+    <string name="zones_status_outside">Clear zone</string>
+    <string name="zones_status_approaching">Approaching zone · %1$d m</string>
+    <string name="zones_status_inside">Inside whitelist zone</string>
+    <string name="zones_status_tower">EW fallback · matched by tower</string>
+    <string name="zones_status_spoof">GPS spoofing filtered (EW)</string>
+    <string name="zones_action_my_location">My location</string>
+    <string name="zones_action_zoom_in">Zoom in</string>
+    <string name="zones_action_zoom_out">Zoom out</string>
+    <string name="zones_action_mark_here">Mark here</string>
+    <string name="zones_action_clear_all">Clear map</string>
+    <string name="zones_kind_whitelist">Whitelist</string>
+    <string name="zones_kind_suspect">Suspect</string>
+    <string name="zones_kind_dead">Blackout / EW</string>
+    <string name="zones_kind_healthy">Healthy</string>
+    <string name="zones_badge_pinned">Pinned</string>
+    <string name="zones_default_name">Zone %1$s</string>
+    <string name="zones_metrics">%1$d hexes · ~%2$d m radius</string>
+    <string name="zones_stats_row">Drops: %1$d · mobile hits: %2$d · towers: %3$d</string>
+    <string name="zones_working_servers">Proven servers in this zone</string>
+    <string name="zones_working_servers_empty">None recorded yet — populated when mobile servers succeed here</string>
+    <string name="zones_action_pin">Pin</string>
+    <string name="zones_action_unpin">Unpin</string>
+    <string name="zones_action_delete">Delete</string>
+    <string name="zones_added_manual">Whitelist zone marked on the map</string>
+    <string name="zones_cleared">Zones map cleared</string>
+    <string name="zones_hint_no_fix">No location fix yet — enable location or long-press on the map</string>
+    <string name="zones_legend_whitelist">Whitelist</string>
+    <string name="zones_legend_approach">Approach</string>
+    <string name="zones_legend_dead">Blackout</string>
+    <string name="zones_legend_healthy">Healthy</string>
 </resources>

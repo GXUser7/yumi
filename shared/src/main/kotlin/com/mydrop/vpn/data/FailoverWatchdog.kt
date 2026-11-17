@@ -5,12 +5,16 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.FailoverPolicy
+import com.mydrop.vpn.core.model.GeoZoneCluster
+import com.mydrop.vpn.core.model.HexCoord
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NetworkEnvironment
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.model.ZoneKind
+import com.mydrop.vpn.core.model.ZoneProximity
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -60,6 +64,8 @@ class FailoverWatchdog(
     private val scope: CoroutineScope,
     /** Which member of a group carries the tunnel; see [GroupSelector]. */
     private val groups: GroupSelector = GroupSelector(tunnel, logs),
+    private val geoZones: GeoZoneRepository? = null,
+    private val geoMonitor: GeoLocationMonitor? = null,
 ) {
 
     private var watching: Job? = null
@@ -114,6 +120,13 @@ class FailoverWatchdog(
      * rather than a fresh guess. Cleared once it has been used or has stopped existing.
      */
     private var savedOrdinaryNodeId: String? = null
+
+    private var warmedZoneNode: Measured? = null
+    private var warmedZoneAtMillis: Long = 0L
+    private var warmedClusterId: String? = null
+    private var outsideZoneSinceMillis: Long = 0L
+    private var lastAutoReturnAttemptAtMillis: Long = 0L
+    private var geoSwitchedFromOrdinaryId: String? = null
 
     /**
      * Moves the tunnel between the ordinary servers and the mobile ones as the phone changes
@@ -251,6 +264,11 @@ class FailoverWatchdog(
                 carrying.id,
                 current.preferOrdinaryOnCellular,
             ) -> {
+                val insideWhitelist = current.geoZonesEnabled &&
+                    (geoMonitor?.proximity?.value as? ZoneProximity.Inside)?.cluster?.kind == ZoneKind.Whitelist
+                if (transport == NetworkTransport.Cellular && insideWhitelist) {
+                    return true
+                }
                 val remembered = savedOrdinaryNodeId
                     ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
                     ?.takeIf { it.id !in current.mobileNodeIds }
@@ -418,12 +436,13 @@ class FailoverWatchdog(
      *   to be needed in the first place.
      */
     private suspend fun mobileFallback(dead: ProxyNode, mobileIds: Set<String>, blind: Boolean): Pool? {
+        val preferredIds = currentZonePreferredNodeIds()
         val pool = FailoverGroup.preferSwitchable(
             profiles.nodes.filter {
                 it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
             },
             configs.switchable.value,
-        )
+        ).let { sortWithPreferredIds(it, preferredIds) }
         if (pool.isEmpty()) return null
 
         logs.info(R.string.log_cellular_ordinary_dead, pool.size)
@@ -468,6 +487,7 @@ class FailoverWatchdog(
     /** Follows the tunnel: a watch runs for exactly as long as one connection lives. */
     fun start() {
         watchTransport()
+        watchGeoZones()
         scope.launch {
             tunnel.state.collectLatest { state ->
                 when (state) {
@@ -485,6 +505,10 @@ class FailoverWatchdog(
                         // disconnect in between, until the process itself died.
                         failbacks.clear()
                         blindEscapes = 0
+                        warmedZoneNode = null
+                        warmedClusterId = null
+                        outsideZoneSinceMillis = 0L
+                        geoSwitchedFromOrdinaryId = null
                         // The fallback resolver lasts exactly as long as the connection that
                         // needed it. A resolver that was down twenty minutes ago is the likeliest
                         // thing in the world to be up again, and one that stayed swapped until
@@ -494,6 +518,248 @@ class FailoverWatchdog(
                     }
                 }
             }
+        }
+    }
+
+    private fun watchGeoZones() {
+        val monitor = geoMonitor ?: return
+        scope.launch {
+            combine(
+                monitor.proximity,
+                tunnel.state,
+                tunnel.transport,
+                settings.settings.map {
+                    GeoZoneFlags(it.geoZonesEnabled, it.geoPreemptiveSwitch, it.geoAutoReturnOrdinary)
+                }.distinctUntilChanged(),
+            ) { proximity, vpnState, transport, flags ->
+                val trigger = when (proximity) {
+                    is ZoneProximity.Outside -> GeoTrigger.Outside
+                    is ZoneProximity.Approaching -> GeoTrigger.Approaching(
+                        clusterId = proximity.cluster.id,
+                        workingNodeIds = proximity.cluster.workingNodeIds,
+                    )
+                    is ZoneProximity.Inside -> GeoTrigger.Inside(
+                        clusterId = proximity.cluster.id,
+                        kind = proximity.cluster.kind,
+                        matchedByCellTower = proximity.matchedByCellTower,
+                        workingNodeIds = proximity.cluster.workingNodeIds,
+                    )
+                }
+                GeoWatchState(
+                    trigger = trigger,
+                    connected = vpnState is VpnState.Connected,
+                    cellular = transport == NetworkTransport.Cellular,
+                    flags = flags,
+                )
+            }
+                .distinctUntilChanged()
+                .collectLatest { watch ->
+                    if (!watch.connected || !watch.cellular || !watch.flags.enabled) {
+                        outsideZoneSinceMillis = 0L
+                        return@collectLatest
+                    }
+                    val currentSettings = settings.value
+                    val mobileIds = currentSettings.mobileNodeIds
+                    val carrying = profiles.selectedNode() ?: return@collectLatest
+
+                    when (val trigger = watch.trigger) {
+                        is GeoTrigger.Approaching -> {
+                            outsideZoneSinceMillis = 0L
+                            if (!watch.flags.preemptive || mobileIds.isEmpty()) return@collectLatest
+                            if (carrying.id in mobileIds) return@collectLatest
+                            monitor.requestHighAccuracyBurst()
+                            val freshWarm = warmedClusterId == trigger.clusterId &&
+                                (SystemClock.elapsedRealtime() - warmedZoneAtMillis) < WARMED_TTL_MILLIS
+                            if (freshWarm && warmedZoneNode != null) return@collectLatest
+
+                            logs.trace(
+                                TAG,
+                                "geozone prewarm start cluster=${trigger.clusterId} " +
+                                    "preferred=${trigger.workingNodeIds.size} mobilePool=${mobileIds.size}",
+                            )
+                            val chosen = measureAndPickMobileForZone(
+                                mobileIds = mobileIds,
+                                preferredIds = trigger.workingNodeIds,
+                            ) ?: run {
+                                logs.trace(TAG, "geozone prewarm found no live mobile server")
+                                return@collectLatest
+                            }
+                            warmedZoneNode = chosen
+                            warmedClusterId = trigger.clusterId
+                            warmedZoneAtMillis = SystemClock.elapsedRealtime()
+                            val distance = (monitor.proximity.value as? ZoneProximity.Approaching)
+                                ?.distanceMeters ?: APPROACH_FALLBACK_DISTANCE_M
+                            logs.trace(
+                                TAG,
+                                "geozone prewarm ready cluster=${trigger.clusterId} " +
+                                    "node=${chosen.node.name} ms=${chosen.millis} dist=${distance}m",
+                            )
+                            logs.info(
+                                R.string.log_geozone_prewarmed,
+                                distance,
+                                chosen.node.name,
+                                chosen.millis,
+                            )
+                        }
+
+                        is GeoTrigger.Inside -> {
+                            outsideZoneSinceMillis = 0L
+                            if (trigger.kind != ZoneKind.Whitelist) return@collectLatest
+                            if (!watch.flags.preemptive || mobileIds.isEmpty()) return@collectLatest
+                            if (carrying.id in mobileIds) return@collectLatest
+
+                            val cached = warmedZoneNode?.takeIf { warm ->
+                                warm.node.id in mobileIds &&
+                                    (SystemClock.elapsedRealtime() - warmedZoneAtMillis) < WARMED_USE_TTL_MILLIS &&
+                                    profiles.nodes.any { it.id == warm.node.id }
+                            }
+                            val chosen = cached ?: measureAndPickMobileForZone(
+                                mobileIds = mobileIds,
+                                preferredIds = trigger.workingNodeIds,
+                            ) ?: run {
+                                logs.trace(TAG, "geozone inside ${trigger.clusterId}: no live mobile server")
+                                return@collectLatest
+                            }
+
+                            warmedZoneNode = null
+                            savedOrdinaryNodeId = carrying.id
+                            geoSwitchedFromOrdinaryId = carrying.id
+                            val logRes = if (trigger.matchedByCellTower) {
+                                R.string.log_geozone_switched_tower
+                            } else {
+                                R.string.log_geozone_switched_in
+                            }
+                            logs.trace(
+                                TAG,
+                                "geozone enter switch cluster=${trigger.clusterId} " +
+                                    "cached=${cached != null} tower=${trigger.matchedByCellTower} " +
+                                    "from=${carrying.name} to=${chosen.node.name} ms=${chosen.millis}",
+                            )
+                            logs.info(logRes, chosen.node.name, chosen.millis)
+                            confirmedTransport = NetworkTransport.Cellular
+                            noteSwitch(chosen.node)
+                            launcher.switchTo(chosen.node)
+                        }
+
+                        GeoTrigger.Outside -> {
+                            if (!watch.flags.autoReturn || mobileIds.isEmpty()) return@collectLatest
+                            if (carrying.id !in mobileIds) return@collectLatest
+                            val canReturnOnCellular = currentSettings.preferOrdinaryOnCellular ||
+                                (geoSwitchedFromOrdinaryId != null && !currentSettings.autoFailover)
+                            if (!canReturnOnCellular) return@collectLatest
+
+                            val now = SystemClock.elapsedRealtime()
+                            if (outsideZoneSinceMillis == 0L) outsideZoneSinceMillis = now
+                            val remaining = OUTSIDE_RETURN_DELAY_MS - (now - outsideZoneSinceMillis)
+                            if (remaining > 0L) {
+                                logs.trace(TAG, "geozone left zone, waiting ${remaining / 1000}s before testing ordinary servers")
+                                delay(remaining)
+                            }
+
+                            if (tunnel.state.value !is VpnState.Connected ||
+                                tunnel.transport.value != NetworkTransport.Cellular ||
+                                !settings.value.geoZonesEnabled ||
+                                !settings.value.geoAutoReturnOrdinary
+                            ) {
+                                return@collectLatest
+                            }
+                            if (monitor.proximity.value !is ZoneProximity.Outside) return@collectLatest
+
+                            val sinceLastAttempt = SystemClock.elapsedRealtime() - lastAutoReturnAttemptAtMillis
+                            if (lastAutoReturnAttemptAtMillis != 0L && sinceLastAttempt < AUTO_RETURN_RETRY_COOLDOWN_MS) {
+                                return@collectLatest
+                            }
+                            lastAutoReturnAttemptAtMillis = SystemClock.elapsedRealtime()
+
+                            val activeCarrying = profiles.selectedNode() ?: return@collectLatest
+                            if (activeCarrying.id !in settings.value.mobileNodeIds) return@collectLatest
+
+                            val remembered = (geoSwitchedFromOrdinaryId ?: savedOrdinaryNodeId)
+                                ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
+                                ?.takeIf { it.id !in settings.value.mobileNodeIds && it.settings != ProxySettings.Direct }
+
+                            val pool = FailoverGroup.preferSwitchable(
+                                buildList {
+                                    if (remembered != null) add(remembered)
+                                    addAll(ordinaryPoolFor(remembered ?: activeCarrying, settings.value.mobileNodeIds, whole = true))
+                                }.distinctBy { it.id },
+                                configs.switchable.value,
+                            )
+                            if (pool.isEmpty()) return@collectLatest
+
+                            val measured = coreMeasured(pool)
+                            val winner = FailoverChoice.pick(pool, measured) ?: run {
+                                logs.trace(TAG, "geozone outside return aborted: ${pool.size} ordinary servers failed core test")
+                                return@collectLatest
+                            }
+                            val latency = measured[winner.id]?.millis ?: 0
+                            savedOrdinaryNodeId = null
+                            geoSwitchedFromOrdinaryId = null
+                            confirmedTransport = NetworkTransport.Cellular
+                            logs.trace(TAG, "geozone outside return -> ${winner.name} (${latency}ms)")
+                            logs.info(R.string.log_geozone_returned_ordinary, winner.name, latency)
+                            noteSwitch(winner)
+                            launcher.switchTo(winner)
+                        }
+                    }
+                }
+        }
+    }
+
+    private suspend fun measureAndPickMobileForZone(
+        mobileIds: Set<String>,
+        preferredIds: List<String>,
+    ): Measured? {
+        val rawPool = profiles.nodes.filter {
+            it.id in mobileIds && it.settings != ProxySettings.Direct
+        }
+        if (rawPool.isEmpty()) return null
+        val pool = sortWithPreferredIds(
+            FailoverGroup.preferSwitchable(rawPool, configs.switchable.value),
+            preferredIds,
+        )
+        val coreResults = coreMeasured(pool)
+        val measured = coreResults.ifEmpty {
+            latencyTester.measureAll(pool, settings.value.pingMode) { result ->
+                profiles.recordLatency(result)
+            }.associateBy { it.nodeId }
+        }
+        val preferredPool = if (preferredIds.isNotEmpty()) {
+            val proven = pool.filter { it.id in preferredIds && measured[it.id]?.failed == false }
+            if (proven.isNotEmpty()) proven else pool
+        } else {
+            pool
+        }
+        val winner = FailoverChoice.pick(preferredPool, measured) ?: return null
+        return Measured(winner, measured[winner.id]?.millis ?: 0)
+    }
+
+    private fun geoTraceSummary(): String {
+        if (!settings.value.geoZonesEnabled) return ""
+        val monitor = geoMonitor ?: return ""
+        val coord = monitor.lastValidLatLon.value
+        val hex = coord?.let { HexCoord.fromLatLon(it.latitude, it.longitude).key } ?: "no-fix"
+        val tower = monitor.currentSample.value?.cellTowerId?.toString() ?: "-"
+        val spoof = if (monitor.spoofDetected.value) " spoof=1" else ""
+        val prox = when (val p = monitor.proximity.value) {
+            ZoneProximity.Outside -> "Outside"
+            is ZoneProximity.Approaching -> "Approaching(${p.cluster.id},${p.distanceMeters}m)"
+            is ZoneProximity.Inside -> "Inside(${p.cluster.id},${p.cluster.kind},tower=${p.matchedByCellTower})"
+        }
+        return "geo=[hex=$hex prox=$prox tower=$tower$spoof] "
+    }
+
+    private fun currentZonePreferredNodeIds(): List<String> = when (val prox = geoMonitor?.proximity?.value) {
+        is ZoneProximity.Inside -> prox.cluster.workingNodeIds
+        is ZoneProximity.Approaching -> prox.cluster.workingNodeIds
+        else -> emptyList()
+    }
+
+    private fun sortWithPreferredIds(pool: List<ProxyNode>, preferredIds: List<String>): List<ProxyNode> {
+        if (preferredIds.isEmpty()) return pool
+        return pool.sortedBy { node ->
+            val index = preferredIds.indexOf(node.id)
+            if (index < 0) Int.MAX_VALUE else index
         }
     }
 
@@ -704,6 +970,42 @@ class FailoverWatchdog(
                 }
 
                 failures = if (alive || vetoed) 0 else failures + 1
+                if (failures == 1 &&
+                    tunnel.transport.value == NetworkTransport.Cellular &&
+                    settings.value.geoZonesEnabled
+                ) {
+                    geoMonitor?.requestHighAccuracyBurst()
+                }
+                if (alive &&
+                    tunnel.transport.value == NetworkTransport.Cellular &&
+                    settings.value.geoZonesEnabled &&
+                    tunnel.hasNetwork.value
+                ) {
+                    val coord = geoMonitor?.lastValidLatLon?.value
+                    if (coord != null) {
+                        val tower = geoMonitor?.currentSample?.value?.cellTowerId
+                        val hex = HexCoord.fromLatLon(coord.latitude, coord.longitude)
+                        val mobileIds = settings.value.mobileNodeIds
+                        val onMobile = current.id in mobileIds
+                        geoZones?.recordBreadcrumb(
+                            latitude = coord.latitude,
+                            longitude = coord.longitude,
+                            onMobileList = onMobile,
+                            failed = false,
+                        )
+                        if (onMobile) {
+                            geoZones?.recordMobileOutcome(
+                                hex = hex,
+                                cellTowerId = tower,
+                                nodeId = current.id,
+                                millis = profiles.state.value.latencies[current.id]?.millis,
+                                passed = true,
+                            )
+                        } else {
+                            geoZones?.recordOrdinaryOutcome(hex = hex, cellTowerId = tower, passed = true)
+                        }
+                    }
+                }
                 // A group whose member stopped carrying traffic is not a dead server while another
                 // member answers: the road moves inside it, and the count starts again. Only when no
                 // member answers does the failure count towards leaving it for another server.
@@ -814,6 +1116,7 @@ class FailoverWatchdog(
                         (if (dns?.provider == true) "dns-provider " else "") +
                         (if (dns?.fallback == true) "dns-fallback " else "") +
                         (if (movedTo != null) "handover=$movedTo " else "") +
+                        geoTraceSummary() +
                         "-> $decision",
                 )
 
@@ -915,6 +1218,31 @@ class FailoverWatchdog(
         }
     }
 
+    /** What [watchGeoZones] reacts to without cancelling on GPS distance jitter. */
+    private data class GeoZoneFlags(
+        val enabled: Boolean,
+        val preemptive: Boolean,
+        val autoReturn: Boolean,
+    )
+
+    private sealed interface GeoTrigger {
+        data object Outside : GeoTrigger
+        data class Approaching(val clusterId: String, val workingNodeIds: List<String>) : GeoTrigger
+        data class Inside(
+            val clusterId: String,
+            val kind: ZoneKind,
+            val matchedByCellTower: Boolean,
+            val workingNodeIds: List<String>,
+        ) : GeoTrigger
+    }
+
+    private data class GeoWatchState(
+        val trigger: GeoTrigger,
+        val connected: Boolean,
+        val cellular: Boolean,
+        val flags: GeoZoneFlags,
+    )
+
     /** What [watchTransport] reacts to, as one value so a change in any of them is one question. */
     private data class TransportInputs(
         val transport: NetworkTransport,
@@ -964,6 +1292,28 @@ class FailoverWatchdog(
 
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val mobileIds = settings.value.mobileNodeIds
+        val currentTransport = tunnel.transport.value
+        val geoCoord = if (currentTransport == NetworkTransport.Cellular &&
+            settings.value.geoZonesEnabled &&
+            tunnel.hasNetwork.value
+        ) {
+            geoMonitor?.lastValidLatLon?.value
+        } else {
+            null
+        }
+        val geoTower = if (geoCoord != null) geoMonitor?.currentSample?.value?.cellTowerId else null
+        val geoHex = geoCoord?.let { HexCoord.fromLatLon(it.latitude, it.longitude) }
+        if (geoCoord != null && geoHex != null) {
+            geoZones?.recordBreadcrumb(
+                latitude = geoCoord.latitude,
+                longitude = geoCoord.longitude,
+                onMobileList = dead.id in mobileIds,
+                failed = true,
+            )
+            if (dead.id !in mobileIds) {
+                geoZones?.recordOrdinaryOutcome(hex = geoHex, cellTowerId = geoTower, passed = false)
+            }
+        }
         // Which list is allowed, before which member of it is best.
         //
         // This asked nothing about the network at all, and drew from the ordinary spares on every
@@ -991,9 +1341,12 @@ class FailoverWatchdog(
             // The whole list rather than a sample of it. It is already the user's own short list,
             // and it is in the core's group in full — see AppContainer.switchableGroup — so every
             // member is a switch the core can make without a restart.
-            profiles.nodes.filter {
-                it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
-            }
+            sortWithPreferredIds(
+                profiles.nodes.filter {
+                    it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+                },
+                currentZonePreferredNodeIds(),
+            )
         } else {
             // The whole group first, then seven of it by lot. Drawing from the group and not from
             // the raw list is what keeps the switch instant: the core can only be pointed at its own
@@ -1080,6 +1433,7 @@ class FailoverWatchdog(
         val rescued = if (rescue == null) null else FailoverChoice.pick(rescue.pool, rescue.measured)
 
         if (holding && rescued == null) {
+            if (geoHex != null) geoZones?.recordBlackout(geoHex, geoTower)
             logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
             alerts.serverStranded(dead.name)
             giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
@@ -1131,10 +1485,21 @@ class FailoverWatchdog(
         }
 
         if (chosen == null) {
+            if (geoHex != null) geoZones?.recordBlackout(geoHex, geoTower)
             logs.warn(R.string.log_failover_all_dead, dead.name)
             alerts.serverStranded(dead.name)
             giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
             return
+        }
+
+        if (geoHex != null && chosen.id in mobileIds) {
+            geoZones?.recordMobileOutcome(
+                hex = geoHex,
+                cellTowerId = geoTower,
+                nodeId = chosen.id,
+                millis = fresh[chosen.id]?.millis,
+                passed = true,
+            )
         }
 
         // Confirmed by the core: real evidence arrived, so whatever run of blind guesses came
@@ -1186,6 +1551,12 @@ class FailoverWatchdog(
         const val TAG = "YumiFailover"
 
         const val GRACE_MILLIS = 15_000L
+
+        const val WARMED_TTL_MILLIS = 60_000L
+        const val WARMED_USE_TTL_MILLIS = 90_000L
+        const val OUTSIDE_RETURN_DELAY_MS = 45_000L
+        const val AUTO_RETURN_RETRY_COOLDOWN_MS = 60_000L
+        const val APPROACH_FALLBACK_DISTANCE_M = 250
 
         // The thresholds themselves live in FailoverPolicy, which is where they are tested.
     }

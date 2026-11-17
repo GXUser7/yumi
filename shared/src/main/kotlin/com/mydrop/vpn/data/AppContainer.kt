@@ -267,6 +267,21 @@ class AppContainer(context: Context) {
     val geoAssets: GeoAssetStore =
         GeoAssetStore(context.applicationContext, logs) { tunnelConfigs.probe.value }
 
+    val geoZones: GeoZoneRepository =
+        GeoZoneRepository(context.filesDir, applicationScope, writeFailure, logs)
+
+    val geoMonitor: GeoLocationMonitor = GeoLocationMonitor(
+        context = appContext,
+        settings = settings,
+        tunnel = tunnel,
+        geoZones = geoZones,
+        logs = logs,
+        scope = applicationScope,
+    )
+
+    val mapTiles: MapTileStore =
+        MapTileStore(appContext, applicationScope) { tunnelConfigs.probe.value }
+
     private val geoOnFirstConnection = applicationScope.launch {
         tunnel.state.first { it is VpnState.Connected }
         if (!geoAssets.available()) geoAssets.refresh()
@@ -317,6 +332,8 @@ class AppContainer(context: Context) {
         logs = logs,
         alerts = alerts,
         scope = applicationScope,
+        geoZones = geoZones,
+        geoMonitor = geoMonitor,
     )
 
     /** Hands applications IPv6 only through servers that were seen to carry it. */
@@ -407,6 +424,7 @@ class AppContainer(context: Context) {
         }
         remoteHost?.start()
         failoverWatchdog.start()
+        geoMonitor.start()
         ipv6Guard.start()
         staleSelectionPruner.start()
         installedApps.start()
