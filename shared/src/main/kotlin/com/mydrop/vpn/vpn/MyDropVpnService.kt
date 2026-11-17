@@ -35,6 +35,7 @@ import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.NetworkTransport
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.model.WakeRecoveryTracker
 import com.mydrop.vpn.core.net.interfaceCidr
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.core.model.SplitTunnelMode
@@ -413,6 +414,9 @@ class MyDropVpnService : VpnService() {
     /** Screen-on and idle-mode listener; see [startWakeMonitor]. */
     private var wakeReceiver: BroadcastReceiver? = null
 
+    /** Guards sleep/Doze socket cleanup against false resets during active streams. */
+    private val wakeRecovery = WakeRecoveryTracker()
+
     /**
      * Which default-interface monitor is the current one.
      *
@@ -718,6 +722,7 @@ class MyDropVpnService : VpnService() {
                         sessionStartedAtMillis = System.currentTimeMillis()
                     }
                     startWakeMonitor()
+                    synchronized(wakeRecovery) { wakeRecovery.onCoreReset(SystemClock.elapsedRealtime()) }
                     _state.value = VpnState.Connected(nodeId, sessionStartedAtMillis)
                     logs.info(
                         if (reloading) R.string.log_tunnel_switched else R.string.log_tunnel_up,
@@ -919,7 +924,8 @@ class MyDropVpnService : VpnService() {
             if (changed || recovered) {
                 val what = if (changed) "handover $previousName -> $name" else "recovered on $name"
                 logs.trace(NATIVE_TAG, "$what, resetting network")
-                resetCoreNetwork()
+                synchronized(wakeRecovery) { wakeRecovery.onCoreReset(SystemClock.elapsedRealtime()) }
+                resetCoreNetwork(reason = what)
                 // And tell the watchdog, which would otherwise learn about it from a probe that
                 // is up to a full interval away.
                 _handovers.tryEmit(name)
@@ -1046,11 +1052,19 @@ class MyDropVpnService : VpnService() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    Intent.ACTION_SCREEN_OFF -> _screenOn.value = false
+                    Intent.ACTION_SCREEN_OFF -> {
+                        _screenOn.value = false
+                        synchronized(wakeRecovery) {
+                            wakeRecovery.onScreenOff(SystemClock.elapsedRealtime())
+                        }
+                    }
 
                     Intent.ACTION_SCREEN_ON -> {
+                        if (getSystemService(PowerManager::class.java)?.isInteractive == false) return
                         _screenOn.value = true
-                        _wakeups.tryEmit(Unit)
+                        val now = SystemClock.elapsedRealtime()
+                        val decision = synchronized(wakeRecovery) { wakeRecovery.onScreenOn(now) }
+                        handleWakeDecision(decision)
                     }
 
                     // Fires on the way into idle as well as out of it, and the old `else` branch
@@ -1060,20 +1074,14 @@ class MyDropVpnService : VpnService() {
                     // maintenance window is the phone doing chores with nobody looking, so the
                     // flag that guards moving servers between networks stays where it was.
                     PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
-                        val idle = getSystemService(PowerManager::class.java)?.isDeviceIdleMode
-                        // Told to the core either way, which is the point of listening at all.
-                        //
-                        // sing-box could be told to pause its timers going into Doze and to
-                        // re-dial coming out of it. Xray has no such call, so the first half is
-                        // simply lost — its keepalives will fire into a suspended network and
-                        // accomplish nothing, which costs wakeups but breaks nothing.
-                        //
-                        // The half that mattered to the user is not lost: connections that died
-                        // quietly during the night are still re-dialled on the way out, because
-                        // the wakeup emitted below sends the watchdog to look at the tunnel.
-                        logs.trace(NATIVE_TAG, "device idle mode -> ${idle == true}")
-                        if (idle == true) return
-                        _wakeups.tryEmit(Unit)
+                        val idle = getSystemService(PowerManager::class.java)?.isDeviceIdleMode == true
+                        logs.trace(NATIVE_TAG, "device idle mode -> $idle")
+                        val now = SystemClock.elapsedRealtime()
+                        val decision = synchronized(wakeRecovery) {
+                            wakeRecovery.onDeviceIdleChanged(idle, now)
+                        }
+                        if (idle) return
+                        handleWakeDecision(decision)
                     }
                 }
             }
@@ -1103,11 +1111,23 @@ class MyDropVpnService : VpnService() {
             _screenOn.value = runCatching {
                 getSystemService(PowerManager::class.java)?.isInteractive != false
             }.getOrDefault(true)
+            synchronized(wakeRecovery) {
+                wakeRecovery.start(_screenOn.value, SystemClock.elapsedRealtime())
+            }
             logs.trace(NATIVE_TAG, "wake monitor on, screen ${if (_screenOn.value) "on" else "off"}")
         }.onFailure {
             // Loud, because a silent failure here is invisible: the app goes on working and simply
             // never notices anything while the screen is off.
             logs.trace(NATIVE_TAG, "wake monitor unavailable: ${it.message}")
+        }
+    }
+
+    private fun handleWakeDecision(decision: WakeRecoveryTracker.Decision) {
+        if (decision is WakeRecoveryTracker.Decision.Reset) {
+            logs.trace(NATIVE_TAG, "wake reset (${decision.reason}), dropping stale connections")
+            resetCoreNetwork(reason = decision.reason, notifyWatchdog = true)
+        } else {
+            _wakeups.tryEmit(Unit)
         }
     }
 
@@ -1214,12 +1234,13 @@ class MyDropVpnService : VpnService() {
      * outgoing core needs, and after that it fails the way a failed start does: said, on screen,
      * with the reason.
      */
-    private fun resetCoreNetwork() {
-        val descriptor = tunDescriptor ?: return
-        val config = runningConfig ?: return
+    private fun resetCoreNetwork(reason: String = "handover", notifyWatchdog: Boolean = false) {
         scope.launch {
             tunnelLock.withLock {
                 if (!XrayCore.running) return@withLock
+                val descriptor = tunDescriptor ?: return@withLock
+                val config = runningConfig ?: return@withLock
+                val activeTag = XrayCore.activeOutbound.ifBlank { config.pinnedTag }
 
                 stopTrafficPolling()
                 carriedUploadBytes += lastUploadBytes
@@ -1237,21 +1258,28 @@ class MyDropVpnService : VpnService() {
                         XrayCore.start(
                             config.json,
                             descriptor.fd,
-                            config.pinnedTag,
+                            activeTag,
                             ::protectSocket,
                         )
                     }.exceptionOrNull()
                     if (failure != null) {
                         logs.trace(
                             NATIVE_TAG,
-                            "core restart after handover failed " +
+                            "core restart after $reason failed " +
                                 "(attempt $attempt): ${failure.message}",
                         )
                     }
                 } while (failure != null && attempt < RESTART_ATTEMPTS)
 
                 if (failure == null) {
+                    runningConfig = config.copy(pinnedTag = activeTag)
+                    synchronized(wakeRecovery) {
+                        wakeRecovery.onCoreReset(SystemClock.elapsedRealtime())
+                    }
                     startTrafficPolling()
+                    if (notifyWatchdog) {
+                        _handovers.tryEmit(reason)
+                    }
                     return@withLock
                 }
 
@@ -1259,7 +1287,7 @@ class MyDropVpnService : VpnService() {
                     ?: failure::class.simpleName
                     ?: strings.get(R.string.error_core_start_failed)
                 logs.error(R.string.log_start_failed, message)
-                android.util.Log.e("MyDropVpn", "core failed to restart after a handover", failure)
+                android.util.Log.e("MyDropVpn", "core failed to restart after $reason", failure)
                 _state.value = VpnState.Failed(nodeId, message)
                 stopTunnel()
             }
@@ -1468,6 +1496,9 @@ class MyDropVpnService : VpnService() {
                 val down = XrayCore.downloadBytes
                 val now = SystemClock.elapsedRealtime()
                 val seconds = (now - previousAt).coerceAtLeast(1L) / 1000.0
+                val deltaBytes = (up - previousUp).coerceAtLeast(0L) +
+                    (down - previousDown).coerceAtLeast(0L)
+                synchronized(wakeRecovery) { wakeRecovery.onTrafficTick(deltaBytes, now) }
 
                 lastUploadBytes = up
                 lastDownloadBytes = down
