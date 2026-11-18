@@ -2,7 +2,10 @@ package com.mydrop.vpn.pairing
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import com.mydrop.vpn.core.net.isNumericAddress
+import com.mydrop.vpn.remote.isLanPrivateIpv4
+import com.mydrop.vpn.remote.isLanTransport
+import com.mydrop.vpn.remote.toTransportFlags
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.Inet4Address
@@ -202,28 +205,23 @@ private fun localAddress(context: Context): Inet4Address? {
     val manager = context.getSystemService(ConnectivityManager::class.java) ?: return null
     return manager.allNetworks.asSequence()
         .filter { network ->
-            manager.getNetworkCapabilities(network)?.let {
-                it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                    it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-            } == true
+            manager.getNetworkCapabilities(network)?.toTransportFlags()?.let(::isLanTransport) == true
         }
         .flatMap { manager.getLinkProperties(it)?.linkAddresses.orEmpty().asSequence() }
         .map { it.address }
         .filterIsInstance<Inet4Address>()
-        .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+        .firstOrNull { isLanPrivateIpv4(it) }
 }
 
 private fun localSocketFactories(context: Context): List<SocketFactory> {
     val manager = context.getSystemService(ConnectivityManager::class.java) ?: return emptyList()
     return manager.allNetworks.mapNotNull { network ->
-        manager.getNetworkCapabilities(network)?.takeIf {
-            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        }?.let { network.socketFactory }
+        manager.getNetworkCapabilities(network)
+            ?.takeIf { isLanTransport(it.toTransportFlags()) }
+            ?.let { network.socketFactory }
     }
 }
 
 private fun isPrivateIpv4(host: String): Boolean = runCatching {
-    val address = InetAddress.getByName(host)
-    address is Inet4Address && address.isSiteLocalAddress && !address.isLoopbackAddress
+    isNumericAddress(host) && isLanPrivateIpv4(InetAddress.getByName(host))
 }.getOrDefault(false)

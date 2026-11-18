@@ -160,7 +160,6 @@ class AppContainer(context: Context) {
     val subscriptionService = SubscriptionService(
         logs = logs,
         strings = strings,
-        probeEndpoint = { tunnelConfigs.probe.value },
         // Named like every other client does it — version, platform, model. Panels read the agent
         // to decide which format to emit, and the caching front-ends in front of them key on it
         // too, so a bare "Yumi (Android)" shares one cache entry with every other install and can
@@ -265,7 +264,7 @@ class AppContainer(context: Context) {
      * already does — the tunnel comes up either way, carrying everything through the proxy.
      */
     val geoAssets: GeoAssetStore =
-        GeoAssetStore(context.applicationContext, logs) { tunnelConfigs.probe.value }
+        GeoAssetStore(context.applicationContext, logs)
 
     val geoZones: GeoZoneRepository =
         GeoZoneRepository(context.filesDir, applicationScope, writeFailure, logs)
@@ -280,7 +279,7 @@ class AppContainer(context: Context) {
     )
 
     val mapTiles: MapTileStore =
-        MapTileStore(appContext, applicationScope) { tunnelConfigs.probe.value }
+        MapTileStore(appContext, applicationScope)
 
     private val geoOnFirstConnection = applicationScope.launch {
         tunnel.state.first { it is VpnState.Connected }

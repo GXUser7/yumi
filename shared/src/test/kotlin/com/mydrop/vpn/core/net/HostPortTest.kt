@@ -67,6 +67,10 @@ class HostPortTest {
         assertTrue(isNumericAddress("::"))
         assertTrue(isNumericAddress("2001:0db8:0000:0000:0000:0000:0000:0001"))
         assertTrue(isNumericAddress("::ffff:192.0.2.1"))
+        assertTrue(isNumericAddress("2001:db8:abcd::203.0.113.77"))
+        assertTrue(isNumericAddress("64:ff9b::203.0.113.77"))
+        assertTrue(isNumericAddress("::203.0.113.77"))
+        assertTrue(isNumericAddress("1:2:3:4:5::203.0.113.77"))
     }
 
     /**
@@ -90,5 +94,65 @@ class HostPortTest {
         assertFalse(isNumericAddress("2001:db8::1::2"))
         assertFalse(isNumericAddress("12345::1"))
         assertFalse(isNumericAddress("1:2:3:4:5:6:7:8:9"))
+        assertFalse(isNumericAddress("1:2:3:4:5:6::203.0.113.77"))
+        assertFalse(isNumericAddress("2001:db8:::203.0.113.77"))
+        assertFalse(isNumericAddress(":203.0.113.77"))
+        assertFalse(isNumericAddress("1:2:3:4:5::6:203.0.113.77"))
+        assertFalse(isNumericAddress("2001:db8:abcd::999.0.113.77"))
+    }
+
+    @Test
+    fun `extractAuthorityHost strips IPv6 zone ids including percent-25`() {
+        assertEquals("::1", extractAuthorityHost("http://[::1%25lo0]:8080/secret"))
+        assertEquals("::1", extractAuthorityHost("[::1%lo0]:8080"))
+        assertEquals("::1", extractAuthorityHost("::1%lo0"))
+        assertEquals("fe80::1", extractAuthorityHost("https://[fe80::1%25wlan0]:443/dns-query"))
+    }
+
+    @Test
+    fun `isLoopbackOrUnspecifiedHost and isForbiddenDnsHost catch inet_aton non-canonical IPv4 and zoned IPv6`() {
+        val blocked = listOf(
+            "127.1",
+            "127.0.1",
+            "0177.0.0.1",
+            "0177.1",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0x7f.1",
+            "0x7f000001",
+            "2130706433",
+            "0",
+            "0.1",
+            "0000.0.0.0",
+            "0x0.0.0.0",
+            "::1%lo0",
+            "[::1%25lo0]",
+            "::%lo0",
+            "[::%25lo0]",
+            "::ffff:127.1",
+            "::ffff:0177.0.0.1",
+            "::127.0.0.1",
+            "::127.1",
+            "::0.0.0.0",
+            "0:0:0:0:0:0:127.0.0.1",
+            "0:0:0:0:0:0:0.0.0.0",
+            "::ffff:0.0.0.0",
+        )
+        for (host in blocked) {
+            assertTrue("isLoopbackOrUnspecifiedHost must reject '$host'", isLoopbackOrUnspecifiedHost(host))
+            assertTrue("isForbiddenDnsHost must reject '$host'", isForbiddenDnsHost(host))
+        }
+
+        val allowed = listOf(
+            "8.8.8.8",
+            "1.1.1.1",
+            "0x08.0x08.0x08.0x08",
+            "dns.google",
+            "2606:4700:4700::1111",
+        )
+        for (host in allowed) {
+            assertFalse("isLoopbackOrUnspecifiedHost must allow '$host'", isLoopbackOrUnspecifiedHost(host))
+            assertFalse("isForbiddenDnsHost must allow '$host'", isForbiddenDnsHost(host))
+        }
     }
 }

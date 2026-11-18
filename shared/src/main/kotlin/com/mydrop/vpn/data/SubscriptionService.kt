@@ -5,22 +5,28 @@ import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
+import com.mydrop.vpn.core.net.resolveSafeDirectRedirect
 import com.mydrop.vpn.core.parse.ProviderProfileParser
 import com.mydrop.vpn.core.parse.SubscriptionBody
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.core.parse.SubscriptionParser
-import com.mydrop.vpn.core.model.ProbeEndpoint
-import java.net.Authenticator
+import com.mydrop.vpn.vpn.TunnelBridge
+import com.mydrop.vpn.vpn.TunnelResponseInputStream
+import com.mydrop.vpn.vpn.XrayCore
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.PasswordAuthentication
-import java.net.Proxy
 import java.net.URL
 import java.util.Base64
 import java.util.zip.GZIPInputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
@@ -59,19 +65,11 @@ class SubscriptionService(
     private val strings: Strings,
     private val userAgent: String = "Yumi/0.2.0 (Android)",
     private val identity: () -> DeviceIdentity? = { null },
-    /**
-     * How to reach the running tunnel from inside this process, or null when there is none.
-     *
-     * A lambda rather than the value: the endpoint changes with every tunnel and this class
-     * outlives all of them.
-     */
-    private val probeEndpoint: () -> ProbeEndpoint? = { null },
+    /** In-process tunnel bridge used when direct refresh fails while the core is running. */
+    private val bridge: TunnelBridge = XrayCore,
 ) {
 
     private companion object {
-        /** The tunnel publishes its inbound here and nowhere else. */
-        private const val LOOPBACK = "127.0.0.1"
-
         const val CONNECT_TIMEOUT_MILLIS = 15_000
         const val READ_TIMEOUT_MILLIS = 30_000
         const val MAX_REDIRECTS = 5
@@ -134,11 +132,13 @@ class SubscriptionService(
                     body.nodes.forEach {
                         logs.warn(R.string.log_subscription_message, subscription.name, it.name)
                     }
-                    android.util.Log.w(
-                        "YumiSub",
-                        "panel refused: hwidHeaders=${response.hwidRequired} — " +
-                            body.nodes.joinToString(" | ") { it.name },
-                    )
+                    runCatching {
+                        android.util.Log.w(
+                            "YumiSub",
+                            "panel refused: hwidHeaders=${response.hwidRequired} — " +
+                                body.nodes.joinToString(" | ") { it.name },
+                        )
+                    }
                     // The panel is explicit about this one in a header, and it is the case a user
                     // can actually do something about — so it is named rather than quoted.
                     if (response.deviceLimitReached) {
@@ -370,105 +370,133 @@ class SubscriptionService(
      *   the user sees.
      */
     private fun fetch(url: String, subscription: Subscription): Response = try {
-        get(url, subscription, through = null)
+        getDirect(url, subscription)
     } catch (direct: java.io.IOException) {
-        val probe = probeEndpoint()
-        if (probe == null) throw direct
+        if (!bridge.isRunning) throw direct
         logs.debug(R.string.log_subscription_via_tunnel, subscription.name)
         try {
-            get(url, subscription, through = probe)
-        } catch (viaTunnel: java.io.IOException) {
-            // The direct failure is the one worth reporting: it names the provider rather than a
-            // loopback port the user has never heard of.
+            getViaTunnel(url, subscription)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (viaTunnel: Exception) {
+            // The direct failure is the one worth reporting: it names the provider rather than an
+            // internal tunnel dial detail.
             direct.addSuppressed(viaTunnel)
             throw direct
         }
     }
 
-    /**
-     * Hands the loopback inbound its credentials, and nothing else.
-     *
-     * `Authenticator` is process-wide, which is why this checks the requestor before answering: it
-     * must never offer these to a real proxy the user has configured, and it has nothing to say
-     * about server authentication — the link's own credentials travel as a header, under the
-     * same-origin rule above.
-     */
-    private fun installProbeAuthenticator() {
-        Authenticator.setDefault(object : Authenticator() {
-            override fun getPasswordAuthentication(): PasswordAuthentication? {
-                val probe = probeEndpoint() ?: return null
-                // Not filtered by requestor type: an HTTP proxy asks as PROXY and Java's SOCKS
-                // client asks as SERVER, and the inbound below answers both. The address is what
-                // makes this safe — these credentials are only ever offered to our own loopback.
-                if (requestingHost != LOOPBACK || requestingPort != probe.port) return null
-                return PasswordAuthentication(probe.username, probe.password.toCharArray())
+    private fun buildRequestHeaders(
+        origin: URL,
+        target: URL,
+        subscription: Subscription,
+    ): Map<String, String> {
+        val trusted = sameOrigin(origin, target)
+        val headers = LinkedHashMap<String, String>()
+        headers["User-Agent"] = subscription.userAgentOverride ?: userAgent
+        target.userInfo?.takeIf { it.isNotEmpty() && trusted }?.let { credentials ->
+            val decoded = com.mydrop.vpn.core.parse.urlDecode(credentials)
+            val encoded = Base64.getEncoder().encodeToString(decoded.toByteArray())
+            headers["Authorization"] = "Basic $encoded"
+        }
+        if (trusted) {
+            subscription.headers.forEach { (name, value) ->
+                headers[name] = value
             }
-        })
+        }
+        headers["Accept"] = "*/*"
+        headers["Accept-Encoding"] = "gzip"
+        headers["Cache-Control"] = "no-cache"
+        headers["Pragma"] = "no-cache"
+        identity()?.takeIf { trusted }?.let {
+            headers["x-hwid"] = it.hwid
+            headers["x-device-os"] = it.os
+            headers["x-ver-os"] = it.osVersion
+            headers["x-device-model"] = it.model
+        }
+        return headers
     }
 
-    private fun get(url: String, subscription: Subscription, through: ProbeEndpoint?): Response {
+    private fun getViaTunnel(url: String, subscription: Subscription): Response {
         val origin = URL(url)
         var current = url
         repeat(MAX_REDIRECTS) {
             val target = URL(current)
-            val trusted = sameOrigin(origin, target)
-            val opened = if (through == null) {
-                target.openConnection()
-            } else {
-                installProbeAuthenticator()
-                // SOCKS rather than HTTP, and the difference is where the proxy sits. Java
-                // implements SOCKS underneath the socket, so TLS and everything above it are
-                // carried without knowing about it; the HTTP form has to be understood by the
-                // connection itself, and Android's implementation quietly declined to use it —
-                // the request went straight out and failed exactly as it had without a proxy.
-                // The inbound speaks both, so this costs nothing.
-                target.openConnection(
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, through.port)),
+            val headers = buildRequestHeaders(origin, target, subscription)
+            val headersJson = buildJsonObject {
+                headers.forEach { (name, value) -> put(name, value) }
+            }.toString()
+
+            val response = bridge.openHTTP(
+                method = "GET",
+                targetURL = current,
+                headersJSON = headersJson,
+                connectTimeoutMillis = CONNECT_TIMEOUT_MILLIS,
+                readTimeoutMillis = READ_TIMEOUT_MILLIS,
+                resolveDNS = false,
+            )
+            try {
+                val code = response.statusCode
+                if (code in 300..399) {
+                    val location = response.location.takeIf { it.isNotBlank() }
+                        ?: return Response(code, "", null, null, null)
+                    current = URL(URL(current), location).toString()
+                    return@repeat
+                }
+
+                val rawStream: InputStream = TunnelResponseInputStream(response)
+                val stream = if (response.contentEncoding.equals("gzip", ignoreCase = true)) {
+                    GZIPInputStream(rawStream)
+                } else {
+                    rawStream
+                }
+                val raw = stream.use { input -> input.readAtMost(MAX_BODY_BYTES + 1) }
+                if (raw.size > MAX_BODY_BYTES) {
+                    throw IllegalStateException(strings.get(R.string.error_body_too_large))
+                }
+                val body = String(raw, Charsets.UTF_8)
+
+                val headersObj = response.headersJSON
+                    .takeIf { it.isNotBlank() }
+                    ?.let { rawJson ->
+                        runCatching { Json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
+                    }
+                fun headerValue(name: String): String? =
+                    headersObj?.get(name.lowercase())?.jsonPrimitive?.contentOrNull
+                        ?: response.header(name).takeIf { it.isNotEmpty() }
+                fun hasHeader(name: String): Boolean =
+                    headersObj?.containsKey(name.lowercase()) == true ||
+                        response.header(name).isNotEmpty()
+
+                return Response(
+                    code = code,
+                    body = body,
+                    userInfoHeader = headerValue("subscription-userinfo"),
+                    profileTitle = headerValue("profile-title")?.let(::decodeProfileTitle),
+                    webPageUrl = headerValue("profile-web-page-url"),
+                    hwidRequired = hasHeader("x-hwid-active") || hasHeader("x-hwid-not-supported"),
+                    deviceLimitReached = hasHeader("x-hwid-max-devices-reached"),
                 )
+            } finally {
+                runCatching { response.close() }
             }
-            val connection = (opened as HttpURLConnection).apply {
+        }
+        throw IllegalStateException(strings.get(R.string.error_too_many_redirects))
+    }
+
+    private fun getDirect(url: String, subscription: Subscription): Response {
+        val origin = URL(url)
+        var current = url
+        repeat(MAX_REDIRECTS) {
+            val target = URL(current)
+            val headers = buildRequestHeaders(origin, target, subscription)
+            val connection = (target.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MILLIS
                 readTimeout = READ_TIMEOUT_MILLIS
-                // Cross-protocol redirects (http→https) are not followed automatically, so
-                // redirects are walked by hand below.
                 instanceFollowRedirects = false
-                setRequestProperty("User-Agent", subscription.userAgentOverride ?: userAgent)
-
-                // Credentials written into the link. HttpURLConnection parses them out of the URL
-                // and then never sends them, which reads as a subscription that returns 401 for
-                // no reason at all.
-                target.userInfo?.takeIf { it.isNotEmpty() && trusted }?.let { credentials ->
-                    // The shared decoder, not URLDecoder: a password with a `+` in it is a
-                    // password with a `+` in it, not one with a space.
-                    val decoded = com.mydrop.vpn.core.parse.urlDecode(credentials)
-                    val encoded = Base64.getEncoder().encodeToString(decoded.toByteArray())
-                    setRequestProperty("Authorization", "Basic $encoded")
-                }
-
-                // Last, so a provider's own header wins over anything assumed above. These are
-                // where a panel behind a gateway keeps its token, so they travel under the same
-                // rule as the rest of the credentials.
-                if (trusted) {
-                    subscription.headers.forEach { (name, value) ->
-                        runCatching { setRequestProperty(name, value) }
-                    }
-                }
-                setRequestProperty("Accept", "*/*")
-                setRequestProperty("Accept-Encoding", "gzip")
-                // Subscriptions sit behind caching front-ends that key on the URL and the agent
-                // and ignore everything else. One refusal — a device that was not yet bound, a
-                // limit that has since been raised — then keeps being replayed to a client whose
-                // request has long since become correct.
-                setRequestProperty("Cache-Control", "no-cache")
-                setRequestProperty("Pragma", "no-cache")
-                // Panels that do not do device binding ignore these outright; the ones that do
-                // refuse to serve a list without them.
-                identity()?.takeIf { trusted }?.let {
-                    setRequestProperty("x-hwid", it.hwid)
-                    setRequestProperty("x-device-os", it.os)
-                    setRequestProperty("x-ver-os", it.osVersion)
-                    setRequestProperty("x-device-model", it.model)
+                headers.forEach { (name, value) ->
+                    runCatching { setRequestProperty(name, value) }
                 }
             }
 
@@ -477,16 +505,12 @@ class SubscriptionService(
                 if (code in 300..399) {
                     val location = connection.getHeaderField("Location")
                         ?: return Response(code, "", null, null, null)
-                    current = URL(URL(current), location).toString()
+                    current = resolveSafeDirectRedirect(target, location).toString()
                     return@repeat
                 }
 
                 val stream = (connection.errorStream ?: connection.inputStream)
                     .let { if (connection.contentEncoding == "gzip") GZIPInputStream(it) else it }
-                // One byte past the ceiling, so a body that is merely at the limit still reads
-                // whole while an oversized one is caught. Silently keeping the first 8 MB turned a
-                // truncated document into a valid-looking short list, and every server past the
-                // cut looked like one the provider had removed.
                 val raw = stream.use { input -> input.readAtMost(MAX_BODY_BYTES + 1) }
                 if (raw.size > MAX_BODY_BYTES) {
                     throw IllegalStateException(strings.get(R.string.error_body_too_large))

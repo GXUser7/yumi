@@ -2,7 +2,6 @@ package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.NodeGroup
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
@@ -58,7 +57,6 @@ class XrayConfigFactoryTest {
     private fun build(
         vararg nodes: ProxyNode,
         settings: AppSettings = this.settings,
-        probe: ProbeEndpoint? = null,
         geoAvailable: Boolean = true,
     ): JsonObject {
         val list = nodes.toList()
@@ -66,7 +64,6 @@ class XrayConfigFactoryTest {
             nodes = list,
             selected = list.first(),
             settings = settings,
-            probe = probe,
             geoAvailable = geoAvailable,
         )
         return Json.parseToJsonElement(document.json).jsonObject
@@ -271,7 +268,7 @@ class XrayConfigFactoryTest {
     /** Every rule has to point somewhere the document actually declares. */
     @Test
     fun `no rule names an outbound that does not exist`() {
-        val config = build(node(id = "a"), node(id = "b"), probe = ProbeEndpoint(1080, "u", "p"))
+        val config = build(node(id = "a"), node(id = "b"))
         val tags = config.outbounds().map { it["tag"]!!.jsonPrimitive.content }.toSet()
 
         config.rules().forEach { rule ->
@@ -583,7 +580,7 @@ class XrayConfigFactoryTest {
         assertEquals("https://1.1.1.1/dns-query", XrayConfigFactory.xrayResolver("https://1.1.1.1/dns-query"))
         assertEquals("8.8.8.8", XrayConfigFactory.xrayResolver("8.8.8.8"))
         assertEquals("8.8.8.8", XrayConfigFactory.xrayResolver("udp://8.8.8.8"))
-        assertEquals("quic+local://dns.example.com", XrayConfigFactory.xrayResolver("quic+local://dns.example.com"))
+        assertNull(XrayConfigFactory.xrayResolver("quic+local://dns.example.com"))
     }
 
     /**
@@ -728,33 +725,106 @@ class XrayConfigFactoryTest {
         assertEquals(true, tun["sniffing"]!!.jsonObject["routeOnly"]!!.jsonPrimitive.content.toBoolean())
     }
 
-    /** Bound to every interface this would be an open proxy for the whole network the phone is on. */
+    /**
+     * F10: No loopback SOCKS/HTTP/API inbound or `probe-in` routing rule is ever emitted, even if
+     * a deprecated ProbeEndpoint is supplied.
+     */
+    @Suppress("DEPRECATION")
     @Test
-    fun `the probe inbound listens on loopback with credentials`() {
-        val config = build(node(), probe = ProbeEndpoint(1080, "user", "pass"))
-        val probe = config["inbounds"]!!.jsonArray.map { it.jsonObject }
-            .first { it["tag"]?.jsonPrimitive?.content == XrayConfigFactory.PROBE_TAG }
+    fun `only the tun inbound exists and no loopback proxy or probe-in rule is emitted`() {
+        val doc = XrayConfigFactory.build(
+            nodes = listOf(node()),
+            selected = node(),
+            settings = settings.copy(routingMode = RoutingMode.Direct),
+            probe = com.mydrop.vpn.core.model.ProbeEndpoint(1080, "user", "pass"),
+        )
+        val config = Json.parseToJsonElement(doc.json).jsonObject
+        val inbounds = config["inbounds"]!!.jsonArray.map { it.jsonObject }
 
-        assertEquals("127.0.0.1", probe["listen"]!!.jsonPrimitive.content)
-        assertEquals("password", probe["settings"]!!.jsonObject["auth"]!!.jsonPrimitive.content)
-        val account = probe["settings"]!!.jsonObject["accounts"]!!.jsonArray.single().jsonObject
-        assertEquals("user", account["user"]!!.jsonPrimitive.content)
+        assertEquals(listOf(XrayConfigFactory.TUN_TAG), inbounds.map { it["tag"]!!.jsonPrimitive.content })
+        assertTrue(inbounds.none { it["listen"] != null })
+        assertTrue(config.rules().none { rule ->
+            rule["inboundTag"]?.jsonArray?.any { it.jsonPrimitive.content == "probe-in" } == true
+        })
+        assertNull(config["api"])
+        assertNull(config["metrics"])
     }
 
-    /** The probe measures the tunnel, so it rides it whatever the routing mode says. */
+    /**
+     * F11: Loopback traffic (`127.0.0.0/8` and `::1/128`) entering via `tun-in` is explicitly
+     * blocked ahead of `hijackDns` and `bypassLan`, and loopback CIDRs are absent from `DIRECT_TAG`
+     * `bypassLan` rules regardless of `bypassLan` or `enableIpv6`.
+     */
     @Test
-    fun `the probe is routed through the balancer even in direct mode`() {
-        val config = build(
-            node(),
-            settings = settings.copy(routingMode = RoutingMode.Direct),
-            probe = ProbeEndpoint(1080, "u", "p"),
-        )
-        val rule = config.rules().first { rule ->
-            rule["inboundTag"]?.jsonArray?.any {
-                it.jsonPrimitive.content == XrayConfigFactory.PROBE_TAG
-            } == true
+    fun `tun-in loopback traffic is blocked ahead of bypassLan and absent from private direct ranges`() {
+        for (bypassLan in listOf(true, false)) {
+            for (enableIpv6 in listOf(true, false)) {
+                val config = build(
+                    node(),
+                    settings = settings.copy(bypassLan = bypassLan, enableIpv6 = enableIpv6),
+                )
+                val rules = config.rules()
+                val loopbackBlockIdx = rules.indexOfFirst { rule ->
+                    val inbound = rule["inboundTag"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+                    val ips = rule["ip"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+                    XrayConfigFactory.TUN_TAG in inbound &&
+                        "127.0.0.0/8" in ips &&
+                        "::1/128" in ips &&
+                        rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.BLOCK_TAG
+                }
+                assertTrue(
+                    "missing tun-in loopback block rule for bypassLan=$bypassLan ipv6=$enableIpv6",
+                    loopbackBlockIdx >= 0,
+                )
+
+                val directLanIdx = rules.indexOfFirst { rule ->
+                    rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.DIRECT_TAG &&
+                        rule["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "10.0.0.0/8" } == true
+                }
+                if (bypassLan) {
+                    assertTrue(directLanIdx > loopbackBlockIdx)
+                    val directIps = rules[directLanIdx]["ip"]!!.jsonArray.map { it.jsonPrimitive.content }
+                    assertFalse("127.0.0.0/8" in directIps)
+                    assertFalse("::1/128" in directIps)
+                } else {
+                    assertEquals(-1, directLanIdx)
+                }
+            }
         }
-        assertEquals(XrayConfigFactory.BALANCER_TAG, rule["balancerTag"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * F11: Uniform hardening across all 9 supported protocols and 6 supported transports.
+     */
+    @Test
+    fun `all 9 protocols and 6 transports share identical tun-in loopback and no-proxy hardening`() {
+        val tls = TlsOptions(serverName = "example.com")
+        val matrix = listOf(
+            node(id = "vless-tcp", settings = ProxySettings.Vless(uuid = "u1"), tls = tls),
+            node(id = "vless-ws", settings = ProxySettings.Vless(uuid = "u1"), tls = tls, transport = TransportOptions.WebSocket()),
+            node(id = "vless-grpc", settings = ProxySettings.Vless(uuid = "u1"), tls = tls, transport = TransportOptions.Grpc("svc")),
+            node(id = "vless-httpupgrade", settings = ProxySettings.Vless(uuid = "u1"), tls = tls, transport = TransportOptions.HttpUpgrade()),
+            node(id = "vless-xhttp", settings = ProxySettings.Vless(uuid = "u1"), tls = tls, transport = TransportOptions.Xhttp()),
+            node(id = "vmess", settings = ProxySettings.Vmess(uuid = "u1"), tls = tls),
+            node(id = "trojan", settings = ProxySettings.Trojan(password = "p1"), tls = tls),
+            node(id = "ss", settings = ProxySettings.Shadowsocks(method = "aes-256-gcm", password = "p1")),
+            node(id = "hy2", settings = ProxySettings.Hysteria2(password = "p1")),
+            node(id = "wg", settings = ProxySettings.WireGuard(privateKey = "priv", peerPublicKey = "pub")),
+            node(id = "http", settings = ProxySettings.Http()),
+            node(id = "socks", settings = ProxySettings.Socks()),
+            node(id = "direct", settings = ProxySettings.Direct),
+        )
+
+        matrix.forEach { n ->
+            val config = build(n)
+            val inbounds = config["inbounds"]!!.jsonArray.map { it.jsonObject }
+            assertEquals("inbounds mismatch for ${n.id}", listOf(XrayConfigFactory.TUN_TAG), inbounds.map { it["tag"]!!.jsonPrimitive.content })
+            assertTrue("loopback block missing for ${n.id}", config.rules().any { rule ->
+                val ips = rule["ip"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+                "127.0.0.0/8" in ips && "::1/128" in ips &&
+                    rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.BLOCK_TAG
+            })
+        }
     }
 
     // ------------------------------------------------------------------ Statistics
@@ -772,7 +842,7 @@ class XrayConfigFactoryTest {
     /** Nothing above is worth anything if the document does not parse. */
     @Test
     fun `the document is valid json with the sections the core requires`() {
-        val config = build(node(), probe = ProbeEndpoint(1080, "u", "p"))
+        val config = build(node())
         listOf("log", "dns", "inbounds", "outbounds", "routing", "stats", "policy").forEach {
             assertNotNull("missing section $it", config[it])
         }
@@ -824,5 +894,83 @@ class XrayConfigFactoryTest {
         assertNull(result!!.group)
         assertEquals("a.example", result.server)
         assertEquals("Auto", result.name)
+    }
+
+    @Test
+    fun `Tier5 xrayResolver normalizes case-insensitive udp and rejects localhost, fakedns, and loopback or unspecified targets`() {
+        assertEquals("8.8.8.8", XrayConfigFactory.xrayResolver("UDP://8.8.8.8"))
+        assertEquals("8.8.8.8:53", XrayConfigFactory.xrayResolver("Udp://8.8.8.8:53"))
+        assertEquals("https+local://1.1.1.1/dns-query", XrayConfigFactory.xrayResolver("https+local://1.1.1.1/dns-query"))
+        assertEquals("tcp+local://8.8.8.8", XrayConfigFactory.xrayResolver("tcp+local://8.8.8.8"))
+
+        val forbidden = listOf(
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "sub.localhost",
+            "udp://localhost",
+            "UDP://LOCALHOST:53",
+            "tcp://localhost",
+            "tcp+local://localhost",
+            "https://localhost/dns-query",
+            "fakedns",
+            "FAKEDNS",
+            "udp://fakedns",
+            "127.0.0.1",
+            "127.0.0.53",
+            "127.1",
+            "127.0.1",
+            "0177.0.0.1",
+            "0177.1",
+            "0x7f.0.0.1",
+            "0x7f000001",
+            "2130706433",
+            "udp://127.0.0.1",
+            "udp://127.1",
+            "udp://0177.0.0.1",
+            "tcp://127.0.0.1",
+            "tcp+local://127.0.0.1",
+            "https://127.0.0.1/dns-query",
+            "https://0177.0.0.1/dns-query",
+            "https://127.1/dns-query",
+            "https+local://127.0.0.1/dns-query",
+            "::1",
+            "::1%lo0",
+            "[::1]",
+            "[::1]:53",
+            "[::1%25lo0]",
+            "[::1%25lo0]:53",
+            "https://[::1%25lo0]/dns-query",
+            "::ffff:127.0.0.1",
+            "::ffff:127.1",
+            "0.0.0.0",
+            "0000.0.0.0",
+            "0x0.0.0.0",
+            "0",
+            "::",
+            "[::]",
+        )
+        for (resolver in forbidden) {
+            assertNull("xrayResolver must reject '$resolver'", XrayConfigFactory.xrayResolver(resolver))
+        }
+    }
+
+    @Test
+    fun `custom-port UDP DNS is serialized as an object with address and port while port-less UDP stays string`() {
+        val config = build(
+            node(),
+            settings = settings.copy(
+                remoteDns = "udp://1.1.1.1:5353",
+                directDns = "udp://8.8.8.8",
+            ),
+        )
+        val servers = config["dns"]!!.jsonObject["servers"]!!.jsonArray
+        assertEquals(2, servers.size)
+
+        val remoteObj = servers[0].jsonObject
+        assertEquals("1.1.1.1", remoteObj["address"]!!.jsonPrimitive.content)
+        assertEquals(5353, remoteObj["port"]!!.jsonPrimitive.content.toInt())
+
+        assertEquals("8.8.8.8", servers[1].jsonPrimitive.content)
     }
 }

@@ -75,7 +75,7 @@ class ProviderProfileParserTest {
     fun `resolvers this core cannot ask are dropped and objects keep only what is carried`() {
         val document = """
             {"remarks": "R", "outbounds": [{"tag": "proxy", "protocol": "vless"}],
-             "dns": {"servers": ["localhost", "tls://1.1.1.1", "fakedns",
+             "dns": {"servers": ["localhost", "tls://1.1.1.1", "quic+local://dns.example.com", "fakedns",
                {"address": "https://dns.example.com/dns-query", "domains": ["domain:example.com"], "clientIp": "198.51.100.1"}],
                "queryStrategy": "Nonsense"}}
         """.trimIndent()
@@ -150,5 +150,27 @@ class ProviderProfileParserTest {
         val first = ProviderProfileParser.parse(ProviderFixtures.ordinary())!!.values.single()
         val second = ProviderProfileParser.parse(ProviderFixtures.ordinary())!!.values.single()
         assertEquals(ProviderProfileParser.keyOf(first), ProviderProfileParser.keyOf(second))
+    }
+
+    @Test
+    fun `Tier5 provider dns drops localhost, fakedns, and loopback or unspecified resolvers and normalizes uppercase udp`() {
+        val document = """
+            {"remarks": "R", "outbounds": [{"tag": "proxy", "protocol": "vless"}],
+             "dns": {"servers": [
+               "localhost.",
+               "udp://localhost",
+               "UDP://localhost:53",
+               "FAKEDNS",
+               "udp://fakedns",
+               "tcp+local://127.0.0.1",
+               "https+local://127.0.0.1/dns-query",
+               "[::1]:53",
+               "0.0.0.0",
+               "::",
+               "UDP://8.8.8.8"
+             ]}}
+        """.trimIndent()
+        val dns = ProviderProfileParser.parse(document)!!.getValue("R").dns!!
+        assertEquals(listOf("8.8.8.8"), dns.servers.map { it.jsonPrimitive.content })
     }
 }

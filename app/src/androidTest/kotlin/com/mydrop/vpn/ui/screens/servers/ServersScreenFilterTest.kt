@@ -4,6 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
@@ -75,16 +79,48 @@ class ServersScreenFilterTest {
             baseOverride
         }
         compose.setContent {
+            var filterState by remember { mutableStateOf(state.filter) }
             DeviceConfigurationOverride(override) {
                 MyDropTheme(dynamicColor = false) {
                     Box(Modifier.width(widthDp).height(800.dp)) {
                         ServersScreen(
-                            state = state,
+                            state = state.copy(filter = filterState),
                             onSelect = {},
                             onPing = {},
                             onRemove = {},
                             onSetTlsInsecure = { _, _ -> },
                             onToggleGroup = {},
+                            onQueryChange = { filterState = filterState.copy(query = it) },
+                            onSortChange = { filterState = filterState.copy(sort = it) },
+                            onToggleProtocol = { protocol ->
+                                val next = if (protocol in filterState.selectedProtocols) {
+                                    filterState.selectedProtocols - protocol
+                                } else {
+                                    filterState.selectedProtocols + protocol
+                                }
+                                filterState = filterState.copy(selectedProtocols = next)
+                            },
+                            onClearProtocols = {
+                                filterState = filterState.copy(selectedProtocols = emptySet())
+                            },
+                            onToggleCountry = { code ->
+                                val next = if (code in filterState.selectedCountries) {
+                                    filterState.selectedCountries - code
+                                } else {
+                                    filterState.selectedCountries + code
+                                }
+                                filterState = filterState.copy(selectedCountries = next)
+                            },
+                            onClearCountries = {
+                                filterState = filterState.copy(selectedCountries = emptySet())
+                            },
+                            onResetFilters = {
+                                filterState = filterState.copy(
+                                    sort = ServerSort.Default,
+                                    selectedProtocols = emptySet(),
+                                    selectedCountries = emptySet(),
+                                )
+                            },
                             contentPadding = PaddingValues(0.dp),
                         )
                     }

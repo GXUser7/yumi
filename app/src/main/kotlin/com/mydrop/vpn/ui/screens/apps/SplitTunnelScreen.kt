@@ -44,6 +44,7 @@ import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
+import com.mydrop.vpn.vpn.SplitTunnelUidPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Spacer
@@ -72,7 +73,7 @@ fun SplitTunnelScreen(
         key1 = context,
         key2 = appsRevision,
     ) {
-        value = withContext(Dispatchers.IO) { loadApps(context.packageManager) }
+        value = withContext(Dispatchers.IO) { loadApps(context.packageManager, context.packageName) }
     }
 
     Column(modifier = modifier.fillMaxSize().padding(contentPadding)) {
@@ -163,14 +164,16 @@ fun SplitTunnelScreen(
                     checked = checked,
                     enabled = settings.splitTunnelMode != SplitTunnelMode.Off,
                     onToggle = {
-                        onUpdate { current ->
-                            current.copy(
-                                splitTunnelPackages = if (app.packageName in current.splitTunnelPackages) {
-                                    current.splitTunnelPackages - app.packageName
-                                } else {
-                                    current.splitTunnelPackages + app.packageName
-                                },
-                            )
+                        if (isSplitTunnelSelectable(app.packageName, context.packageName)) {
+                            onUpdate { current ->
+                                current.copy(
+                                    splitTunnelPackages = if (app.packageName in current.splitTunnelPackages) {
+                                        current.splitTunnelPackages - app.packageName
+                                    } else {
+                                        current.splitTunnelPackages + app.packageName
+                                    },
+                                )
+                            }
                         }
                     },
                 )
@@ -243,10 +246,25 @@ private fun AppIcon(packageName: String) {
     }
 }
 
-internal fun loadApps(packageManager: PackageManager): List<InstalledApp> {
+internal fun isSplitTunnelSelectable(packageName: String, ownPackageName: String): Boolean =
+    packageName != ownPackageName && packageName !in SplitTunnelUidPolicy.ALWAYS_OUTSIDE_PACKAGES
+
+internal fun filterSelectableApps(
+    apps: List<InstalledApp>,
+    ownPackageName: String,
+): List<InstalledApp> = apps.filter { isSplitTunnelSelectable(it.packageName, ownPackageName) }
+
+internal fun loadApps(packageManager: PackageManager, ownPackageName: String = ""): List<InstalledApp> {
     val installed = packageManager.getInstalledApplications(0)
+    val alwaysOutside = SplitTunnelUidPolicy.ALWAYS_OUTSIDE_PACKAGES
     return installed
         .asSequence()
+        // Exclude Yumi itself and telephony/IMS packages that must always stay outside the tunnel.
+        .filter { info ->
+            info.packageName != ownPackageName &&
+                info.packageName !in alwaysOutside &&
+                isSplitTunnelSelectable(info.packageName, ownPackageName)
+        }
         // Only apps that can actually originate traffic are worth listing; without the INTERNET
         // permission a per-app rule would have nothing to act on.
         .filter { info ->

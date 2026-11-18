@@ -463,7 +463,13 @@ class GeoLocationMonitor(
         val result = ArrayList<ObservedCellTower>(infos.size)
         for (info in infos) {
             val id = extractTowerId(info) ?: continue
-            val rawDbm = info.cellSignalStrength.dbm
+            val rawDbm = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> info.cellSignalStrength.dbm
+                info is CellInfoLte -> info.cellSignalStrength.dbm
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info is CellInfoNr ->
+                    info.cellSignalStrength.dbm
+                else -> CellInfo.UNAVAILABLE
+            }
             val dbm = if (rawDbm == CellInfo.UNAVAILABLE || rawDbm > 0) FALLBACK_DBM else rawDbm
             result += ObservedCellTower(
                 towerId = id,

@@ -3,6 +3,7 @@ package com.mydrop.vpn.data
 import android.content.Context
 import android.content.Intent
 import com.mydrop.vpn.core.model.VpnState
+import com.mydrop.vpn.core.net.isNumericAddress
 import com.mydrop.vpn.remote.REMOTE_PAIRING_LIFETIME_MILLIS
 import com.mydrop.vpn.remote.REMOTE_VERSION
 import com.mydrop.vpn.remote.RemoteBeacon
@@ -112,7 +113,7 @@ class RemoteHost(
                 is VpnState.Failed -> RemoteTunnelState.Failed
                 VpnState.Disconnected -> RemoteTunnelState.Off
             },
-            message = (vpn as? VpnState.Failed)?.message ?: notice,
+            message = (vpn as? VpnState.Failed)?.message?.let(::sanitizeRemoteMessage) ?: notice,
             needsConsentOnTv = consent && !vpn.isActive,
             selectedNodeId = selectedNodeId,
             connectedAtEpochMillis = (vpn as? VpnState.Connected)?.connectedAtEpochMillis ?: 0L,
@@ -227,4 +228,50 @@ class RemoteHost(
     fun consentResolved(granted: Boolean) {
         _needsConsent.value = !granted
     }
+}
+
+private val BRACKETED_IPV6_PATTERN = Regex("""\[([0-9a-fA-F:.]+)(?:%[^\]\s]+)?\](?::\d{1,5})?""")
+private val IPV4_PORT_PATTERN = Regex("""\b((?:\d{1,3}\.){3}\d{1,3})(?:\.(?=:\d{1,5}\b))?(?::\d{1,5})?\b""")
+private val BARE_IPV6_PATTERN = Regex(
+    """(?<![A-Za-z0-9_])((?:[0-9a-fA-F][0-9a-fA-F:]++|::[0-9a-fA-F:]*+)(?:\.(?:\d{1,3}\.){2}\d{1,3})?+)(?:%[A-Za-z0-9_.-]+)?+(?::\d{1,5})?+(:)?(?![A-Za-z0-9_:])""",
+)
+private val HOST_PORT_PATTERN = Regex(
+    """\b(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9-]{2,63}|localhost)\.?:\d{1,5}\b""",
+    RegexOption.IGNORE_CASE,
+)
+
+/** Redacts IPv4, IPv6, and `host:port` endpoints before emitting [RemoteSnapshot.message]. */
+internal fun sanitizeRemoteMessage(raw: String): String {
+    var sanitized = BRACKETED_IPV6_PATTERN.replace(raw) { match ->
+        if (isNumericAddress(match.groupValues[1])) "[redacted]" else match.value
+    }
+    sanitized = BARE_IPV6_PATTERN.replace(sanitized) { match ->
+        val rawToken = match.groupValues[1]
+        val suffixColon = match.groupValues[2].isNotEmpty()
+        val hasTrailingDelimiterColon = suffixColon ||
+            (rawToken.endsWith(':') && (!rawToken.endsWith("::") || rawToken.endsWith(":::")))
+        val token = if (!suffixColon && hasTrailingDelimiterColon) rawToken.dropLast(1) else rawToken
+        if (isValidBareIpv6Token(token)) {
+            if (hasTrailingDelimiterColon) "[redacted]:" else "[redacted]"
+        } else {
+            match.value
+        }
+    }
+    sanitized = IPV4_PORT_PATTERN.replace(sanitized) { match ->
+        if (isNumericAddress(match.groupValues[1])) "[redacted]" else match.value
+    }
+    return HOST_PORT_PATTERN.replace(sanitized, "[redacted]")
+}
+
+private fun isValidBareIpv6Token(token: String): Boolean {
+    if (token.count { it == ':' } < 2) return false
+    if (isNumericAddress(token)) return true
+    if (token.endsWith("::")) return false
+    val lastColon = token.lastIndexOf(':')
+    if (lastColon <= 0) return false
+    val addrPart = token.substring(0, lastColon)
+    val portPart = token.substring(lastColon + 1)
+    if (portPart.isEmpty() || portPart.length > 5 || !portPart.all { it in '0'..'9' }) return false
+    val port = portPart.toIntOrNull() ?: return false
+    return port in 1..65535 && addrPart.count { it == ':' } >= 2 && isNumericAddress(addrPart)
 }

@@ -1,9 +1,11 @@
 package com.mydrop.vpn.core.parse
 
 import com.mydrop.vpn.core.model.DnsProfile
-import java.util.Base64
-import com.mydrop.vpn.core.net.splitHostPort
+import com.mydrop.vpn.core.net.extractAuthorityHost
+import com.mydrop.vpn.core.net.isForbiddenDnsHost
 import com.mydrop.vpn.core.net.isNumericAddress
+import com.mydrop.vpn.core.net.splitHostPort
+import java.util.Base64
 
 /**
  * Recognises the many ways a resolver is written down.
@@ -29,6 +31,7 @@ object DnsUriParser {
     private fun carriable(url: String): Boolean =
         !url.startsWith("tls://", ignoreCase = true) &&
             !url.startsWith("quic://", ignoreCase = true) &&
+            !url.startsWith("quic+local://", ignoreCase = true) &&
             !url.startsWith("h3://", ignoreCase = true)
 
     /** Null when the text is not a resolver at all — a proxy link, a subscription URL, prose. */
@@ -49,18 +52,23 @@ object DnsUriParser {
             // routed. Both refused rather than quietly turned into something weaker.
             body.startsWith("tls://", ignoreCase = true) -> return null
             body.startsWith("quic://", ignoreCase = true) -> return null
+            body.startsWith("quic+local://", ignoreCase = true) -> return null
             body.startsWith("h3://", ignoreCase = true) -> return null
             body.startsWith("tcp://", ignoreCase = true) -> body
-            body.startsWith("udp://", ignoreCase = true) -> body.removePrefix("udp://")
+            body.startsWith("udp://", ignoreCase = true) -> body.substringAfter("://").trim()
             // A bare address is a plain resolver: `1.1.1.1`, `8.8.8.8:53`, `[2606:4700::1111]`.
             looksLikeBareAddress(body) -> body
             else -> return null
         }
 
+        if (url.isEmpty()) return null
+        val host = extractAuthorityHost(url) ?: return null
+        if (isForbiddenDnsHost(host)) return null
+
         // A DoH link and a subscription link are both https, so the caller cannot tell them apart
         // by scheme; requiring the well-known path is what keeps a subscription from being
         // imported as a resolver.
-        if (url.startsWith("https://") && !url.contains("/dns-query") && !url.contains("/dns")) {
+        if (url.startsWith("https://", ignoreCase = true) && !url.contains("/dns-query") && !url.contains("/dns")) {
             return null
         }
 
@@ -91,7 +99,7 @@ object DnsUriParser {
      */
     private fun fromStamp(stamp: String): String? = runCatching {
         val payload = Base64.getUrlDecoder()
-            .decode(stamp.removePrefix("sdns://").removePrefix("SDNS://").trimEnd('='))
+            .decode(stamp.substringAfter("://").trimEnd('='))
         if (payload.size < 9) return null
 
         var offset = 9
@@ -117,9 +125,12 @@ object DnsUriParser {
             0x02 -> {
                 val address = readField()
                 skipHashes()
-                val hostname = readField().ifEmpty { address }
+                val rawHost = readField().ifEmpty { address }
+                val hostname = splitHostPort(rawHost)?.host
+                    ?.let { if (':' in it) "[$it]" else it }
+                    ?: rawHost.substringBefore(':')
                 val path = readField().ifEmpty { "/dns-query" }
-                "https://${hostname.substringBefore(':')}$path"
+                "https://$hostname$path"
             }
 
             0x03 -> {

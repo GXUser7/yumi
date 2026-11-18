@@ -37,6 +37,7 @@ class DnsUriParserTest {
         // the ISP the very list of names an encrypted resolver was chosen to hide.
         assertNull(DnsUriParser.parse("tls://xbox-dns.ru"))
         assertNull(DnsUriParser.parse("quic://dns.example.com"))
+        assertNull(DnsUriParser.parse("quic+local://dns.example.com"))
         assertNull(DnsUriParser.parse("h3://dns.example.com"))
     }
 
@@ -97,5 +98,54 @@ class DnsUriParserTest {
             listOf("https://xbox-dns.ru/dns-query", "9.9.9.9"),
             DnsUriParser.parseAll(page).map { it.url },
         )
+    }
+
+    @Test
+    fun `Tier5 case-insensitive udp is normalized and localhost, fakedns, loopback, and unspecified targets are rejected`() {
+        assertEquals("8.8.8.8", DnsUriParser.parse("UDP://8.8.8.8")?.url)
+
+        val rejected = listOf(
+            "udp://localhost",
+            "UDP://localhost:53",
+            "localhost.",
+            "fakedns",
+            "FAKEDNS",
+            "udp://fakedns",
+            "127.0.0.1",
+            "127.0.0.53",
+            "127.1",
+            "127.0.1",
+            "0177.0.0.1",
+            "0177.1",
+            "0x7f.0.0.1",
+            "udp://127.0.0.1",
+            "udp://127.1",
+            "udp://0177.0.0.1",
+            "tcp://localhost",
+            "tcp://127.0.0.1",
+            "https://127.0.0.1/dns-query",
+            "https://0177.0.0.1/dns-query",
+            "https://127.1/dns-query",
+            "https://[::1%25lo0]/dns-query",
+            "https://localhost/dns-query",
+            "HTTPS://sub.example.com/abcdef",
+            "::1",
+            "::1%lo0",
+            "[::1]:53",
+            "[::1%25lo0]:53",
+            "0.0.0.0",
+            "0000.0.0.0",
+            "0x0.0.0.0",
+            "::",
+            stamp(0x00, "localhost", hashes = false),
+            stamp(0x00, "127.0.0.1", hashes = false),
+            stamp(0x00, "127.1", hashes = false),
+            stamp(0x00, "0177.0.0.1", hashes = false),
+            stamp(0x02, "127.0.0.1:443", "localhost", "/dns-query"),
+            stamp(0x02, "127.0.0.1:443", "", "/dns-query"),
+        )
+        for (input in rejected) {
+            assertNull("DnsUriParser.parse must reject '$input'", DnsUriParser.parse(input))
+        }
     }
 }

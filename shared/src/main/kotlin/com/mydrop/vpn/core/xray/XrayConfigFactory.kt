@@ -82,7 +82,6 @@ object XrayConfigFactory {
     const val DNS_TAG = "dns-out"
     const val DNS_IN_TAG = "dns-in"
     const val TUN_TAG = "tun-in"
-    const val PROBE_TAG = "probe-in"
 
     /** The outbound tag for a node. Stable, because the node id is. */
     fun nodeTag(nodeId: String): String = NODE_TAG_PREFIX + nodeId
@@ -229,6 +228,7 @@ object XrayConfigFactory {
      *   stopped answering, and handing the core any of them again is the outage it exists to end.
      *   The provider's rules stay; only its DNS goes.
      */
+    @Suppress("DEPRECATION", "UNUSED_PARAMETER")
     fun build(
         nodes: List<ProxyNode>,
         selected: ProxyNode,
@@ -265,7 +265,7 @@ object XrayConfigFactory {
         return Document(
             json = json.encodeToString(
                 JsonObject.serializer(),
-                buildConfig(dialed, resolved, probe, geoAvailable, carried),
+                buildConfig(dialed, resolved, geoAvailable, carried),
             ),
             pinnedTag = nodeTag(selected.dialed().first().id),
             // The servers, not their members: this is what the tunnel can be moved onto, and a
@@ -460,7 +460,6 @@ object XrayConfigFactory {
     private fun buildConfig(
         nodes: List<ProxyNode>,
         settings: AppSettings,
-        probe: ProbeEndpoint?,
         geoAvailable: Boolean,
         provider: CarriedProvider?,
     ): JsonObject = buildJsonObject {
@@ -541,7 +540,6 @@ object XrayConfigFactory {
 
         putJsonArray("inbounds") {
             add(buildTunInbound(settings))
-            probe?.let { add(buildProbeInbound(it)) }
         }
 
         putJsonArray("outbounds") {
@@ -604,30 +602,6 @@ object XrayConfigFactory {
             // name breaks connections to any host whose certificate does not match the name it was
             // dialled by, which is most of what sits behind a CDN.
             put("routeOnly", true)
-        }
-    }
-
-    /**
-     * The loopback inbound the app's own speed test dials; see `ProbeEndpoint` for why it exists.
-     *
-     * `listen` is deliberately `127.0.0.1` rather than `0.0.0.0`: bound to every interface this
-     * would be an open proxy for the whole network the phone is on. The credentials close the same
-     * hole for other applications on the device itself.
-     */
-    private fun buildProbeInbound(probe: ProbeEndpoint): JsonObject = buildJsonObject {
-        put("tag", PROBE_TAG)
-        put("protocol", "socks")
-        put("listen", "127.0.0.1")
-        put("port", probe.port)
-        putJsonObject("settings") {
-            put("auth", "password")
-            putJsonArray("accounts") {
-                addJsonObject {
-                    put("user", probe.username)
-                    put("pass", probe.password)
-                }
-            }
-            put("udp", true)
         }
     }
 
@@ -1069,18 +1043,35 @@ object XrayConfigFactory {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
         val scheme = trimmed.substringBefore("://", missingDelimiterValue = "").lowercase()
-        return when (scheme) {
+        val normalized = when (scheme) {
             // Dispatched through the routing rules, which is what lets [dnsRules] send it through
             // the proxy.
             "" -> trimmed
-            "udp" -> trimmed.removePrefix("udp://").takeIf { it.isNotBlank() }
+            "udp" -> trimmed.substringAfter("://").trim()
             "https", "h2c", "tcp" -> trimmed
-            "https+local", "h2c+local", "tcp+local", "quic+local" -> trimmed
-            // No DoT anywhere in the core, and `quic://` exists only as `quic+local://`. Returning
-            // null rather than downgrading: quietly turning the user's encrypted resolver into
-            // plaintext UDP is a worse answer than saying it cannot be done.
-            else -> null
+            "https+local", "h2c+local", "tcp+local" -> trimmed
+            // No DoT anywhere in the core, and `quic+local://` bypasses routing and protector rules
+            // so it is refused rather than allowed or silently downgraded.
+            else -> return null
         }
+        if (normalized.isEmpty()) return null
+        val host = hostOf(normalized) ?: return null
+        if (com.mydrop.vpn.core.net.isForbiddenDnsHost(host)) return null
+        return normalized
+    }
+
+    private fun JsonArrayBuilder.addDnsServer(resolved: String) {
+        if ("://" !in resolved) {
+            val parsed = splitHostPort(resolved)
+            if (parsed != null && parsed.port != null && !parsed.host.equals("localhost", ignoreCase = true)) {
+                addJsonObject {
+                    put("address", parsed.host)
+                    put("port", parsed.port)
+                }
+                return
+            }
+        }
+        add(resolved)
     }
 
     private fun buildDns(settings: AppSettings, provider: CarriedProvider?): JsonObject = buildJsonObject {
@@ -1092,7 +1083,15 @@ object XrayConfigFactory {
             // The provider's resolvers instead of the user's, not beside them: Xray asks its
             // servers in order and falls through on failure, so a list of both would put whichever
             // came first in charge and leave the other answering only when it was down.
-            putJsonArray("servers") { providers.forEach { add(it) } }
+            putJsonArray("servers") {
+                providers.forEach { element ->
+                    if (element is JsonPrimitive && element.isString) {
+                        addDnsServer(element.content)
+                    } else {
+                        add(element)
+                    }
+                }
+            }
             // Narrowed, never widened. The tunnel may have switched IPv6 off for servers that were
             // not seen to carry it — see `Ipv6Policy` — and a provider's `UseIP` written for its own
             // client cannot know that. Handing applications AAAA answers a server cannot reach is
@@ -1106,10 +1105,10 @@ object XrayConfigFactory {
 
         putJsonArray("servers") {
             when (settings.routingMode) {
-                RoutingMode.Direct -> direct?.let { add(it) }
+                RoutingMode.Direct -> direct?.let { addDnsServer(it) }
                 else -> {
-                    remote?.let { add(it) }
-                    direct?.let { add(it) }
+                    remote?.let { addDnsServer(it) }
+                    direct?.let { addDnsServer(it) }
                 }
             }
             // A document with no resolver at all leaves the core on its own built-in localhost
@@ -1371,6 +1370,19 @@ object XrayConfigFactory {
                     put("outboundTag", BLOCK_TAG)
                 }
 
+                // Loopback traffic arriving via tun-in must always be blocked ahead of hijackDns,
+                // bypassLan, and provider rules so excluded/tunnelled apps cannot reach host loopback
+                // services through the tunnel.
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("inboundTag") { add(TUN_TAG) }
+                    putJsonArray("ip") {
+                        add("127.0.0.0/8")
+                        add("::1/128")
+                    }
+                    put("outboundTag", BLOCK_TAG)
+                }
+
                 if (settings.hijackDns) {
                     addJsonObject {
                         put("type", "field")
@@ -1385,14 +1397,6 @@ object XrayConfigFactory {
                     put("type", "field")
                     putJsonArray("domain") { CARRIER_INTERNAL_DOMAINS.forEach { add(it) } }
                     put("outboundTag", DIRECT_TAG)
-                }
-
-                // The probe measures the tunnel, so it has to ride it whatever the routing mode
-                // says.
-                addJsonObject {
-                    put("type", "field")
-                    putJsonArray("inboundTag") { add(PROBE_TAG) }
-                    put("balancerTag", BALANCER_TAG)
                 }
 
                 if (settings.blockQuic) {
@@ -1577,21 +1581,16 @@ object XrayConfigFactory {
         }
     }
 
-    /** The host a resolver address points at, with scheme, path and port removed. */
-    private fun hostOf(resolver: String): String? {
-        val withoutScheme = resolver.substringAfter("://", missingDelimiterValue = resolver)
-        val authority = withoutScheme.substringBefore('/').substringBefore('?')
-        return splitHostPort(authority)?.host?.takeIf { it.isNotBlank() }
-    }
+    /** The host a resolver address points at, with scheme, userinfo, path and port removed. */
+    private fun hostOf(resolver: String): String? =
+        com.mydrop.vpn.core.net.extractAuthorityHost(resolver)
 
     private val PRIVATE_RANGES = listOf(
         "10.0.0.0/8",
         "172.16.0.0/12",
         "192.168.0.0/16",
-        "127.0.0.0/8",
         "169.254.0.0/16",
         "100.64.0.0/10",
-        "::1/128",
         "fc00::/7",
         "fe80::/10",
     )
@@ -1607,7 +1606,54 @@ object XrayConfigFactory {
             val kept = (prefix - index * 8).coerceIn(0, 8)
             bytes[index] = (bytes[index].toInt() and (0xFF00 ushr kept)).toByte()
         }
-        return "${InetAddress.getByAddress(bytes).hostAddress}/$prefix"
+        val formatted = if (bytes.size == 16) {
+            formatIpv6Canonical(bytes)
+        } else {
+            InetAddress.getByAddress(bytes).hostAddress
+        }
+        return "$formatted/$prefix"
+    }
+
+    /** RFC 5952 canonical IPv6 compression so JVM and Android emit identical CIDR strings (e.g. `fdfe:dcba:9876::`). */
+    private fun formatIpv6Canonical(bytes: ByteArray): String {
+        val hextets = IntArray(8) { i ->
+            ((bytes[i * 2].toInt() and 0xFF) shl 8) or (bytes[i * 2 + 1].toInt() and 0xFF)
+        }
+        var bestStart = -1
+        var bestLen = 0
+        var curStart = -1
+        var curLen = 0
+        for (i in 0 until 8) {
+            if (hextets[i] == 0) {
+                if (curStart < 0) curStart = i
+                curLen++
+                if (curLen > bestLen) {
+                    bestStart = curStart
+                    bestLen = curLen
+                }
+            } else {
+                curStart = -1
+                curLen = 0
+            }
+        }
+        if (bestLen < 2) {
+            return hextets.joinToString(":") { it.toString(16) }
+        }
+        val sb = StringBuilder()
+        var i = 0
+        while (i < 8) {
+            if (i == bestStart) {
+                sb.append("::")
+                i += bestLen
+                continue
+            }
+            if (i > 0 && i != bestStart + bestLen) {
+                sb.append(':')
+            }
+            sb.append(hextets[i].toString(16))
+            i++
+        }
+        return sb.toString()
     }
 
     private fun LogLevel.toXrayLevel(): String = when (this) {

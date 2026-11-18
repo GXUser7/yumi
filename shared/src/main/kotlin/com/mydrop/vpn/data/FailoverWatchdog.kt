@@ -514,7 +514,7 @@ class FailoverWatchdog(
                         // thing in the world to be up again, and one that stayed swapped until
                         // somebody noticed would be a setting the user never chose.
                         configs.useDnsFallback(false)
-                        configs.forgetProbe()
+                        configs.forgetDocument()
                     }
                 }
             }
@@ -932,7 +932,7 @@ class FailoverWatchdog(
                 // Candidates and the home node keep the direct probe below: there is no tunnel to
                 // them to ask through.
                 lastProbeAtMillis = SystemClock.elapsedRealtime()
-                val throughTunnel = tunnelHealth.passes(configs.probe.value)
+                val throughTunnel = tunnelHealth.passes()
                 val alive = throughTunnel
                     ?: !latencyTester.measure(current, settings.value.pingMode).failed
 
@@ -1052,7 +1052,7 @@ class FailoverWatchdog(
                 val dns = configs.dns.value
                 val policed = dns?.policed == true
                 val resolving =
-                    if (alive && policed) tunnelHealth.resolves(configs.probe.value) else null
+                    if (alive && policed) tunnelHealth.resolves() else null
                 when (resolving) {
                     true -> {
                         dnsFailures = 0
@@ -1069,7 +1069,7 @@ class FailoverWatchdog(
                     // resolver that was fine.
                     false -> if (firstProbe) {
                         logs.trace(TAG, "first dns lookup after connect failed, not counting it")
-                    } else if (tunnelHealth.passes(configs.probe.value) == false) {
+                    } else if (tunnelHealth.passes() == false) {
                         // The tunnel probe that licensed this question is five seconds old, and
                         // five seconds is long enough for a flaky exit to have died in between.
                         // That is not a hypothetical: it swapped a working resolver on a phone

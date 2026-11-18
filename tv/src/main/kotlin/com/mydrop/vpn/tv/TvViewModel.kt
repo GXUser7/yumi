@@ -14,6 +14,7 @@ import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.data.AppContainer
 import com.mydrop.vpn.data.ConnectOutcome
+import com.mydrop.vpn.data.FilteredPingCoordinator
 import com.mydrop.vpn.pairing.PairingReceiver
 import com.mydrop.vpn.pairing.PairingReceiverState
 import com.mydrop.vpn.pairing.PairingResult
@@ -48,6 +49,7 @@ class TvViewModel(
     private val _permissionRequests = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
     val permissionRequests = _permissionRequests.asSharedFlow()
     private var pendingConnectNodeId: String? = null
+    private val pingCoordinator = FilteredPingCoordinator(viewModelScope, container.profiles::recordLatency)
 
     val uiState: StateFlow<TvUiState> = combine(
         container.profiles.state,
@@ -175,12 +177,13 @@ class TvViewModel(
 
     fun pingAll() {
         val nodes = container.profiles.nodes
-        if (nodes.isEmpty()) return
-        viewModelScope.launch {
-            container.latencyTester.measureAll(nodes, container.settings.value.pingMode) {
-                container.profiles.recordLatency(it)
-            }
-        }
+        pingCoordinator.ping(
+            nodes = nodes,
+            mode = container.settings.value.pingMode,
+            measure = { targetNodes, mode, onResult ->
+                container.latencyTester.measureAll(targetNodes, mode, onResult)
+            },
+        )
     }
 
     fun toggleConnection() {

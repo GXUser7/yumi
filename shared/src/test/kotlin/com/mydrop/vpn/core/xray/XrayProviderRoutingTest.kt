@@ -1,7 +1,6 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
@@ -34,8 +33,6 @@ class XrayProviderRoutingTest {
         settings = ProxySettings.Vless(uuid = ProviderFixtures.UUID),
     )
 
-    private val probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password")
-
     private fun profile(document: String = ProviderFixtures.ordinary()): ProviderProfile =
         ProviderProfileParser.parse(document)!!.values.single()
 
@@ -48,7 +45,6 @@ class XrayProviderRoutingTest {
         nodes = listOf(server),
         selected = server,
         settings = settings,
-        probe = probe,
         geoAvailable = geoAvailable,
         provider = provider,
         geoKnown = geoKnown,
@@ -69,7 +65,11 @@ class XrayProviderRoutingTest {
     fun `provider rules come after the plumbing and before the user's own`() {
         val rules = document().root().rules()
 
-        val probeRule = rules.indexOfFirst { XrayConfigFactory.PROBE_TAG in it.listOf("inboundTag") }
+        val loopbackBlock = rules.indexOfFirst {
+            XrayConfigFactory.TUN_TAG in it.listOf("inboundTag") &&
+                "127.0.0.0/8" in it.listOf("ip") &&
+                it["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.BLOCK_TAG
+        }
         val lanBypass = rules.indexOfFirst { "10.0.0.0/8" in it.listOf("ip") }
         val providerFirst = rules.indexOfDomain("domain:2ip.ru")
         val providerRussian = rules.indexOfDomain("max.ru")
@@ -78,7 +78,8 @@ class XrayProviderRoutingTest {
             it.listOf("domain") == listOf("geosite:category-ru")
         }
 
-        assertTrue(probeRule in 0 until providerFirst)
+        assertTrue(rules.none { "probe-in" in it.listOf("inboundTag") })
+        assertTrue(loopbackBlock in 0 until providerFirst)
         assertTrue(lanBypass in 0 until providerFirst)
         assertTrue(providerFirst < providerRussian)
         assertTrue(providerRussian < userRussian)
@@ -193,7 +194,6 @@ class XrayProviderRoutingTest {
             nodes = listOf(server),
             selected = server,
             settings = AppSettings(),
-            probe = probe,
             geoAvailable = true,
         )
         val after = document(provider = null)

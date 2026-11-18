@@ -3,12 +3,57 @@ package com.mydrop.vpn.vpn
 import android.util.Log
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.ProbeTargets
+import com.mydrop.vpn.xray.yumi.HTTPResponse
 import com.mydrop.vpn.xray.yumi.Logger
 import com.mydrop.vpn.xray.yumi.Protector
+import com.mydrop.vpn.xray.yumi.TrafficGuard
+import com.mydrop.vpn.xray.yumi.TunnelConn
 import com.mydrop.vpn.xray.yumi.Yumi
+import java.io.Closeable
+import java.io.InputStream
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+
+interface TunnelBridge {
+    val isRunning: Boolean
+
+    fun probeHTTP(targetURL: String, timeoutMillis: Int, resolveDNS: Boolean): Int
+
+    fun openHTTP(
+        method: String,
+        targetURL: String,
+        headersJSON: String,
+        connectTimeoutMillis: Int,
+        readTimeoutMillis: Int,
+        resolveDNS: Boolean,
+    ): TunnelHttpResponse
+
+    fun dialTunnelTLS(
+        host: String,
+        port: Int,
+        serverName: String,
+        timeoutMillis: Int,
+    ): TunnelStream
+}
+
+interface TunnelHttpResponse : Closeable {
+    val statusCode: Int
+    val contentLength: Long
+    val contentEncoding: String
+    val location: String
+    val headersJSON: String
+    fun header(name: String): String
+    fun read(maxBytes: Int = 65536): ByteArray?
+    fun readAll(maxBytes: Long = -1L): ByteArray
+}
+
+interface TunnelStream : Closeable {
+    fun setReadTimeout(timeoutMillis: Int)
+    fun setWriteTimeout(timeoutMillis: Int)
+    fun read(maxBytes: Int = 65536): ByteArray?
+    fun write(data: ByteArray): Int
+}
 
 /**
  * The Kotlin face of the Xray core.
@@ -28,7 +73,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * names. Xray asks for two things — a descriptor and a way to protect a socket — and decides the
  * rest from the document it was handed.
  */
-object XrayCore {
+object XrayCore : TunnelBridge {
 
     private const val TAG = "YumiCore"
 
@@ -174,6 +219,61 @@ object XrayCore {
     val activeOutbound: String
         get() = runCatching { Yumi.activeOutbound() }.getOrDefault("")
 
+    override val isRunning: Boolean
+        get() = running
+
+    override fun probeHTTP(targetURL: String, timeoutMillis: Int, resolveDNS: Boolean): Int =
+        Yumi.probeHTTP(targetURL, timeoutMillis.toLong(), resolveDNS).toInt()
+
+    override fun openHTTP(
+        method: String,
+        targetURL: String,
+        headersJSON: String,
+        connectTimeoutMillis: Int,
+        readTimeoutMillis: Int,
+        resolveDNS: Boolean,
+    ): TunnelHttpResponse {
+        val resp = Yumi.openHTTP(
+            method,
+            targetURL,
+            headersJSON,
+            connectTimeoutMillis.toLong(),
+            readTimeoutMillis.toLong(),
+            resolveDNS,
+        )
+        return JniTunnelHttpResponse(resp)
+    }
+
+    override fun dialTunnelTLS(
+        host: String,
+        port: Int,
+        serverName: String,
+        timeoutMillis: Int,
+    ): TunnelStream {
+        val conn = Yumi.dialTunnelTLS(host, port.toLong(), serverName, timeoutMillis.toLong())
+        return JniTunnelStream(conn)
+    }
+
+    private class JniTunnelHttpResponse(private val delegate: HTTPResponse) : TunnelHttpResponse {
+        override val statusCode: Int get() = delegate.statusCode.toInt()
+        override val contentLength: Long get() = delegate.contentLength
+        override val contentEncoding: String get() = delegate.contentEncoding.orEmpty()
+        override val location: String get() = delegate.location.orEmpty()
+        override val headersJSON: String get() = delegate.headersJSON.orEmpty()
+        override fun header(name: String): String = delegate.header(name).orEmpty()
+        override fun read(maxBytes: Int): ByteArray? = delegate.read(maxBytes.toLong())
+        override fun readAll(maxBytes: Long): ByteArray = delegate.readAll(maxBytes)
+        override fun close() = delegate.close()
+    }
+
+    private class JniTunnelStream(private val delegate: TunnelConn) : TunnelStream {
+        override fun setReadTimeout(timeoutMillis: Int) = delegate.setReadTimeout(timeoutMillis.toLong())
+        override fun setWriteTimeout(timeoutMillis: Int) = delegate.setWriteTimeout(timeoutMillis.toLong())
+        override fun read(maxBytes: Int): ByteArray? = delegate.read(maxBytes.toLong())
+        override fun write(data: ByteArray): Int = delegate.write(data).toInt()
+        override fun close() = delegate.close()
+    }
+
     /**
      * @param tunFd the descriptor from `VpnService.Builder.establish()`. Unlike sing-box, Xray does
      *   not dup it — `AndroidTun` takes the number as given, its `Close()` is empty, and gVisor's
@@ -188,13 +288,86 @@ object XrayCore {
      * @param protect excludes a socket from the tunnel; returning false fails that dial rather than
      *   letting it loop back into the tunnel it came from and hang with no error anywhere. Called
      *   from Go, on whatever thread opened the socket.
+     * @param allowConnection always-on fail-closed split-tunneling UID guard evaluated per TCP SYN
+     *   and UDP 5-tuple entering `tun-in`.
      */
-    fun start(config: String, tunFd: Int, pinnedTag: String, protect: (Int) -> Boolean) {
-        Yumi.start(config, tunFd.toLong(), pinnedTag, Protector { fd -> protect(fd.toInt()) })
+    fun start(
+        config: String,
+        tunFd: Int,
+        pinnedTag: String,
+        protect: (Int) -> Boolean,
+        allowConnection: (proto: Int, srcIP: ByteArray, srcPort: Int, dstIP: ByteArray, dstPort: Int) -> Boolean,
+    ) {
+        val guard = TrafficGuard { proto, srcIP, srcPort, dstIP, dstPort ->
+            runCatching {
+                if (srcIP == null || dstIP == null) return@runCatching false
+                if (proto !in 0L..255L || srcPort !in 1L..65535L || dstPort !in 1L..65535L) {
+                    return@runCatching false
+                }
+                allowConnection(proto.toInt(), srcIP, srcPort.toInt(), dstIP, dstPort.toInt())
+            }.getOrDefault(false)
+        }
+        Yumi.startWithGuard(
+            config,
+            tunFd.toLong(),
+            pinnedTag,
+            Protector { fd -> runCatching { protect(fd.toInt()) }.getOrDefault(false) },
+            guard,
+        )
     }
 
     /** Safe when nothing is running, because Android will call it that way. */
     fun stop() {
         Yumi.stop()
+    }
+}
+
+/**
+ * Adapts [XrayCore.TunnelHttpResponse.read] into a standard blocking [InputStream] for streaming
+ * gzip decompression and chunked file writes without buffering entire responses in memory.
+ */
+internal class TunnelResponseInputStream(
+    private val response: TunnelHttpResponse,
+    private val chunkSize: Int = 65536,
+) : InputStream() {
+    private var current: ByteArray? = null
+    private var offset = 0
+    private var eof = false
+
+    override fun read(): Int {
+        val single = ByteArray(1)
+        val n = read(single, 0, 1)
+        return if (n <= 0) -1 else single[0].toInt() and 0xFF
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (len == 0) return 0
+        if (eof) return -1
+        var chunk = current
+        while (chunk == null || offset >= chunk.size) {
+            val next = response.read(chunkSize)
+            if (next == null) {
+                eof = true
+                current = null
+                return -1
+            }
+            if (next.isEmpty()) continue
+            chunk = next
+            current = next
+            offset = 0
+        }
+        val available = chunk.size - offset
+        val copy = minOf(len, available)
+        System.arraycopy(chunk, offset, b, off, copy)
+        offset += copy
+        if (offset >= chunk.size) {
+            current = null
+            offset = 0
+        }
+        return copy
+    }
+
+    override fun close() {
+        runCatching { response.close() }
     }
 }

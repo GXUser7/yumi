@@ -14,9 +14,11 @@ package yumi
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,18 +26,24 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/GXUser7/yumi/core-xray/tun"
 	xlog "github.com/xtls/xray-core/common/log"
 	v2net "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
+	xdns "github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
+	xtun "github.com/xtls/xray-core/proxy/tun"
 	"github.com/xtls/xray-core/transport/internet"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	// Registers every protocol, transport and app with the core's factory tables. Without this
 	// blank import the library links and starts, and then refuses every outbound in the config
@@ -422,25 +430,49 @@ func measureOne(running *core.Instance, tag string, probeURL string, timeout tim
 	return elapsed
 }
 
-// Start brings the core up on the given configuration.
+// TrafficGuard vets inbound connections entering the TUN interface before they are forwarded.
+//
+// Implementations on the Kotlin/Java side MUST catch all Throwables and fail-closed (return false)
+// because gobind does not clear pending JNI exceptions on bool-returning interface callbacks.
+type TrafficGuard interface {
+	AllowConnection(proto int, srcIP []byte, srcPort int, dstIP []byte, dstPort int) bool
+}
+
+// Start brings the core up on the given configuration without a per-connection TrafficGuard.
 //
 // tunFd is the descriptor from VpnService.Builder.establish(). Ownership stays with the app: the
 // core reads and writes it but never closes it, and closing it here would take the tunnel down
 // under a Stop that was meant to be followed by another Start.
 //
-// pinnedTag is the node the balancer must be pointed at before this call returns, and pinning it
-// here rather than from Kotlin is not tidiness. An unpinned balancer picks for itself, so a core
-// that starts and is pinned a moment later routes whatever it managed to dispatch in between
-// through a server nobody chose. Empty leaves the balancer to its own strategy, which is only
-// right when the configuration has no balancer at all.
+// pinnedTag is the node the balancer must be pointed at before this call returns.
 func Start(configJSON string, tunFd int, pinnedTag string, p Protector) error {
+	return startCore(configJSON, tunFd, pinnedTag, p, nil, nil)
+}
+
+// StartWithGuard brings the core up on the given configuration with a guarded TUN inbound.
+//
+// It intercepts the "tun-in" inbound from configJSON, removes it before core.New(config),
+// pins pinnedTag before starting the core, and attaches a guarded core-xray/tun handler
+// that enforces guard on TCP SYNs (pre-SYN-ACK), UDP 5-tuples (including DNS), and ICMP echo.
+func StartWithGuard(configJSON string, tunFd int, pinnedTag string, p Protector, guard TrafficGuard) error {
+	return startCore(configJSON, tunFd, pinnedTag, p, guard, nil)
+}
+
+func startCore(
+	configJSON string,
+	tunFd int,
+	pinnedTag string,
+	p Protector,
+	guard TrafficGuard,
+	epOverride stack.LinkEndpoint,
+) error {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if instance != nil {
 		return errors.New("core is already running")
 	}
-	if tunFd <= 0 {
+	if epOverride == nil && tunFd <= 0 {
 		return errors.New("refusing to start without a tunnel descriptor")
 	}
 
@@ -449,22 +481,64 @@ func Start(configJSON string, tunFd int, pinnedTag string, p Protector) error {
 	protector = p
 	protectorMu.Unlock()
 
-	// The TUN inbound reads this while it is being constructed, which happens inside core.New —
-	// so it has to be set before the config is turned into an instance, not before Start.
-	//
-	// The normalized spelling is used rather than the literal "xray.tun.fd": NewEnvFlag looks both
-	// up (common/platform/platform.go:36-39), and a variable name containing dots is the kind of
-	// thing that works until something in the chain decides otherwise.
-	os.Setenv(platform.NormalizeEnvName(platform.TunFdKey), strconv.Itoa(tunFd))
+	success := false
+	defer func() {
+		if !success {
+			protectorMu.Lock()
+			protector = nil
+			protectorMu.Unlock()
+		}
+	}()
 
 	config, err := serial.LoadJSONConfig(strings.NewReader(configJSON))
 	if err != nil {
 		return err
 	}
 
-	// Read off the built configuration rather than passed in from Kotlin. The list has to describe
-	// what the core actually holds, and the only way to be sure of that is to read what the core
-	// was handed — a list assembled separately drifts the first time one of the two is edited.
+	var tunInbound *core.InboundHandlerConfig
+	tunCount := 0
+	remainingInbounds := make([]*core.InboundHandlerConfig, 0, len(config.Inbound))
+	for _, ic := range config.Inbound {
+		if ic == nil {
+			continue
+		}
+		isTun := ic.GetTag() == "tun-in" ||
+			(ic.GetProxySettings() != nil && ic.GetProxySettings().GetType() == "xray.proxy.tun.Config")
+		if isTun {
+			tunCount++
+			tunInbound = ic
+		} else {
+			remainingInbounds = append(remainingInbounds, ic)
+		}
+	}
+	if tunCount == 0 {
+		return errors.New("configuration has no tun-in inbound")
+	}
+	if tunCount > 1 {
+		return errors.New("configuration has multiple tun-in inbounds")
+	}
+	config.Inbound = remainingInbounds
+
+	var tunCfg *xtun.Config
+	if ps := tunInbound.GetProxySettings(); ps != nil {
+		msg, err := ps.GetInstance()
+		if err != nil {
+			return err
+		}
+		var ok bool
+		tunCfg, ok = msg.(*xtun.Config)
+		if !ok {
+			return errors.New("unexpected proxy settings type for tun-in inbound")
+		}
+	}
+	if tunCfg == nil {
+		tunCfg = &xtun.Config{}
+	}
+
+	// Avoid Go's typed-nil interface trap when passing TrafficGuard into tun.GuardedConfig.
+	tunGuard := tun.NormalizeTrafficGuard(guard)
+
+	// Read off the built configuration rather than passed in from Kotlin.
 	tags := make(map[string]bool)
 	for _, outbound := range config.GetOutbound() {
 		if strings.HasPrefix(outbound.GetTag(), NodeTagPrefix) {
@@ -476,22 +550,25 @@ func Start(configJSON string, tunFd int, pinnedTag string, p Protector) error {
 	if err != nil {
 		return err
 	}
-	if err := started.Start(); err != nil {
-		// Otherwise a core that failed halfway through Start stays half-alive with its listeners
-		// bound, and the next attempt fails on the address instead of on the real reason.
+
+	rawTun, err := core.CreateObject(started, &tun.GuardedConfig{
+		Tag:              tunInbound.GetTag(),
+		ReceiverSettings: tunInbound.GetReceiverSettings(),
+		ProxySettings:    tunInbound.GetProxySettings(),
+		TunConfig:        tunCfg,
+		TunFD:            tunFd,
+		Endpoint:         epOverride,
+		Guard:            tunGuard,
+	})
+	if err != nil {
 		_ = started.Close()
 		return err
 	}
-
-	// After Start, not before: the core's own `app/log` registers a handler while the instance is
-	// coming up (`log.RegisterHandler` keeps exactly one), so installing this any earlier means
-	// installing it and then losing it. The cost is that whatever the core says while starting
-	// goes to its own logger; the app is not listening yet anyway.
-	xlog.RegisterHandler(bridgeHandler{})
-
-	tagsMu.Lock()
-	nodeTags = tags
-	tagsMu.Unlock()
+	tunHandler, ok := rawTun.(inbound.Handler)
+	if !ok {
+		_ = started.Close()
+		return errors.New("guarded tun object does not implement inbound.Handler")
+	}
 
 	if pinnedTag != "" {
 		if !tags[pinnedTag] {
@@ -509,7 +586,32 @@ func Start(configJSON string, tunFd int, pinnedTag string, p Protector) error {
 		}
 	}
 
+	if err := started.Start(); err != nil {
+		_ = started.Close()
+		return err
+	}
+
+	// After Start, not before: the core's own `app/log` registers a handler while the instance is
+	// coming up (`log.RegisterHandler` keeps exactly one). Installing here ensures TUN startup
+	// logs also flow into Android's bridgeHandler.
+	xlog.RegisterHandler(bridgeHandler{})
+
+	ibm, ok := started.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	if !ok || ibm == nil {
+		_ = started.Close()
+		return errors.New("the running configuration has no inbound manager")
+	}
+	if err := ibm.AddHandler(context.Background(), tunHandler); err != nil {
+		_ = started.Close()
+		return err
+	}
+
+	tagsMu.Lock()
+	nodeTags = tags
+	tagsMu.Unlock()
+
 	instance = started
+	success = true
 	return nil
 }
 
@@ -530,8 +632,7 @@ func Stop() error {
 	protectorMu.Unlock()
 
 	// Cleared with the core, so a [SelectOutbound] arriving after the tunnel went down is refused
-	// on the tag rather than on the missing router — the first says which server, the second does
-	// not, and the app puts the message in its journal either way.
+	// on the tag rather than on the missing router.
 	tagsMu.Lock()
 	nodeTags = nil
 	tagsMu.Unlock()
@@ -548,17 +649,730 @@ func IsRunning() bool {
 }
 
 // SetAssetPath names the directory holding geoip.dat and geosite.dat.
-//
-// Routing rules written as `geoip:ru` or `geosite:category-ads` are resolved by reading those files
-// at config-parse time, and when they are missing the whole configuration is rejected rather than
-// the individual rule being skipped. So this must be set before Start, and the caller has to have
-// put the files there.
 func SetAssetPath(dir string) {
 	os.Setenv(platform.NormalizeEnvName(platform.AssetLocation), dir)
 }
 
-// Version reports the core this .aar was built from, so a phone in the field can be matched to a
-// revision without trusting the file name of whatever was installed on it.
+// Version reports the core this .aar was built from.
 func Version() string {
 	return core.Version()
+}
+
+// --- In-process core.Dial bridge (replaces probe-in loopback SOCKS proxy) ---
+
+func runningInstance() (*core.Instance, error) {
+	mu.Lock()
+	running := instance
+	mu.Unlock()
+	if running == nil {
+		return nil, errors.New("core is not running")
+	}
+	return running, nil
+}
+
+// activeOutboundTag returns the balancer's pinned target, falling back to the first
+// balancer candidate when unpinned, or "" if the config has no balancer.
+func activeOutboundTag(running *core.Instance) string {
+	router, ok := running.GetFeature(routing.RouterType()).(routing.Router)
+	if !ok || router == nil {
+		return ""
+	}
+	if overrider, ok := router.(routing.BalancerOverrider); ok {
+		if target, err := overrider.GetOverrideTarget(BalancerTag); err == nil && target != "" {
+			return target
+		}
+	}
+	if pt, ok := router.(routing.BalancerPrincipleTarget); ok {
+		if candidates, err := pt.GetPrincipleTarget(BalancerTag); err == nil && len(candidates) > 0 {
+			return candidates[0]
+		}
+	}
+	return ""
+}
+
+// dialActive dials addr ("host:port") in-process through the running core's active outbound.
+// connCtx must remain alive for the lifetime of the returned net.Conn and is cancelled on Close.
+func dialActive(
+	connCtx context.Context,
+	dialCtx context.Context,
+	running *core.Instance,
+	network string,
+	addr string,
+	resolveDNS bool,
+) (net.Conn, error) {
+	if network == "" {
+		network = "tcp"
+	}
+	tag := activeOutboundTag(running)
+	content := &session.Content{SkipDNSResolve: true}
+	ctx := session.ContextWithContent(connCtx, content)
+	if tag != "" {
+		ctx = session.SetForcedOutboundTagToContext(ctx, tag)
+	}
+
+	dialAddr := addr
+	if resolveDNS {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if net.ParseIP(host) == nil {
+			dc, ok := running.GetFeature(xdns.ClientType()).(xdns.Client)
+			if !ok || dc == nil {
+				return nil, errors.New("no dns client in running configuration")
+			}
+			type dnsResult struct {
+				ips []net.IP
+				err error
+			}
+			ch := make(chan dnsResult, 1)
+			go func() {
+				ips, _, err := dc.LookupIP(host, xdns.IPOption{IPv4Enable: true, IPv6Enable: true})
+				ch <- dnsResult{ips: ips, err: err}
+			}()
+			var ips []net.IP
+			select {
+			case <-dialCtx.Done():
+				return nil, dialCtx.Err()
+			case res := <-ch:
+				if res.err != nil {
+					return nil, res.err
+				}
+				ips = res.ips
+			}
+			chosen := pickResolvedIP(ips)
+			if chosen == nil {
+				return nil, errors.New("dns lookup returned no usable IP addresses")
+			}
+			dialAddr = net.JoinHostPort(chosen.String(), port)
+		}
+	}
+
+	dest, err := v2net.ParseDestination(network + ":" + dialAddr)
+	if err != nil {
+		return nil, err
+	}
+	return core.Dial(ctx, running, dest)
+}
+
+func pickResolvedIP(ips []net.IP) net.IP {
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			return v4
+		}
+	}
+	for _, ip := range ips {
+		if len(ip) > 0 {
+			return ip
+		}
+	}
+	return nil
+}
+
+// deadlineConn wraps cnc.Connection (whose Set*Deadline methods are no-ops) to provide genuine
+// per-operation idle timeouts and explicit net.Conn deadlines backed by timers + cancellation.
+type deadlineConn struct {
+	net.Conn
+	cancel context.CancelFunc
+
+	mu            sync.Mutex
+	readDeadline  time.Time
+	writeDeadline time.Time
+	readTimer     *time.Timer
+	writeTimer    *time.Timer
+	idleRead      time.Duration
+	idleWrite     time.Duration
+	closed        atomic.Bool
+	timedOut      atomic.Bool
+}
+
+func newDeadlineConn(raw net.Conn, cancel context.CancelFunc, idleRead, idleWrite time.Duration) *deadlineConn {
+	return &deadlineConn{
+		Conn:      raw,
+		cancel:    cancel,
+		idleRead:  idleRead,
+		idleWrite: idleWrite,
+	}
+}
+
+func (d *deadlineConn) setIdleTimeouts(idleRead, idleWrite time.Duration) {
+	d.mu.Lock()
+	d.idleRead = idleRead
+	d.idleWrite = idleWrite
+	d.mu.Unlock()
+}
+
+func (d *deadlineConn) onTimeout() {
+	if d.closed.Load() {
+		return
+	}
+	d.timedOut.Store(true)
+	d.cancel()
+	_ = d.Conn.Close()
+}
+
+func (d *deadlineConn) Read(b []byte) (int, error) {
+	if d.timedOut.Load() {
+		return 0, os.ErrDeadlineExceeded
+	}
+	d.mu.Lock()
+	var opTimer *time.Timer
+	if d.readDeadline.IsZero() && d.idleRead > 0 {
+		opTimer = time.AfterFunc(d.idleRead, d.onTimeout)
+	}
+	d.mu.Unlock()
+
+	n, err := d.Conn.Read(b)
+	if opTimer != nil {
+		opTimer.Stop()
+	}
+	if err != nil && d.timedOut.Load() {
+		return n, os.ErrDeadlineExceeded
+	}
+	return n, err
+}
+
+func (d *deadlineConn) Write(b []byte) (int, error) {
+	if d.timedOut.Load() {
+		return 0, os.ErrDeadlineExceeded
+	}
+	d.mu.Lock()
+	var opTimer *time.Timer
+	if d.writeDeadline.IsZero() && d.idleWrite > 0 {
+		opTimer = time.AfterFunc(d.idleWrite, d.onTimeout)
+	}
+	d.mu.Unlock()
+
+	n, err := d.Conn.Write(b)
+	if opTimer != nil {
+		opTimer.Stop()
+	}
+	if err != nil && d.timedOut.Load() {
+		return n, os.ErrDeadlineExceeded
+	}
+	return n, err
+}
+
+func (d *deadlineConn) SetDeadline(t time.Time) error {
+	_ = d.SetReadDeadline(t)
+	return d.SetWriteDeadline(t)
+}
+
+func (d *deadlineConn) SetReadDeadline(t time.Time) error {
+	d.mu.Lock()
+	if d.readTimer != nil {
+		d.readTimer.Stop()
+		d.readTimer = nil
+	}
+	d.readDeadline = t
+	if !t.IsZero() && !d.closed.Load() {
+		dur := time.Until(t)
+		if dur <= 0 {
+			d.mu.Unlock()
+			d.onTimeout()
+			return nil
+		}
+		d.readTimer = time.AfterFunc(dur, d.onTimeout)
+	}
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *deadlineConn) SetWriteDeadline(t time.Time) error {
+	d.mu.Lock()
+	if d.writeTimer != nil {
+		d.writeTimer.Stop()
+		d.writeTimer = nil
+	}
+	d.writeDeadline = t
+	if !t.IsZero() && !d.closed.Load() {
+		dur := time.Until(t)
+		if dur <= 0 {
+			d.mu.Unlock()
+			d.onTimeout()
+			return nil
+		}
+		d.writeTimer = time.AfterFunc(dur, d.onTimeout)
+	}
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *deadlineConn) Close() error {
+	d.closed.Store(true)
+	d.mu.Lock()
+	if d.readTimer != nil {
+		d.readTimer.Stop()
+		d.readTimer = nil
+	}
+	if d.writeTimer != nil {
+		d.writeTimer.Stop()
+		d.writeTimer = nil
+	}
+	d.mu.Unlock()
+	d.cancel()
+	return d.Conn.Close()
+}
+
+// ProbeHTTP performs a single-hop non-redirecting HTTP GET through the running core's active outbound
+// and returns the HTTP status code. When resolveDNS is true, hostnames are resolved through Xray's DNS client.
+func ProbeHTTP(targetURL string, timeoutMillis int, resolveDNS bool) (int, error) {
+	running, err := runningInstance()
+	if err != nil {
+		return 0, err
+	}
+
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+
+	reqCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var connsMu sync.Mutex
+	var conns []*deadlineConn
+
+	tr := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) { return nil, nil },
+		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			connCtx, connCancel := context.WithCancel(context.Background())
+			raw, err := dialActive(connCtx, dialCtx, running, network, addr, resolveDNS)
+			if err != nil {
+				connCancel()
+				return nil, err
+			}
+			dc := newDeadlineConn(raw, connCancel, timeout, timeout)
+			connsMu.Lock()
+			conns = append(conns, dc)
+			connsMu.Unlock()
+			return dc, nil
+		},
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		DisableKeepAlives:     true,
+	}
+	client := &http.Client{
+		Transport:     tr,
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	defer func() {
+		client.CloseIdleConnections()
+		connsMu.Lock()
+		for _, dc := range conns {
+			_ = dc.Close()
+		}
+		connsMu.Unlock()
+	}()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "Yumi")
+	req.Header.Set("Connection", "close")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	if resp.Body != nil {
+		_, _ = io.CopyN(io.Discard, resp.Body, 8192)
+		_ = resp.Body.Close()
+	}
+	return resp.StatusCode, nil
+}
+
+// HTTPResponse represents a single-hop streaming HTTP response obtained via OpenHTTP.
+type HTTPResponse struct {
+	StatusCode      int
+	ContentLength   int64
+	ContentEncoding string
+	Location        string
+	HeadersJSON     string
+
+	headers http.Header
+	body    io.ReadCloser
+	cancel  context.CancelFunc
+	conn    *deadlineConn
+	mu      sync.Mutex
+	closed  bool
+}
+
+// OpenHTTP performs a single-hop non-redirecting HTTP request through the running core's active outbound.
+// Callers must invoke Close() when finished reading the body.
+func OpenHTTP(
+	method string,
+	targetURL string,
+	headersJSON string,
+	connectTimeoutMillis int,
+	readTimeoutMillis int,
+	resolveDNS bool,
+) (*HTTPResponse, error) {
+	running, err := runningInstance()
+	if err != nil {
+		return nil, err
+	}
+
+	method = strings.TrimSpace(method)
+	if method == "" {
+		method = http.MethodGet
+	}
+
+	var parsedHeaders map[string]string
+	if strings.TrimSpace(headersJSON) != "" {
+		if err := json.Unmarshal([]byte(headersJSON), &parsedHeaders); err != nil {
+			return nil, fmt.Errorf("invalid headersJSON: %w", err)
+		}
+	}
+
+	connectTimeout := time.Duration(connectTimeoutMillis) * time.Millisecond
+	if connectTimeout <= 0 {
+		connectTimeout = 15 * time.Second
+	}
+	readTimeout := time.Duration(readTimeoutMillis) * time.Millisecond
+	if readTimeout <= 0 {
+		readTimeout = 30 * time.Second
+	}
+
+	connCtx, connCancel := context.WithCancel(context.Background())
+
+	var dcMu sync.Mutex
+	var activeDC *deadlineConn
+
+	tr := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) { return nil, nil },
+		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			dCtx, dCancel := context.WithTimeout(dialCtx, connectTimeout)
+			defer dCancel()
+			raw, err := dialActive(connCtx, dCtx, running, network, addr, resolveDNS)
+			if err != nil {
+				return nil, err
+			}
+			dc := newDeadlineConn(raw, connCancel, connectTimeout, connectTimeout)
+			dcMu.Lock()
+			activeDC = dc
+			dcMu.Unlock()
+			return dc, nil
+		},
+		TLSHandshakeTimeout:   connectTimeout,
+		ResponseHeaderTimeout: connectTimeout,
+		DisableKeepAlives:     true,
+	}
+
+	req, err := http.NewRequestWithContext(connCtx, method, targetURL, nil)
+	if err != nil {
+		connCancel()
+		return nil, err
+	}
+	for k, v := range parsedHeaders {
+		if strings.EqualFold(k, "Host") {
+			req.Host = v
+		}
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{
+		Transport:     tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		dcMu.Lock()
+		dc := activeDC
+		dcMu.Unlock()
+		if dc != nil {
+			_ = dc.Close()
+		}
+		connCancel()
+		return nil, err
+	}
+
+	dcMu.Lock()
+	dc := activeDC
+	dcMu.Unlock()
+	if dc != nil {
+		dc.setIdleTimeouts(readTimeout, readTimeout)
+	}
+
+	flatHeaders := make(map[string]string, len(resp.Header))
+	for k, vals := range resp.Header {
+		flatHeaders[strings.ToLower(k)] = strings.Join(vals, ", ")
+	}
+	encodedHeaders, err := json.Marshal(flatHeaders)
+	if err != nil {
+		encodedHeaders = []byte("{}")
+	}
+
+	return &HTTPResponse{
+		StatusCode:      resp.StatusCode,
+		ContentLength:   resp.ContentLength,
+		ContentEncoding: resp.Header.Get("Content-Encoding"),
+		Location:        resp.Header.Get("Location"),
+		HeadersJSON:     string(encodedHeaders),
+		headers:         resp.Header,
+		body:            resp.Body,
+		cancel:          connCancel,
+		conn:            dc,
+	}, nil
+}
+
+// Header returns the case-insensitive response header value, or "" if absent.
+func (r *HTTPResponse) Header(name string) string {
+	if r == nil || r.headers == nil {
+		return ""
+	}
+	return r.headers.Get(name)
+}
+
+// Read reads up to maxBytes from the response body, returning (nil, nil) on EOF.
+func (r *HTTPResponse) Read(maxBytes int) ([]byte, error) {
+	if r == nil {
+		return nil, errors.New("nil HTTPResponse")
+	}
+	if maxBytes <= 0 {
+		maxBytes = 65536
+	} else if maxBytes > 1<<20 {
+		maxBytes = 1 << 20
+	}
+
+	r.mu.Lock()
+	closed := r.closed
+	body := r.body
+	r.mu.Unlock()
+	if closed || body == nil {
+		return nil, nil
+	}
+
+	buf := make([]byte, maxBytes)
+	n, err := body.Read(buf)
+	if n > 0 {
+		return buf[:n], nil
+	}
+	if errors.Is(err, io.EOF) {
+		return nil, nil
+	}
+	return nil, err
+}
+
+// ReadAll reads the remaining response body up to maxBytes (all bytes if maxBytes <= 0).
+func (r *HTTPResponse) ReadAll(maxBytes int64) ([]byte, error) {
+	if r == nil {
+		return nil, errors.New("nil HTTPResponse")
+	}
+	r.mu.Lock()
+	closed := r.closed
+	body := r.body
+	r.mu.Unlock()
+	if closed || body == nil {
+		return nil, nil
+	}
+	if maxBytes > 0 {
+		return io.ReadAll(io.LimitReader(body, maxBytes))
+	}
+	return io.ReadAll(body)
+}
+
+// Close closes the response body and underlying connection.
+func (r *HTTPResponse) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	body := r.body
+	dc := r.conn
+	cancel := r.cancel
+	r.mu.Unlock()
+
+	var err error
+	if body != nil {
+		err = body.Close()
+	}
+	if dc != nil {
+		_ = dc.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return err
+}
+
+// TunnelConn wraps a bidirectional stream dialled in-process through Xray's active outbound.
+type TunnelConn struct {
+	conn    net.Conn
+	rawConn *deadlineConn
+	cancel  context.CancelFunc
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// DialTunnel opens a raw TCP or UDP stream through the running core's active outbound.
+func DialTunnel(network string, addr string, timeoutMillis int) (*TunnelConn, error) {
+	running, err := runningInstance()
+	if err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 6 * time.Second
+	}
+
+	connCtx, cancel := context.WithCancel(context.Background())
+	dialCtx, dialCancel := context.WithTimeout(connCtx, timeout)
+	defer dialCancel()
+
+	raw, err := dialActive(connCtx, dialCtx, running, network, addr, false)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	dc := newDeadlineConn(raw, cancel, 0, 0)
+	return &TunnelConn{
+		conn:    dc,
+		rawConn: dc,
+		cancel:  cancel,
+	}, nil
+}
+
+// DialTunnelTLS opens a TLS-over-TCP stream through the running core's active outbound.
+func DialTunnelTLS(host string, port int, serverName string, timeoutMillis int) (*TunnelConn, error) {
+	running, err := runningInstance()
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		return nil, errors.New("host must not be empty")
+	}
+	if port <= 0 || port > 65535 {
+		return nil, errors.New("invalid port")
+	}
+
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 6 * time.Second
+	}
+
+	connCtx, cancel := context.WithCancel(context.Background())
+	dialCtx, dialCancel := context.WithTimeout(connCtx, timeout)
+	defer dialCancel()
+
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	raw, err := dialActive(connCtx, dialCtx, running, "tcp", addr, false)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	dc := newDeadlineConn(raw, cancel, 0, 0)
+
+	sni := serverName
+	if sni == "" {
+		sni = host
+	}
+	_ = dc.SetDeadline(time.Now().Add(timeout))
+	tlsConn := tls.Client(dc, &tls.Config{
+		ServerName: sni,
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+		_ = dc.Close()
+		return nil, err
+	}
+	_ = dc.SetDeadline(time.Time{})
+
+	return &TunnelConn{
+		conn:    tlsConn,
+		rawConn: dc,
+		cancel:  cancel,
+	}, nil
+}
+
+// SetReadTimeout sets the per-operation idle read timeout in milliseconds (<= 0 disables).
+func (c *TunnelConn) SetReadTimeout(timeoutMillis int) {
+	if c == nil || c.rawConn == nil {
+		return
+	}
+	d := time.Duration(timeoutMillis) * time.Millisecond
+	if d < 0 {
+		d = 0
+	}
+	c.rawConn.mu.Lock()
+	c.rawConn.idleRead = d
+	c.rawConn.mu.Unlock()
+}
+
+// SetWriteTimeout sets the per-operation idle write timeout in milliseconds (<= 0 disables).
+func (c *TunnelConn) SetWriteTimeout(timeoutMillis int) {
+	if c == nil || c.rawConn == nil {
+		return
+	}
+	d := time.Duration(timeoutMillis) * time.Millisecond
+	if d < 0 {
+		d = 0
+	}
+	c.rawConn.mu.Lock()
+	c.rawConn.idleWrite = d
+	c.rawConn.mu.Unlock()
+}
+
+// Read reads up to maxBytes from the stream, returning (nil, nil) on EOF.
+func (c *TunnelConn) Read(maxBytes int) ([]byte, error) {
+	if c == nil || c.conn == nil {
+		return nil, errors.New("nil TunnelConn")
+	}
+	if maxBytes <= 0 {
+		maxBytes = 65536
+	} else if maxBytes > 1<<20 {
+		maxBytes = 1 << 20
+	}
+	buf := make([]byte, maxBytes)
+	n, err := c.conn.Read(buf)
+	if n > 0 {
+		return buf[:n], nil
+	}
+	if errors.Is(err, io.EOF) {
+		return nil, nil
+	}
+	return nil, err
+}
+
+// Write writes data to the stream.
+func (c *TunnelConn) Write(data []byte) (int, error) {
+	if c == nil || c.conn == nil {
+		return 0, errors.New("nil TunnelConn")
+	}
+	return c.conn.Write(data)
+}
+
+// Close closes the underlying transport immediately without waiting on TLS close-notify.
+func (c *TunnelConn) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	raw := c.rawConn
+	cancel := c.cancel
+	c.mu.Unlock()
+
+	var err error
+	if raw != nil {
+		err = raw.Close()
+	} else if c.conn != nil {
+		err = c.conn.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return err
 }

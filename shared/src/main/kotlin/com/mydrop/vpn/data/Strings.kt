@@ -22,9 +22,21 @@ import java.util.Locale
  * a `Configuration` for each of them would be a waste. The cache is keyed by the tag, so changing
  * the language invalidates it on the next call.
  */
-class Strings(context: Context, private val language: () -> AppLanguage) {
+open class Strings {
 
-    private val base = context.applicationContext
+    private val base: Context?
+    private val language: () -> AppLanguage
+
+    constructor(context: Context, language: () -> AppLanguage) {
+        this.base = context.applicationContext
+        this.language = language
+    }
+
+    internal constructor() {
+        this.base = null
+        this.language = { AppLanguage.System }
+    }
+
     private val lock = Any()
 
     private var cachedTag: String? = null
@@ -37,13 +49,14 @@ class Strings(context: Context, private val language: () -> AppLanguage) {
      * — values-ru on a Russian phone, the default English everywhere else.
      */
     fun context(): Context {
-        val tag = language().tag ?: return base
+        val root = checkNotNull(base) { "No Android Context bound to Strings" }
+        val tag = language().tag ?: return root
         synchronized(lock) {
             cached?.let { if (cachedTag == tag) return it }
-            val configuration = Configuration(base.resources.configuration).apply {
+            val configuration = Configuration(root.resources.configuration).apply {
                 setLocales(LocaleList(Locale.forLanguageTag(tag)))
             }
-            return base.createConfigurationContext(configuration).also {
+            return root.createConfigurationContext(configuration).also {
                 cachedTag = tag
                 cached = it
             }
@@ -55,10 +68,10 @@ class Strings(context: Context, private val language: () -> AppLanguage) {
      * `String.format` whatever it is handed, and a string that legitimately contains a `%` would
      * throw rather than be returned as written.
      */
-    fun get(@StringRes id: Int, vararg formatArgs: Any): String =
+    open fun get(@StringRes id: Int, vararg formatArgs: Any): String =
         if (formatArgs.isEmpty()) context().getString(id) else context().getString(id, *formatArgs)
 
     /** The count is passed twice on purpose: once to pick the form, once to fill `%1$d`. */
-    fun plural(@PluralsRes id: Int, count: Int): String =
+    open fun plural(@PluralsRes id: Int, count: Int): String =
         context().resources.getQuantityString(id, count, count)
 }

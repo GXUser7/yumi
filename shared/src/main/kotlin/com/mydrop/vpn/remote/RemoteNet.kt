@@ -4,10 +4,59 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import com.mydrop.vpn.core.net.isNumericAddress
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.Inet4Address
 import java.net.InetAddress
+
+internal data class NetworkTransportFlags(
+    val hasWifi: Boolean,
+    val hasEthernet: Boolean,
+    val hasVpn: Boolean,
+)
+
+internal fun isLanTransport(flags: NetworkTransportFlags): Boolean =
+    !flags.hasVpn && (flags.hasWifi || flags.hasEthernet)
+
+internal fun NetworkCapabilities.toTransportFlags(): NetworkTransportFlags = NetworkTransportFlags(
+    hasWifi = hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+    hasEthernet = hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+    hasVpn = hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+)
+
+internal data class LanNetworkCandidate<T>(
+    val value: T,
+    val transports: NetworkTransportFlags,
+    val addresses: List<InetAddress>,
+)
+
+internal fun <T> filterLanCandidates(
+    candidates: Iterable<LanNetworkCandidate<T>>,
+): List<LanNetworkCandidate<T>> = candidates.filter { isLanTransport(it.transports) }
+
+internal fun <T> selectLanAddress(
+    candidates: Iterable<LanNetworkCandidate<T>>,
+): Inet4Address? = filterLanCandidates(candidates).asSequence()
+    .flatMap { it.addresses.asSequence() }
+    .filterIsInstance<Inet4Address>()
+    .firstOrNull { isLanPrivateIpv4(it) }
+
+/** Excludes the Xray TUN subnet 172.19.0.0/30 (e.g. 172.19.0.1 / 172.19.0.2). */
+internal fun isTunSubnetIpv4(address: Inet4Address): Boolean {
+    val bytes = address.address
+    return bytes.size == 4 &&
+        bytes[0] == 172.toByte() &&
+        bytes[1] == 19.toByte() &&
+        bytes[2] == 0.toByte() &&
+        (bytes[3].toInt() and 0xFC) == 0
+}
+
+internal fun isLanPrivateIpv4(address: InetAddress): Boolean =
+    address is Inet4Address &&
+        address.isSiteLocalAddress &&
+        !address.isLoopbackAddress &&
+        !isTunSubnetIpv4(address)
 
 /*
  * The local network, as the remote needs it.
@@ -22,14 +71,11 @@ import java.net.InetAddress
  * by the right door" are not quite the same statement on a phone holding several networks at once.
  */
 
-/** Wi-Fi and Ethernet, in that order of usefulness. Cellular can never carry a remote. */
+/** Wi-Fi and Ethernet (never VPN), in that order of usefulness. Cellular can never carry a remote. */
 internal fun localNetworks(context: Context): List<Network> {
     val manager = context.getSystemService(ConnectivityManager::class.java) ?: return emptyList()
     return manager.allNetworks.filter { network ->
-        manager.getNetworkCapabilities(network)?.let {
-            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        } == true
+        manager.getNetworkCapabilities(network)?.toTransportFlags()?.let(::isLanTransport) == true
     }
 }
 
@@ -40,7 +86,7 @@ internal fun localAddress(context: Context): Inet4Address? {
         .flatMap { manager.getLinkProperties(it)?.linkAddresses.orEmpty().asSequence() }
         .map { it.address }
         .filterIsInstance<Inet4Address>()
-        .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+        .firstOrNull { isLanPrivateIpv4(it) }
 }
 
 /**
@@ -57,7 +103,7 @@ internal fun broadcastAddresses(context: Context): List<InetAddress> {
         localNetworks(context).flatMap { network ->
             it.getLinkProperties(network)?.linkAddresses.orEmpty().mapNotNull { link ->
                 val address = link.address as? Inet4Address ?: return@mapNotNull null
-                if (!address.isSiteLocalAddress || link.prefixLength !in 1..31) return@mapNotNull null
+                if (!isLanPrivateIpv4(address) || link.prefixLength !in 1..31) return@mapNotNull null
                 val raw = address.address.fold(0L) { acc, byte -> (acc shl 8) or (byte.toLong() and 0xFF) }
                 val hostBits = 32 - link.prefixLength
                 val broadcast = raw or ((1L shl hostBits) - 1)
@@ -79,8 +125,7 @@ internal fun broadcastAddresses(context: Context): List<InetAddress> {
 
 /** Refuses to talk to anything off the local network, which a remote has no business reaching. */
 internal fun isPrivateIpv4(host: String): Boolean = runCatching {
-    val address = InetAddress.getByName(host)
-    address is Inet4Address && address.isSiteLocalAddress && !address.isLoopbackAddress
+    isNumericAddress(host) && isLanPrivateIpv4(InetAddress.getByName(host))
 }.getOrDefault(false)
 
 /* ── Framing ──────────────────────────────────────────────────────────────────────────────── */

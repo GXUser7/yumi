@@ -17,6 +17,7 @@ import com.mydrop.vpn.core.model.GeoZoneStoreState
 import com.mydrop.vpn.core.model.LatLon
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.LogEntry
+import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.SpeedPhase
@@ -31,6 +32,7 @@ import com.mydrop.vpn.core.parse.DeepLinkPayload
 import com.mydrop.vpn.core.parse.DnsUriParser
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
+import com.mydrop.vpn.data.FilteredPingCoordinator
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.data.ConnectOutcome
@@ -41,6 +43,10 @@ import com.mydrop.vpn.pairing.PairingInvite
 import com.mydrop.vpn.pairing.SubscriptionTransfer
 import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.remote.RemoteInvite
+import com.mydrop.vpn.ui.screens.servers.ServerFilterState
+import com.mydrop.vpn.ui.screens.servers.ServerSort
+import com.mydrop.vpn.ui.screens.servers.filteredNodesForPing
+import com.mydrop.vpn.vpn.XrayCore
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -87,6 +93,7 @@ data class ServersUiState(
     val latencies: Map<String, LatencyResult> = emptyMap(),
     val collapsedGroupIds: Set<String> = emptySet(),
     val pingingNodeIds: Set<String> = emptySet(),
+    val filter: ServerFilterState = ServerFilterState(),
 ) {
     /** Servers not attached to any subscription, shown as a synthetic "added manually" group. */
     fun manualNodes(): List<ProxyNode> = nodes.filter { node ->
@@ -220,15 +227,25 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     private val uiNodesCache = VisibleNodesCache()
     private val serversNodesCache = VisibleNodesCache()
+    private val serverFilter = MutableStateFlow(ServerFilterState())
+    private val pingCoordinator = FilteredPingCoordinator(viewModelScope, container.profiles::recordLatency)
+    private val transientState = combine(
+        transient,
+        container.subscriptionRefresher.running,
+        pingCoordinator.pingingNodeIds,
+    ) { state, running, coordinatorPinging ->
+        state.copy(
+            pingingNodeIds = state.pingingNodeIds + coordinatorPinging,
+            refreshingSubscriptionIds = state.refreshingSubscriptionIds + running,
+        )
+    }
 
     val uiState: StateFlow<MainUiState> = combine(
         container.profiles.state,
         container.settings.settings,
         container.tunnel.state,
         container.tunnel.traffic,
-        combine(transient, container.subscriptionRefresher.running) { state, running ->
-            state.copy(refreshingSubscriptionIds = state.refreshingSubscriptionIds + running)
-        },
+        transientState,
     ) { profiles, settings, vpnState, traffic, transient ->
         val visibleNodes = uiNodesCache.resolve(profiles)
         MainUiState(
@@ -261,10 +278,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.settings.settings
             .map { it.collapsedGroupIds }
             .distinctUntilChanged(),
-        transient
+        transientState
             .map { it.pingingNodeIds }
             .distinctUntilChanged(),
-    ) { profile, collapsedGroupIds, pingingNodeIds ->
+        serverFilter,
+    ) { profile, collapsedGroupIds, pingingNodeIds, filter ->
         ServersUiState(
             nodes = profile.nodes,
             subscriptions = profile.subscriptions,
@@ -272,6 +290,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             latencies = profile.latencies,
             collapsedGroupIds = collapsedGroupIds,
             pingingNodeIds = pingingNodeIds,
+            filter = filter,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -284,6 +303,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 latencies = profiles.latencies,
                 collapsedGroupIds = container.settings.value.collapsedGroupIds,
                 pingingNodeIds = transient.value.pingingNodeIds,
+                filter = serverFilter.value,
             )
         },
     )
@@ -315,7 +335,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun startSpeedTest() {
         if (speedTestJob?.isActive == true) return
         val connected = uiState.value.vpnState is VpnState.Connected
-        val probe = if (connected) container.tunnelConfigs.probe.value else null
+        val throughTunnel = connected && container.tunnel.isReal && XrayCore.running
         val serverName = uiState.value.selectedNode?.name
 
         speedTestJob = viewModelScope.launch {
@@ -326,7 +346,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             var uploadTrace = emptyList<Long>()
             var tracedPhase: SpeedPhase? = null
 
-            container.speedTester.measure(probe, serverName).collect { measured ->
+            container.speedTester.measure(throughTunnel, serverName).collect { measured ->
                 if (measured.phase != tracedPhase) {
                     // The phase that just ended keeps its trace; the results panel draws it after
                     // the run, so it has to outlive the phase that produced it.
@@ -538,24 +558,73 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      * Only this sweep's ids are cleared at the end, so a single server being measured from its own
      * menu keeps its spinner until its own answer arrives.
      */
-    fun pingAll() {
-        if (pingAllJob?.isActive == true) return
-        val nodes = container.profiles.nodes
-        if (nodes.isEmpty()) return
-        val ids = nodes.map { it.id }.toSet()
-        pingAllJob = viewModelScope.launch {
-            transient.update { it.copy(pingingNodeIds = it.pingingNodeIds + ids) }
-            try {
-                val mode = container.settings.value.pingMode
-                container.latencyTester.measureAll(nodes, mode) { result ->
-                    container.profiles.recordLatency(result)
-                    transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - result.nodeId) }
-                }
-            } finally {
-                transient.update { it.copy(pingingNodeIds = it.pingingNodeIds - ids) }
+    fun setServerQuery(query: String) {
+        serverFilter.update { it.copy(query = query) }
+    }
+
+    fun setServerSort(sort: ServerSort) {
+        serverFilter.update { it.copy(sort = sort) }
+    }
+
+    fun toggleServerProtocol(protocol: Protocol) {
+        serverFilter.update { current ->
+            val updated = if (protocol in current.selectedProtocols) {
+                current.selectedProtocols - protocol
+            } else {
+                current.selectedProtocols + protocol
             }
-            emit(R.string.message_latency_done)
+            current.copy(selectedProtocols = updated)
         }
+    }
+
+    fun clearServerProtocols() {
+        serverFilter.update { it.copy(selectedProtocols = emptySet()) }
+    }
+
+    fun toggleServerCountry(code: String) {
+        serverFilter.update { current ->
+            val updated = if (code in current.selectedCountries) {
+                current.selectedCountries - code
+            } else {
+                current.selectedCountries + code
+            }
+            current.copy(selectedCountries = updated)
+        }
+    }
+
+    fun clearServerCountries() {
+        serverFilter.update { it.copy(selectedCountries = emptySet()) }
+    }
+
+    fun resetServerFilters() {
+        serverFilter.update {
+            it.copy(
+                sort = ServerSort.Default,
+                selectedProtocols = emptySet(),
+                selectedCountries = emptySet(),
+            )
+        }
+    }
+
+    fun pingAll() {
+        if (pingAllJob?.isActive == true || pingCoordinator.isRunning) return
+        val filter = serverFilter.value
+        val profileState = container.profiles.state.value
+        val nodes = filteredNodesForPing(
+            nodes = profileState.visibleNodes,
+            subscriptions = profileState.subscriptions,
+            latencies = if (filter.sort == ServerSort.Latency) profileState.latencies else emptyMap(),
+            filter = filter,
+        )
+        if (nodes.isEmpty()) return
+        pingAllJob = pingCoordinator.ping(
+            nodes = nodes,
+            mode = container.settings.value.pingMode,
+            measure = { targetNodes, mode, onResult ->
+                container.latencyTester.measureAll(targetNodes, mode, onResult)
+            },
+            onComplete = { emit(R.string.message_latency_done) },
+        )
     }
 
     fun selectFastest() {

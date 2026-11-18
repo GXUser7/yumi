@@ -2,15 +2,11 @@ package com.mydrop.vpn.data
 
 import android.content.Context
 import com.mydrop.vpn.shared.R
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.dialed
 import com.mydrop.vpn.core.xray.XrayConfigFactory
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -120,8 +116,6 @@ class TunnelConfigBuilder(
      */
     val dns: StateFlow<DnsInForce?> = _dns.asStateFlow()
 
-    private val _probe = MutableStateFlow<ProbeEndpoint?>(null)
-
     private val _switchable = MutableStateFlow<Set<String>>(emptySet())
 
     private val _dnsFallback = MutableStateFlow(false)
@@ -144,21 +138,19 @@ class TunnelConfigBuilder(
     val dnsFallback: StateFlow<Boolean> = _dnsFallback.asStateFlow()
 
     /**
-     * Forgets the loopback inbound when the tunnel carrying it goes away.
-     *
-     * Left standing, the port it names is closed but the endpoint is not null, so the health check
-     * reads a refused connection as "the server did not answer" instead of "there is nothing to
-     * ask" — and the direct measurement it is supposed to fall back on is never reached.
+     * Clears the document-scoped metadata when the tunnel carrying it goes away.
      */
-    fun forgetProbe() {
-        _probe.value = null
-        // The group belongs to the same dead tunnel as the inbound. A stale one would let the
+    fun forgetDocument() {
+        // The group belongs to the same dead tunnel as the document. A stale one would let the
         // watchdog keep choosing from servers the next core has never been told about.
         _switchable.value = emptySet()
         _ipv6.value = null
         _dns.value = null
         _providerInForce.value = null
     }
+
+    @Deprecated("probe-in removed", ReplaceWith("forgetDocument()"))
+    fun forgetProbe() = forgetDocument()
 
     /** The provider profile the running document was built with; null for none, or no document. */
     private val _providerInForce = MutableStateFlow<ProviderProfile?>(null)
@@ -190,13 +182,6 @@ class TunnelConfigBuilder(
     }
 
     /**
-     * How to reach the core of the tunnel this builder last configured, for the speed test. Null
-     * when no loopback port could be claimed — the tunnel is worth more than the measurement, so
-     * that case drops the inbound rather than the connection.
-     */
-    val probe: StateFlow<ProbeEndpoint?> = _probe.asStateFlow()
-
-    /**
      * Ids of every server written into the running core's selector group.
      *
      * Recorded because deriving the same list twice does not reliably produce the same answer —
@@ -214,7 +199,6 @@ class TunnelConfigBuilder(
         val geoAvailable = geoAvailable()
         if (!geoAvailable) logs.warn(R.string.log_geo_missing)
 
-        val probe = newProbeEndpoint()
         val group = switchableGroup(node)
 
         // Decided here, per document, rather than read from the setting by the factory: the setting
@@ -239,7 +223,6 @@ class TunnelConfigBuilder(
                 nodes = group,
                 selected = node,
                 settings = effective,
-                probe = probe,
                 dnsOverride = selectedDns(),
                 geoAvailable = geoAvailable,
                 provider = provider,
@@ -264,9 +247,6 @@ class TunnelConfigBuilder(
             document.verificationForced.forEach { name ->
                 logs.warn(R.string.log_tls_verification_forced, name)
             }
-            // Only once the document exists: publishing an endpoint for a configuration that was
-            // never handed to the core would point the speed test at a port nothing listens on.
-            _probe.value = probe
             // Only what the core is about to be given, and only once the document it goes into
             // exists. A group published for a configuration that was never built would send the
             // watchdog at servers no core holds.
@@ -281,30 +261,9 @@ class TunnelConfigBuilder(
                 mode = effective.routingMode,
             )
             _providerInForce.value = provider
-            // The port, never the credentials. An inbound that fails to bind takes the whole
-            // tunnel with it, and this line is the only way to tell that apart from a bad server
-            // when reading a log off the device.
-            probe?.let { logs.debug(R.string.log_probe_port, it.port) }
         }.getOrElse { error ->
             logs.error(R.string.log_config_failed, error.message.orEmpty())
             null
         }
     }
-
-    /**
-     * A port the kernel has just confirmed is free, rather than a constant.
-     *
-     * An inbound that cannot bind fails the whole tunnel, not just the speed test, and a fixed port
-     * is exactly the kind of thing another VPN client on the same phone has already taken. The
-     * socket is closed before the core is asked to listen, so the window for someone else to claim
-     * it is the few milliseconds in between.
-     */
-    private fun newProbeEndpoint(): ProbeEndpoint? = runCatching {
-        val port = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
-        ProbeEndpoint(
-            port = port,
-            username = UUID.randomUUID().toString(),
-            password = UUID.randomUUID().toString(),
-        )
-    }.getOrNull()
 }

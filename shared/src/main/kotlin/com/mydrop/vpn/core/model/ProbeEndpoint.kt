@@ -14,6 +14,7 @@ import java.net.URI
  * The credentials are generated per connection and the inbound listens on loopback only. Without
  * them any application on the phone could use the running tunnel as an open proxy.
  */
+@Deprecated("probe-in loopback proxy removed; use XrayCore.TunnelBridge")
 data class ProbeEndpoint(
     val port: Int,
     val username: String,

@@ -4,14 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
-import android.util.LruCache
-import com.mydrop.vpn.core.model.ProbeEndpoint
+import com.mydrop.vpn.vpn.TunnelBridge
+import com.mydrop.vpn.vpn.XrayCore
 import java.io.File
-import java.net.Authenticator
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.PasswordAuthentication
-import java.net.Proxy
 import java.net.URL
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -24,22 +20,32 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Fetches and caches 256×256 OpenStreetMap tiles on disk (`cacheDir/map_tiles`) and in memory.
  *
- * Requests go through the running tunnel's loopback SOCKS inbound when available, falling back
- * to direct connection so city street tiles remain accessible under whitelist/DPI filtering and
- * survive offline once cached.
+ * Requests go through the running tunnel in-process via [XrayCore.TunnelBridge.openHTTP] when
+ * available, falling back to direct connection so city street tiles remain accessible under
+ * whitelist/DPI filtering and survive offline once cached.
  */
-class MapTileStore(
-    context: Context,
+class MapTileStore internal constructor(
+    cacheDir: File,
     private val scope: CoroutineScope,
-    private val probeEndpoint: () -> ProbeEndpoint? = { null },
+    private val bridge: TunnelBridge = XrayCore,
 ) {
-    private val cacheRoot = File(context.cacheDir, TILE_DIR)
-    private val memoryCache = object : LruCache<String, Bitmap>(MEMORY_CAPACITY_TILES) {
-        override fun sizeOf(key: String, value: Bitmap): Int = 1
+    constructor(
+        context: Context,
+        scope: CoroutineScope,
+        bridge: TunnelBridge = XrayCore,
+    ) : this(context.cacheDir, scope, bridge)
+
+    private val cacheRoot = File(cacheDir, TILE_DIR)
+    private val memoryLock = Any()
+    private val memoryCache = object : LinkedHashMap<String, Bitmap>(MEMORY_CAPACITY_TILES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean =
+            size > MEMORY_CAPACITY_TILES
     }
     private val inFlight = Collections.synchronizedSet(HashSet<String>())
     private val failedUntil = ConcurrentHashMap<String, Long>()
@@ -55,7 +61,7 @@ class MapTileStore(
         val wrappedX = ((x % worldTiles) + worldTiles) % worldTiles
         val key = "$z/$wrappedX/$y"
 
-        memoryCache.get(key)?.let { return it }
+        synchronized(memoryLock) { memoryCache[key] }?.let { return it }
 
         val retryAt = failedUntil[key]
         if (retryAt != null && SystemClock.elapsedRealtime() < retryAt) return null
@@ -73,7 +79,7 @@ class MapTileStore(
     }
 
     fun clearCache() {
-        memoryCache.evictAll()
+        synchronized(memoryLock) { memoryCache.clear() }
         failedUntil.clear()
         scope.launch(Dispatchers.IO) {
             runCatching { cacheRoot.deleteRecursively() }
@@ -86,7 +92,7 @@ class MapTileStore(
         if (file.isFile && file.length() > 0L) {
             val cached = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
             if (cached != null) {
-                memoryCache.put(key, cached)
+                synchronized(memoryLock) { memoryCache[key] = cached }
                 _revision.update { it + 1 }
                 return
             }
@@ -120,32 +126,49 @@ class MapTileStore(
                 }
             }
             failedUntil.remove(key)
-            memoryCache.put(key, bitmap)
+            synchronized(memoryLock) { memoryCache[key] = bitmap }
             _revision.update { it + 1 }
         }
     }
 
-    private fun fetchBytes(z: Int, x: Int, y: Int): ByteArray? {
+    internal fun fetchBytes(z: Int, x: Int, y: Int): ByteArray? {
         val url = "https://tile.openstreetmap.org/$z/$x/$y.png"
-        val probe = probeEndpoint()
-        if (probe != null) {
-            val viaTunnel = runCatching { downloadWithProxy(url, probe) }.getOrNull()
+        if (bridge.isRunning) {
+            val viaTunnel = runCatching { downloadViaTunnel(url) }.getOrNull()
             if (viaTunnel != null) return viaTunnel
         }
         return runCatching { downloadDirect(url) }.getOrNull()
     }
 
-    private fun downloadWithProxy(url: String, probe: ProbeEndpoint): ByteArray? {
-        Authenticator.setDefault(object : Authenticator() {
-            override fun getPasswordAuthentication(): PasswordAuthentication? {
-                if (requestingHost != LOOPBACK || requestingPort != probe.port) return null
-                return PasswordAuthentication(probe.username, probe.password.toCharArray())
+    private fun downloadViaTunnel(url: String): ByteArray? {
+        val headersJson = buildJsonObject {
+            put("User-Agent", TILE_USER_AGENT)
+        }.toString()
+        var current = url
+        repeat(MAX_REDIRECTS) {
+            val response = bridge.openHTTP(
+                method = "GET",
+                targetURL = current,
+                headersJSON = headersJson,
+                connectTimeoutMillis = CONNECT_TIMEOUT_MS,
+                readTimeoutMillis = READ_TIMEOUT_MS,
+                resolveDNS = false,
+            )
+            try {
+                val code = response.statusCode
+                if (code in 300..399) {
+                    val location = response.location.takeIf { it.isNotBlank() } ?: return null
+                    current = URL(URL(current), location).toString()
+                    return@repeat
+                }
+                if (code !in 200..299) return null
+                val bytes = response.readAll(MAX_TILE_BYTES + 1L)
+                return if (bytes.size in 64..MAX_TILE_BYTES) bytes else null
+            } finally {
+                runCatching { response.close() }
             }
-        })
-        val connection = URL(url).openConnection(
-            Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, probe.port)),
-        ) as HttpURLConnection
-        return readImageResponse(connection)
+        }
+        return null
     }
 
     private fun downloadDirect(url: String): ByteArray? {
@@ -178,7 +201,7 @@ class MapTileStore(
         const val CONNECT_TIMEOUT_MS = 6_000
         const val READ_TIMEOUT_MS = 8_000
         const val MAX_TILE_BYTES = 512 * 1024
-        const val LOOPBACK = "127.0.0.1"
+        const val MAX_REDIRECTS = 5
         const val TILE_USER_AGENT = "YumiVPN/2.1 (Android; https://github.com/GXUser7/yumi)"
     }
 }

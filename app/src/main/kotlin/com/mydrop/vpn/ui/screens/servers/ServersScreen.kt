@@ -4,7 +4,6 @@ import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,6 +53,7 @@ import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -69,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,6 +79,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -112,6 +114,65 @@ enum class ServerSort(
     Latency(R.string.servers_sort_latency, R.string.servers_filter_sort_latency_short),
     Name(R.string.servers_sort_name, R.string.servers_filter_sort_name_short),
     Protocol(R.string.servers_sort_protocol, R.string.servers_filter_sort_protocol_short),
+}
+
+@Immutable
+data class ServerFilterState(
+    val query: String = "",
+    val sort: ServerSort = ServerSort.Default,
+    val selectedProtocols: Set<Protocol> = emptySet(),
+    val selectedCountries: Set<String> = emptySet(),
+)
+
+internal data class ResolvedServerFilters(
+    val activeProtocols: Set<Protocol>,
+    val activeCountries: Set<String>,
+    val activeFilterCount: Int,
+)
+
+internal fun resolveServerFilters(
+    nodes: List<ProxyNode>,
+    filter: ServerFilterState,
+): ResolvedServerFilters {
+    val availableProtocols = extractProtocolFacets(nodes).mapTo(HashSet()) { it.protocol }
+    val availableCountries = extractSubscriptionCountryFacets(nodes).mapTo(HashSet()) { it.code }
+    val activeProtocols = if (filter.selectedProtocols.isEmpty() || availableProtocols.isEmpty()) {
+        emptySet()
+    } else {
+        filter.selectedProtocols.filterTo(HashSet()) { it in availableProtocols }
+    }
+    val activeCountries = if (filter.selectedCountries.isEmpty() || availableCountries.isEmpty()) {
+        emptySet()
+    } else {
+        filter.selectedCountries.filterTo(HashSet()) { it in availableCountries }
+    }
+    val count = activeProtocols.size +
+        activeCountries.size +
+        if (filter.sort != ServerSort.Default) 1 else 0
+    return ResolvedServerFilters(
+        activeProtocols = activeProtocols,
+        activeCountries = activeCountries,
+        activeFilterCount = count,
+    )
+}
+
+internal fun filteredNodesForPing(
+    nodes: List<ProxyNode>,
+    subscriptions: List<Subscription>,
+    latencies: Map<String, LatencyResult>,
+    filter: ServerFilterState,
+): List<ProxyNode> {
+    val resolved = resolveServerFilters(nodes, filter)
+    return buildGroups(
+        nodes = nodes,
+        subscriptions = subscriptions,
+        latencies = latencies,
+        query = filter.query,
+        sort = filter.sort,
+        selectedProtocols = resolved.activeProtocols,
+        selectedCountries = resolved.activeCountries,
+        manualGroupTitle = "",
+    ).flatMap { it.nodes }
 }
 
 internal data class ProtocolFacet(
@@ -153,54 +214,39 @@ fun ServersScreen(
     onRemove: (String) -> Unit,
     onSetTlsInsecure: (String, Boolean) -> Unit,
     onToggleGroup: (String) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onSortChange: (ServerSort) -> Unit,
+    onToggleProtocol: (Protocol) -> Unit,
+    onClearProtocols: () -> Unit,
+    onToggleCountry: (String) -> Unit,
+    onClearCountries: () -> Unit,
+    onResetFilters: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
     var sharing by remember { mutableStateOf<ProxyNode?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(ServerSort.Default) }
-    var selectedProtocols by rememberSaveable { mutableStateOf(emptySet<Protocol>()) }
-    var selectedCountries by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var filterSheetOpen by rememberSaveable { mutableStateOf(false) }
 
+    val filter = state.filter
     val protocolFacets = remember(state.nodes) { extractProtocolFacets(state.nodes) }
     val countryFacets = remember(state.nodes) { extractSubscriptionCountryFacets(state.nodes) }
-
-    val availableProtocolSet = remember(protocolFacets) {
-        protocolFacets.mapTo(HashSet(protocolFacets.size)) { it.protocol }
+    val resolvedFilters = remember(state.nodes, filter) {
+        resolveServerFilters(state.nodes, filter)
     }
-    val availableCountrySet = remember(countryFacets) {
-        countryFacets.mapTo(HashSet(countryFacets.size)) { it.code }
-    }
-
-    val activeProtocols = remember(selectedProtocols, availableProtocolSet) {
-        if (selectedProtocols.isEmpty() || availableProtocolSet.isEmpty()) {
-            emptySet()
-        } else {
-            selectedProtocols.filterTo(HashSet()) { it in availableProtocolSet }
-        }
-    }
-    val activeCountries = remember(selectedCountries, availableCountrySet) {
-        if (selectedCountries.isEmpty() || availableCountrySet.isEmpty()) {
-            emptySet()
-        } else {
-            selectedCountries.filterTo(HashSet()) { it in availableCountrySet }
-        }
-    }
-    val activeFilterCount = activeProtocols.size +
-        activeCountries.size +
-        if (sort != ServerSort.Default) 1 else 0
+    val activeProtocols = resolvedFilters.activeProtocols
+    val activeCountries = resolvedFilters.activeCountries
+    val activeFilterCount = resolvedFilters.activeFilterCount
 
     // Read outside the remember block: it is not a composition, so it cannot resolve resources,
     // and the label is the only thing in there that depends on the language.
     val manualGroupTitle = stringResource(R.string.servers_group_manual)
-    val latencyKey = if (sort == ServerSort.Latency) state.latencies else emptyMap()
+    val latencyKey = if (filter.sort == ServerSort.Latency) state.latencies else emptyMap()
     val groups = remember(
         state.nodes,
         state.subscriptions,
         latencyKey,
-        query,
-        sort,
+        filter.query,
+        filter.sort,
         activeProtocols,
         activeCountries,
         manualGroupTitle,
@@ -209,8 +255,8 @@ fun ServersScreen(
             nodes = state.nodes,
             subscriptions = state.subscriptions,
             latencies = latencyKey,
-            query = query,
-            sort = sort,
+            query = filter.query,
+            sort = filter.sort,
             selectedProtocols = activeProtocols,
             selectedCountries = activeCountries,
             manualGroupTitle = manualGroupTitle,
@@ -236,8 +282,8 @@ fun ServersScreen(
 
         item(key = "search", contentType = ServersContentType.SearchAndFilter) {
             SearchAndFilterRow(
-                query = query,
-                onQueryChange = { query = it },
+                query = filter.query,
+                onQueryChange = onQueryChange,
                 activeFilterCount = activeFilterCount,
                 onOpenFilters = { filterSheetOpen = true },
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
@@ -309,30 +355,14 @@ fun ServersScreen(
             countryFacets = countryFacets,
             selectedProtocols = activeProtocols,
             selectedCountries = activeCountries,
-            sort = sort,
+            sort = filter.sort,
             activeFilterCount = activeFilterCount,
-            onToggleProtocol = { protocol ->
-                selectedProtocols = if (protocol in selectedProtocols) {
-                    selectedProtocols - protocol
-                } else {
-                    selectedProtocols + protocol
-                }
-            },
-            onClearProtocols = { selectedProtocols = emptySet() },
-            onToggleCountry = { code ->
-                selectedCountries = if (code in selectedCountries) {
-                    selectedCountries - code
-                } else {
-                    selectedCountries + code
-                }
-            },
-            onClearCountries = { selectedCountries = emptySet() },
-            onSortChange = { sort = it },
-            onResetAll = {
-                selectedProtocols = emptySet()
-                selectedCountries = emptySet()
-                sort = ServerSort.Default
-            },
+            onToggleProtocol = onToggleProtocol,
+            onClearProtocols = onClearProtocols,
+            onToggleCountry = onToggleCountry,
+            onClearCountries = onClearCountries,
+            onSortChange = onSortChange,
+            onResetAll = onResetFilters,
             onDismiss = { filterSheetOpen = false },
         )
     }
@@ -525,27 +555,49 @@ private fun SearchAndFilterRow(
     }
 }
 
+internal data class FilterTriggerStyle(
+    val containerColor: Color,
+    val contentColor: Color,
+    val badgeContainerColor: Color,
+    val badgeContentColor: Color,
+    val hasBorder: Boolean,
+)
+
+internal fun filterTriggerStyle(
+    active: Boolean,
+    colorScheme: ColorScheme,
+): FilterTriggerStyle = if (active) {
+    FilterTriggerStyle(
+        containerColor = colorScheme.primary,
+        contentColor = colorScheme.onPrimary,
+        badgeContainerColor = colorScheme.onPrimary,
+        badgeContentColor = colorScheme.primary,
+        hasBorder = false,
+    )
+} else {
+    FilterTriggerStyle(
+        containerColor = colorScheme.surfaceContainerHigh,
+        contentColor = colorScheme.onSurface,
+        badgeContainerColor = Color.Transparent,
+        badgeContentColor = Color.Transparent,
+        hasBorder = false,
+    )
+}
+
 @Composable
 private fun FilterTriggerButton(
     activeFilterCount: Int,
     onClick: () -> Unit,
 ) {
     val active = activeFilterCount > 0
+    val targetStyle = filterTriggerStyle(active, MaterialTheme.colorScheme)
     val shape = RoundedCornerShape(18.dp)
     val containerColor by animateColorAsState(
-        targetValue = if (active) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        },
+        targetValue = targetStyle.containerColor,
         label = "filter-trigger-bg",
     )
     val contentColor by animateColorAsState(
-        targetValue = if (active) {
-            MaterialTheme.colorScheme.onSecondaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurface
-        },
+        targetValue = targetStyle.contentColor,
         label = "filter-trigger-fg",
     )
 
@@ -553,11 +605,7 @@ private fun FilterTriggerButton(
         shape = shape,
         color = containerColor,
         contentColor = contentColor,
-        border = if (active) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-        } else {
-            null
-        },
+        border = null,
         modifier = Modifier
             .fillMaxHeight()
             .heightIn(min = OutlinedTextFieldDefaults.MinHeight)
@@ -582,14 +630,14 @@ private fun FilterTriggerButton(
                     modifier = Modifier
                         .size(20.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .background(targetStyle.badgeContainerColor)
                         .testTag("servers-filter-button-count"),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = activeFilterCount.toString(),
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimary,
+                        color = targetStyle.badgeContentColor,
                         maxLines = 1,
                         softWrap = false,
                     )

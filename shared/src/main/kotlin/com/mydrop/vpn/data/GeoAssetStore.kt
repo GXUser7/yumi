@@ -1,14 +1,14 @@
 package com.mydrop.vpn.data
 
 import android.content.Context
+import com.mydrop.vpn.core.net.resolveSafeDirectRedirect
 import com.mydrop.vpn.shared.R
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.xray.GeoCategories
-import java.net.Authenticator
-import java.net.InetSocketAddress
-import java.net.PasswordAuthentication
-import java.net.Proxy
+import com.mydrop.vpn.vpn.TunnelBridge
+import com.mydrop.vpn.vpn.TunnelResponseInputStream
+import com.mydrop.vpn.vpn.XrayCore
 import java.io.File
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -43,20 +43,17 @@ import kotlinx.coroutines.withContext
  * them are left out of the configuration, the tunnel comes up carrying everything through the
  * proxy, and the journal says so.
  */
-class GeoAssetStore(
-    private val context: Context,
+class GeoAssetStore internal constructor(
+    private val filesDir: File,
     private val logs: LogRepository,
-    /**
-     * How to reach the running tunnel, or null when there is none.
-     *
-     * The databases are published on GitHub, which is exactly the kind of host that is unreachable
-     * on a network worth using this app on — so a direct refusal is retried through the tunnel,
-     * the same way a subscription is. That is also why this runs after a connection rather than at
-     * startup: on the networks that need the fallback, there is nothing to fall back to until the
-     * tunnel is up.
-     */
-    private val probeEndpoint: () -> ProbeEndpoint? = { null },
+    /** In-process tunnel bridge used whenever the core is running; falls back to direct when down. */
+    private val bridge: TunnelBridge = XrayCore,
 ) {
+    constructor(
+        context: Context,
+        logs: LogRepository,
+        bridge: TunnelBridge = XrayCore,
+    ) : this(context.filesDir, logs, bridge)
 
     /**
      * What is on disk, for the settings screen to show and for a person to act on.
@@ -87,7 +84,7 @@ class GeoAssetStore(
     }
 
     /** Named by `xray.location.asset`, which is what [com.mydrop.vpn.vpn.XrayCore.setAssetPath] sets. */
-    val directory: File get() = File(context.filesDir, DIRECTORY)
+    val directory: File get() = File(filesDir, DIRECTORY)
 
     /**
      * Whether the configuration may reference `geoip:` and `geosite:` at all.
@@ -181,13 +178,13 @@ class GeoAssetStore(
         var announced = -1L
         var written = 0L
 
-        follow(asset.url) { connection ->
-            announced = connection.contentLengthLong
-            connection.inputStream.use { input ->
+        follow(asset.url) { announcedLength, input ->
+            announced = announcedLength
+            input.use { stream ->
                 part.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
-                        val read = input.read(buffer)
+                        val read = stream.read(buffer)
                         if (read < 0) break
                         output.write(buffer, 0, read)
                         digest.update(buffer, 0, read)
@@ -216,30 +213,58 @@ class GeoAssetStore(
     /** Null when the release publishes no checksum, or it cannot be read; see [download]. */
     private fun fetchChecksum(asset: Asset): String? {
         var text: String? = null
-        follow(asset.url + ".sha256sum") { connection ->
-            text = connection.inputStream.bufferedReader().use { it.readText() }
+        follow(asset.url + ".sha256sum") { _, input ->
+            text = input.bufferedReader().use { it.readText() }
         }
         // `<hex>  <filename>`, which is what sha256sum writes.
         return text?.trim()?.substringBefore(' ')?.takeIf { it.length == 64 }
     }
 
     /**
-     * Walks redirects by hand, because release assets are handed off to another host and
-     * `HttpURLConnection` will not carry a request across that hop on its own.
+     * Walks redirects by hand, because release assets are handed off to another host and neither
+     * `HttpURLConnection` nor [XrayCore.TunnelBridge.openHTTP] follows cross-host redirects.
      */
-    private fun follow(from: String, body: (HttpURLConnection) -> Unit) {
-        val probe = probeEndpoint()
+    private fun follow(from: String, body: (contentLength: Long, stream: InputStream) -> Unit) {
+        if (bridge.isRunning) {
+            followViaTunnel(from, body)
+        } else {
+            followDirect(from, body)
+        }
+    }
+
+    private fun followViaTunnel(from: String, body: (Long, InputStream) -> Unit) {
         var current = from
         repeat(MAX_REDIRECTS) {
-            val opened = if (probe == null) {
-                URL(current).openConnection()
-            } else {
-                installProbeAuthenticator(probe)
-                URL(current).openConnection(
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(LOOPBACK, probe.port)),
-                )
+            val response = bridge.openHTTP(
+                method = "GET",
+                targetURL = current,
+                headersJSON = "{}",
+                connectTimeoutMillis = CONNECT_TIMEOUT_MILLIS,
+                readTimeoutMillis = READ_TIMEOUT_MILLIS,
+                resolveDNS = false,
+            )
+            try {
+                val code = response.statusCode
+                if (code in 300..399) {
+                    val location = response.location.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException("redirect without a location")
+                    current = URL(URL(current), location).toString()
+                    return@repeat
+                }
+                check(code in 200..299) { "HTTP $code" }
+                body(response.contentLength, TunnelResponseInputStream(response))
+                return
+            } finally {
+                runCatching { response.close() }
             }
-            val connection = (opened as HttpURLConnection).apply {
+        }
+        throw IllegalStateException("too many redirects")
+    }
+
+    private fun followDirect(from: String, body: (Long, InputStream) -> Unit) {
+        var current = from
+        repeat(MAX_REDIRECTS) {
+            val connection = (URL(current).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 instanceFollowRedirects = false
                 connectTimeout = CONNECT_TIMEOUT_MILLIS
@@ -250,11 +275,11 @@ class GeoAssetStore(
                 if (code in 300..399) {
                     val location = connection.getHeaderField("Location")
                         ?: throw IllegalStateException("redirect without a location")
-                    current = URL(URL(current), location).toString()
+                    current = resolveSafeDirectRedirect(URL(current), location).toString()
                     return@repeat
                 }
                 check(code in 200..299) { "HTTP $code" }
-                body(connection)
+                body(connection.contentLengthLong, connection.inputStream)
                 return
             } finally {
                 connection.disconnect()
@@ -263,22 +288,10 @@ class GeoAssetStore(
         throw IllegalStateException("too many redirects")
     }
 
-    /** See the same method in [SubscriptionService]: credentials for our own loopback, nothing else. */
-    private fun installProbeAuthenticator(probe: ProbeEndpoint) {
-        Authenticator.setDefault(object : Authenticator() {
-            override fun getPasswordAuthentication(): PasswordAuthentication? {
-                if (requestingHost != LOOPBACK || requestingPort != probe.port) return null
-                return PasswordAuthentication(probe.username, probe.password.toCharArray())
-            }
-        })
-    }
-
     private data class Asset(val fileName: String, val url: String)
 
     private companion object {
         const val DIRECTORY = "xray-assets"
-
-        const val LOOPBACK = "127.0.0.1"
 
         /**
          * Smaller than either real database by a wide margin, and larger than any error page a

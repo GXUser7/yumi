@@ -258,6 +258,13 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onRemove = viewModel::removeNode,
                     onSetTlsInsecure = viewModel::setTlsInsecure,
                     onToggleGroup = viewModel::toggleServerGroup,
+                    onQueryChange = viewModel::setServerQuery,
+                    onSortChange = viewModel::setServerSort,
+                    onToggleProtocol = viewModel::toggleServerProtocol,
+                    onClearProtocols = viewModel::clearServerProtocols,
+                    onToggleCountry = viewModel::toggleServerCountry,
+                    onClearCountries = viewModel::clearServerCountries,
+                    onResetFilters = viewModel::resetServerFilters,
                     contentPadding = contentPadding,
                 )
             }

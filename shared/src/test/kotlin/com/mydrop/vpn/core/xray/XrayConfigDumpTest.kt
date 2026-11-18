@@ -2,7 +2,6 @@ package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LogLevel
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
@@ -220,17 +219,6 @@ class XrayConfigDumpTest {
             )
         }
 
-        dump(
-            "with-probe",
-            XrayConfigFactory.build(
-                nodes = listOf(reference),
-                selected = reference,
-                settings = AppSettings(),
-                probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password"),
-                geoAvailable = false,
-            ),
-        )
-
         // A provider's routing and resolvers, translated: the shapes a Quattro document carries, plus
         // a resolver object with per-name routing, which is where Xray's schema is least forgiving.
         val providers = listOf(
@@ -257,7 +245,6 @@ class XrayConfigDumpTest {
                         nodes = listOf(reference),
                         selected = reference,
                         settings = s,
-                        probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password"),
                         geoAvailable = false,
                         provider = profile,
                     ),

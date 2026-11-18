@@ -84,7 +84,7 @@ class LogRepository(
      * whole reason the journal is worth opening.
      */
     fun trace(tag: String, message: String) {
-        android.util.Log.i(tag, message)
+        runCatching { android.util.Log.i(tag, message) }
         diagnostics?.write('T', tag, message)
     }
 

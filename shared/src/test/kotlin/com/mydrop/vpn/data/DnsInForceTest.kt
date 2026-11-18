@@ -1,7 +1,6 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.AppSettings
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
@@ -33,8 +32,6 @@ class DnsInForceTest {
         settings = ProxySettings.Vless(uuid = ProviderFixtures.UUID),
     )
 
-    private val probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password")
-
     /** Quattro's: `8.8.8.8` then `1.1.1.1`, plain UDP through the server. */
     private val quattro: ProviderProfile =
         ProviderProfileParser.parse(ProviderFixtures.ordinary())!!.values.single()
@@ -49,7 +46,6 @@ class DnsInForceTest {
             nodes = listOf(server),
             selected = server,
             settings = settings,
-            probe = probe,
             provider = provider,
             dnsFallback = dnsFallback,
         )

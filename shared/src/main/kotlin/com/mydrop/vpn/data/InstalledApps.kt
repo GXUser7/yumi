@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.SplitTunnelRules
+import com.mydrop.vpn.vpn.SplitTunnelUidPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -47,8 +48,13 @@ class InstalledApps(
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         // Broadcasts are not delivered to a dead process. Repair selections saved before an
-        // uninstall on the next start too, without filtering out system or non-launcher apps.
-        settings.pruneSplitTunnelPackages { uid(it) != null }
+        // uninstall on the next start too, without filtering out system or non-launcher apps,
+        // and strip Yumi itself plus always-outside telephony packages.
+        settings.pruneSplitTunnelPackages {
+            it != context.packageName &&
+                it !in SplitTunnelUidPolicy.ALWAYS_OUTSIDE_PACKAGES &&
+                uid(it) != null
+        }
     }
 
     fun rules(settings: AppSettings): SplitTunnelRules = SplitTunnelRules.resolve(settings, ::uid)

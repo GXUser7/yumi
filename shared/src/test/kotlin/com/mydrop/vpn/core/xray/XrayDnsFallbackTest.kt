@@ -1,7 +1,6 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
-import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProviderDns
 import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
@@ -38,8 +37,6 @@ class XrayDnsFallbackTest {
         settings = ProxySettings.Vless(uuid = ProviderFixtures.UUID),
     )
 
-    private val probe = ProbeEndpoint(port = 10808, username = "probe", password = "probe-password")
-
     /** A resolver somebody chose, so the watchdog polices it — the only case the fallback exists for. */
     private val chosen = "https://dns.example.com/dns-query"
 
@@ -52,7 +49,6 @@ class XrayDnsFallbackTest {
         nodes = listOf(server),
         selected = server,
         settings = settings,
-        probe = probe,
         dnsOverride = dnsOverride,
         provider = provider,
         dnsFallback = dnsFallback,
