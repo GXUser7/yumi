@@ -111,6 +111,9 @@ class ServersScreenFilterTest {
                                 }
                                 filterState = filterState.copy(selectedCountries = next)
                             },
+                            onCountryModeChange = { mode ->
+                                filterState = filterState.copy(countryMode = mode)
+                            },
                             onClearCountries = {
                                 filterState = filterState.copy(selectedCountries = emptySet())
                             },
@@ -119,6 +122,7 @@ class ServersScreenFilterTest {
                                     sort = ServerSort.Default,
                                     selectedProtocols = emptySet(),
                                     selectedCountries = emptySet(),
+                                    countryMode = CountryFilterMode.Include,
                                 )
                             },
                             contentPadding = PaddingValues(0.dp),

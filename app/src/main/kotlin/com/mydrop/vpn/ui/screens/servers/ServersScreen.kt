@@ -1,6 +1,5 @@
 package com.mydrop.vpn.ui.screens.servers
 
-import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -47,6 +46,7 @@ import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.BottomSheetDefaults
@@ -106,15 +106,8 @@ import com.mydrop.vpn.ui.format.pluralSources
 import java.text.Collator
 import java.util.Locale
 
-enum class ServerSort(
-    @param:StringRes val labelRes: Int,
-    @param:StringRes val shortLabelRes: Int,
-) {
-    Default(R.string.servers_sort_default, R.string.servers_filter_sort_default_short),
-    Latency(R.string.servers_sort_latency, R.string.servers_filter_sort_latency_short),
-    Name(R.string.servers_sort_name, R.string.servers_filter_sort_name_short),
-    Protocol(R.string.servers_sort_protocol, R.string.servers_filter_sort_protocol_short),
-}
+typealias ServerSort = com.mydrop.vpn.core.model.ServerSort
+typealias CountryFilterMode = com.mydrop.vpn.core.model.CountryFilterMode
 
 @Immutable
 data class ServerFilterState(
@@ -122,6 +115,7 @@ data class ServerFilterState(
     val sort: ServerSort = ServerSort.Default,
     val selectedProtocols: Set<Protocol> = emptySet(),
     val selectedCountries: Set<String> = emptySet(),
+    val countryMode: CountryFilterMode = CountryFilterMode.Include,
 )
 
 internal data class ResolvedServerFilters(
@@ -180,6 +174,7 @@ internal fun filteredNodesForPing(
         sort = filter.sort,
         selectedProtocols = resolved.activeProtocols,
         selectedCountries = resolved.activeCountries,
+        countryMode = filter.countryMode,
         manualGroupTitle = "",
     )
         .filterNot { it.id in collapsedGroupIds }
@@ -230,6 +225,7 @@ fun ServersScreen(
     onToggleProtocol: (Protocol) -> Unit,
     onClearProtocols: () -> Unit,
     onToggleCountry: (String) -> Unit,
+    onCountryModeChange: (CountryFilterMode) -> Unit,
     onClearCountries: () -> Unit,
     onResetFilters: () -> Unit,
     contentPadding: PaddingValues,
@@ -260,6 +256,7 @@ fun ServersScreen(
         filter.sort,
         activeProtocols,
         activeCountries,
+        filter.countryMode,
         manualGroupTitle,
     ) {
         buildGroups(
@@ -270,6 +267,7 @@ fun ServersScreen(
             sort = filter.sort,
             selectedProtocols = activeProtocols,
             selectedCountries = activeCountries,
+            countryMode = filter.countryMode,
             manualGroupTitle = manualGroupTitle,
         )
     }
@@ -366,11 +364,13 @@ fun ServersScreen(
             countryFacets = countryFacets,
             selectedProtocols = activeProtocols,
             selectedCountries = activeCountries,
+            countryMode = filter.countryMode,
             sort = filter.sort,
             activeFilterCount = activeFilterCount,
             onToggleProtocol = onToggleProtocol,
             onClearProtocols = onClearProtocols,
             onToggleCountry = onToggleCountry,
+            onCountryModeChange = onCountryModeChange,
             onClearCountries = onClearCountries,
             onSortChange = onSortChange,
             onResetAll = onResetFilters,
@@ -449,6 +449,7 @@ internal fun buildGroups(
     sort: ServerSort,
     selectedProtocols: Set<Protocol>,
     selectedCountries: Set<String>,
+    countryMode: CountryFilterMode = CountryFilterMode.Include,
     manualGroupTitle: String,
 ): List<ServerGroup> {
     val trimmedQuery = query.trim()
@@ -464,7 +465,10 @@ internal fun buildGroups(
         }
         if (hasCountries) {
             val code = WorldMap.countryCodeOf(node.name)
-            if (code == null || code !in selectedCountries) return false
+            when (countryMode) {
+                CountryFilterMode.Include -> if (code == null || code !in selectedCountries) return false
+                CountryFilterMode.Exclude -> if (code != null && code in selectedCountries) return false
+            }
         }
         if (hasQuery) {
             return node.name.contains(trimmedQuery, ignoreCase = true) ||
@@ -525,7 +529,7 @@ internal fun buildGroups(
 }
 
 @Composable
-private fun SearchAndFilterRow(
+internal fun SearchAndFilterRow(
     query: String,
     onQueryChange: (String) -> Unit,
     activeFilterCount: Int,
@@ -659,18 +663,20 @@ private fun FilterTriggerButton(
 }
 
 @Composable
-private fun ServersFilterBottomSheet(
+internal fun ServersFilterBottomSheet(
     totalServersCount: Int,
     filteredServersCount: Int,
     protocolFacets: List<ProtocolFacet>,
     countryFacets: List<CountryFacet>,
     selectedProtocols: Set<Protocol>,
     selectedCountries: Set<String>,
+    countryMode: CountryFilterMode,
     sort: ServerSort,
     activeFilterCount: Int,
     onToggleProtocol: (Protocol) -> Unit,
     onClearProtocols: () -> Unit,
     onToggleCountry: (String) -> Unit,
+    onCountryModeChange: (CountryFilterMode) -> Unit,
     onClearCountries: () -> Unit,
     onSortChange: (ServerSort) -> Unit,
     onResetAll: () -> Unit,
@@ -701,6 +707,7 @@ private fun ServersFilterBottomSheet(
                         countryFacets = countryFacets,
                         selectedProtocols = selectedProtocols,
                         selectedCountries = selectedCountries,
+                        countryMode = countryMode,
                         sort = sort,
                         activeFilterCount = activeFilterCount,
                         onToggleProtocol = onToggleProtocol,
@@ -720,9 +727,11 @@ private fun ServersFilterBottomSheet(
                         filteredServersCount = filteredServersCount,
                         countryFacets = countryFacets,
                         selectedCountries = selectedCountries,
+                        countryMode = countryMode,
                         query = countryQuery,
                         onQueryChange = { countryQuery = it },
                         onToggleCountry = onToggleCountry,
+                        onCountryModeChange = onCountryModeChange,
                         onClearCountries = onClearCountries,
                         onBack = { page = FilterSheetPage.All },
                         onApply = onDismiss,
@@ -742,6 +751,7 @@ private fun MainFilterSheetContent(
     countryFacets: List<CountryFacet>,
     selectedProtocols: Set<Protocol>,
     selectedCountries: Set<String>,
+    countryMode: CountryFilterMode,
     sort: ServerSort,
     activeFilterCount: Int,
     onToggleProtocol: (Protocol) -> Unit,
@@ -848,8 +858,17 @@ private fun MainFilterSheetContent(
         }
 
         if (countryFacets.isNotEmpty()) {
-            SheetSectionTitle(title = stringResource(R.string.servers_filter_countries))
             val sortedSelectedCodes = remember(selectedCountries) { selectedCountries.sorted() }
+            val hasSelectedCountries = sortedSelectedCodes.isNotEmpty()
+            val isExcluding = hasSelectedCountries && countryMode == CountryFilterMode.Exclude
+            SheetSectionTitle(
+                title = stringResource(R.string.servers_filter_countries),
+                accentColor = if (isExcluding) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -859,39 +878,84 @@ private fun MainFilterSheetContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Public,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp),
-                    )
+                Box(modifier = Modifier.size(42.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                when {
+                                    isExcluding -> MaterialTheme.colorScheme.errorContainer
+                                    hasSelectedCountries -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                },
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Public,
+                            contentDescription = null,
+                            tint = when {
+                                isExcluding -> MaterialTheme.colorScheme.onErrorContainer
+                                hasSelectedCountries -> MaterialTheme.colorScheme.onPrimaryContainer
+                                else -> MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    if (isExcluding) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.error),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Remove,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onError,
+                                modifier = Modifier.size(11.dp),
+                            )
+                        }
+                    }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (sortedSelectedCodes.isNotEmpty()) {
-                            sortedSelectedCodes.joinToString(", ")
-                        } else {
-                            stringResource(R.string.servers_filter_countries_all)
+                        text = when {
+                            !hasSelectedCountries -> stringResource(R.string.servers_filter_countries_all)
+                            isExcluding -> stringResource(
+                                R.string.servers_filter_countries_except,
+                                sortedSelectedCodes.joinToString(", "),
+                            )
+                            else -> sortedSelectedCodes.joinToString(", ")
                         },
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = if (sortedSelectedCodes.isNotEmpty()) {
-                            stringResource(R.string.servers_filter_countries_chosen, sortedSelectedCodes.size)
-                        } else {
-                            stringResource(R.string.servers_filter_countries_available, countryFacets.size)
+                        text = when {
+                            !hasSelectedCountries -> stringResource(
+                                R.string.servers_filter_countries_available,
+                                countryFacets.size,
+                            )
+                            isExcluding -> stringResource(
+                                R.string.servers_filter_countries_excluded,
+                                sortedSelectedCodes.size,
+                            )
+                            else -> stringResource(
+                                R.string.servers_filter_countries_chosen,
+                                sortedSelectedCodes.size,
+                            )
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (isExcluding) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
                 Icon(
@@ -1032,9 +1096,11 @@ private fun CountryPickerSheetContent(
     filteredServersCount: Int,
     countryFacets: List<CountryFacet>,
     selectedCountries: Set<String>,
+    countryMode: CountryFilterMode,
     query: String,
     onQueryChange: (String) -> Unit,
     onToggleCountry: (String) -> Unit,
+    onCountryModeChange: (CountryFilterMode) -> Unit,
     onClearCountries: () -> Unit,
     onBack: () -> Unit,
     onApply: () -> Unit,
@@ -1043,6 +1109,7 @@ private fun CountryPickerSheetContent(
     val displayLocale = remember(config) {
         config.locales.takeIf { !it.isEmpty }?.get(0) ?: Locale.getDefault()
     }
+    val excludeMode = countryMode == CountryFilterMode.Exclude
 
     val localizedCountries = remember(countryFacets, displayLocale) {
         val collator = Collator.getInstance(displayLocale)
@@ -1079,10 +1146,25 @@ private fun CountryPickerSheetContent(
                 onClick = onClearCountries,
                 modifier = Modifier.testTag("servers-filter-countries-clear"),
             ) {
-                Text(stringResource(R.string.servers_filter_reset_count, selectedCountries.size))
+                Text(
+                    text = stringResource(R.string.servers_filter_reset_count, selectedCountries.size),
+                    color = if (excludeMode) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
             }
         }
     }
+
+    CountryFilterModeBar(
+        mode = countryMode,
+        onModeChange = onCountryModeChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+    )
 
     CompactSheetSearchBar(
         query = query,
@@ -1123,6 +1205,7 @@ private fun CountryPickerSheetContent(
                         facet = facet,
                         displayName = name,
                         selected = facet.code in selectedCountries,
+                        excludeMode = excludeMode,
                         onClick = { onToggleCountry(facet.code) },
                     )
                 }
@@ -1131,7 +1214,20 @@ private fun CountryPickerSheetContent(
             val selectedItems = localizedCountries.filter { (facet, _) -> facet.code in selectedCountries }
             if (selectedItems.isNotEmpty()) {
                 item(key = "sect-selected") {
-                    SheetSectionTitle(title = stringResource(R.string.servers_filter_selected_section))
+                    SheetSectionTitle(
+                        title = stringResource(
+                            if (excludeMode) {
+                                R.string.servers_filter_excluded_section
+                            } else {
+                                R.string.servers_filter_selected_section
+                            },
+                        ),
+                        accentColor = if (excludeMode) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                    )
                 }
                 items(
                     items = selectedItems,
@@ -1141,6 +1237,7 @@ private fun CountryPickerSheetContent(
                         facet = facet,
                         displayName = name,
                         selected = true,
+                        excludeMode = excludeMode,
                         onClick = { onToggleCountry(facet.code) },
                     )
                 }
@@ -1165,6 +1262,7 @@ private fun CountryPickerSheetContent(
                             PopularCountryTile(
                                 facet = facet,
                                 selected = facet.code in selectedCountries,
+                                excludeMode = excludeMode,
                                 onClick = { onToggleCountry(facet.code) },
                                 modifier = Modifier.weight(1f),
                             )
@@ -1192,6 +1290,7 @@ private fun CountryPickerSheetContent(
                         facet = facet,
                         displayName = name,
                         selected = false,
+                        excludeMode = excludeMode,
                         onClick = { onToggleCountry(facet.code) },
                     )
                 }
@@ -1203,6 +1302,115 @@ private fun CountryPickerSheetContent(
         filteredServersCount = filteredServersCount,
         onClick = onApply,
     )
+}
+
+@Composable
+private fun CountryFilterModeBar(
+    mode: CountryFilterMode,
+    onModeChange: (CountryFilterMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val includeSelected = mode == CountryFilterMode.Include
+    val excludeSelected = mode == CountryFilterMode.Exclude
+
+    val includeBg by animateColorAsState(
+        targetValue = if (includeSelected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "country-mode-inc-bg",
+    )
+    val includeFg by animateColorAsState(
+        targetValue = if (includeSelected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "country-mode-inc-fg",
+    )
+    val excludeBg by animateColorAsState(
+        targetValue = if (excludeSelected) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "country-mode-exc-bg",
+    )
+    val excludeFg by animateColorAsState(
+        targetValue = if (excludeSelected) {
+            MaterialTheme.colorScheme.onErrorContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        label = "country-mode-exc-fg",
+    )
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(4.dp)
+            .testTag("servers-filter-country-mode-bar"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(38.dp)
+                .clip(RoundedCornerShape(19.dp))
+                .background(includeBg)
+                .testTag("servers-filter-country-mode-include")
+                .clickable { onModeChange(CountryFilterMode.Include) }
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+        ) {
+            if (includeSelected) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = includeFg,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Text(
+                text = stringResource(R.string.servers_filter_country_mode_include),
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = includeFg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(38.dp)
+                .clip(RoundedCornerShape(19.dp))
+                .background(excludeBg)
+                .testTag("servers-filter-country-mode-exclude")
+                .clickable { onModeChange(CountryFilterMode.Exclude) }
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+        ) {
+            if (excludeSelected) {
+                Icon(
+                    imageVector = Icons.Rounded.Remove,
+                    contentDescription = null,
+                    tint = excludeFg,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Text(
+                text = stringResource(R.string.servers_filter_country_mode_exclude),
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = excludeFg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
@@ -1277,24 +1485,25 @@ private fun CompactSheetSearchBar(
 private fun PopularCountryTile(
     facet: CountryFacet,
     selected: Boolean,
+    excludeMode: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val corner by animateDpAsState(if (selected) 24.dp else 16.dp, label = "pop-tile-radius")
     val shape = RoundedCornerShape(corner)
     val bg by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHigh
+        targetValue = when {
+            selected && excludeMode -> MaterialTheme.colorScheme.errorContainer
+            selected -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.surfaceContainerHigh
         },
         label = "pop-tile-bg",
     )
     val fg by animateColorAsState(
-        targetValue = if (selected) {
-            MaterialTheme.colorScheme.onPrimary
-        } else {
-            MaterialTheme.colorScheme.onSurface
+        targetValue = when {
+            selected && excludeMode -> MaterialTheme.colorScheme.onErrorContainer
+            selected -> MaterialTheme.colorScheme.onPrimary
+            else -> MaterialTheme.colorScheme.onSurface
         },
         label = "pop-tile-fg",
     )
@@ -1331,13 +1540,22 @@ private fun PopularCountryTile(
                 softWrap = false,
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                text = facet.count.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.72f),
-                maxLines = 1,
-                softWrap = false,
-            )
+            if (selected && excludeMode) {
+                Icon(
+                    imageVector = Icons.Rounded.Remove,
+                    contentDescription = null,
+                    tint = fg,
+                    modifier = Modifier.size(15.dp),
+                )
+            } else {
+                Text(
+                    text = facet.count.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg.copy(alpha = 0.72f),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }
@@ -1347,6 +1565,7 @@ private fun CountrySheetRow(
     facet: CountryFacet,
     displayName: String,
     selected: Boolean,
+    excludeMode: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
@@ -1389,10 +1608,10 @@ private fun CountrySheetRow(
                 .size(22.dp)
                 .clip(RoundedCornerShape(7.dp))
                 .then(
-                    if (selected) {
-                        Modifier.background(MaterialTheme.colorScheme.primary)
-                    } else {
-                        Modifier.border(
+                    when {
+                        selected && excludeMode -> Modifier.background(MaterialTheme.colorScheme.error)
+                        selected -> Modifier.background(MaterialTheme.colorScheme.primary)
+                        else -> Modifier.border(
                             width = 2.dp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             shape = RoundedCornerShape(7.dp),
@@ -1403,9 +1622,13 @@ private fun CountrySheetRow(
         ) {
             if (selected) {
                 Icon(
-                    imageVector = Icons.Rounded.Check,
+                    imageVector = if (excludeMode) Icons.Rounded.Remove else Icons.Rounded.Check,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
+                    tint = if (excludeMode) {
+                        MaterialTheme.colorScheme.onError
+                    } else {
+                        MaterialTheme.colorScheme.onPrimary
+                    },
                     modifier = Modifier.size(15.dp),
                 )
             }
@@ -1417,6 +1640,7 @@ private fun CountrySheetRow(
 private fun SheetSectionTitle(
     title: String,
     badgeCount: Int? = null,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
 ) {
     Row(
         modifier = Modifier
@@ -1428,7 +1652,7 @@ private fun SheetSectionTitle(
         Text(
             text = title,
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.primary,
+            color = accentColor,
         )
         if (badgeCount != null) {
             Text(
@@ -1497,7 +1721,7 @@ private fun matchesCountrySearch(
 private val LOCALE_RU: Locale = Locale.forLanguageTag("ru")
 
 @Composable
-private fun GroupHeader(
+internal fun GroupHeader(
     title: String,
     count: Int,
     collapsed: Boolean,
@@ -1705,7 +1929,7 @@ private fun ServerRow(
 }
 
 @Composable
-private fun EmptyState(hasNodes: Boolean, modifier: Modifier = Modifier) {
+internal fun EmptyState(hasNodes: Boolean, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,

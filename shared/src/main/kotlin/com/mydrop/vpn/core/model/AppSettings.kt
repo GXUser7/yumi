@@ -77,6 +77,23 @@ enum class PingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes:
 }
 
 @Serializable
+enum class ServerSort(
+    @param:StringRes val labelRes: Int,
+    @param:StringRes val shortLabelRes: Int,
+) {
+    Default(R.string.servers_sort_default, R.string.servers_filter_sort_default_short),
+    Latency(R.string.servers_sort_latency, R.string.servers_filter_sort_latency_short),
+    Name(R.string.servers_sort_name, R.string.servers_filter_sort_name_short),
+    Protocol(R.string.servers_sort_protocol, R.string.servers_filter_sort_protocol_short),
+}
+
+@Serializable
+enum class CountryFilterMode {
+    Include,
+    Exclude,
+}
+
+@Serializable
 data class AppSettings(
     // Appearance
     val themeMode: ThemeMode = ThemeMode.System,
@@ -307,6 +324,10 @@ data class AppSettings(
      * takes its entry with it the moment nothing renders that group any more.
      */
     val collapsedGroupIds: Set<String> = emptySet(),
+    val serverSort: ServerSort = ServerSort.Default,
+    val serverFilterProtocols: Set<Protocol> = emptySet(),
+    val serverFilterCountries: Set<String> = emptySet(),
+    val serverFilterCountryMode: CountryFilterMode = CountryFilterMode.Include,
 
     // Background
     /**

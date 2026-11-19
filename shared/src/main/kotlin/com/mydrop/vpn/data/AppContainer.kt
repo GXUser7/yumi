@@ -305,6 +305,13 @@ class AppContainer(context: Context) {
         rulesChangeFor = { node -> tunnelConfigs.rulesChangeFor(node) },
     )
 
+    val subscriptionRefresher = SubscriptionRefresher(
+        profiles = profiles,
+        service = subscriptionService,
+        logs = logs,
+        strings = strings,
+    )
+
     /**
      * The television's end of the remote control, and nothing at all on a phone.
      *
@@ -317,8 +324,11 @@ class AppContainer(context: Context) {
         scope = applicationScope,
         store = remote,
         profiles = profiles,
+        settings = settings,
         tunnel = tunnel,
         launcher = tunnelLauncher,
+        latencyTester = latencyTester,
+        subscriptionRefresher = subscriptionRefresher,
     )
 
     /**
@@ -377,13 +387,6 @@ class AppContainer(context: Context) {
         settings = settings,
         updates = updates,
         scope = applicationScope,
-    )
-
-    val subscriptionRefresher = SubscriptionRefresher(
-        profiles = profiles,
-        service = subscriptionService,
-        logs = logs,
-        strings = strings,
     )
 
     /** Re-reads server lists on the cadence chosen in settings, and once on opening a set. */

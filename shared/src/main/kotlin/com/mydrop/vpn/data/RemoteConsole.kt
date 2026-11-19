@@ -8,6 +8,7 @@ import com.mydrop.vpn.remote.RemoteNode
 import com.mydrop.vpn.remote.RemoteProbe
 import com.mydrop.vpn.remote.RemoteSighting
 import com.mydrop.vpn.remote.RemoteSnapshot
+import com.mydrop.vpn.remote.RemoteSubscription
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -49,6 +50,10 @@ data class RemoteConsoleState(
      * between is exactly the flicker that field exists to avoid.
      */
     val nodes: List<RemoteNode> = emptyList(),
+    val subscriptions: List<RemoteSubscription> = emptyList(),
+    val cachedSnapshots: Map<String, RemoteSnapshot> = emptyMap(),
+    val cachedNodes: Map<String, List<RemoteNode>> = emptyMap(),
+    val cachedSubscriptions: Map<String, List<RemoteSubscription>> = emptyMap(),
     val pairing: Boolean = false,
 )
 
@@ -70,6 +75,7 @@ class RemoteConsole(
     val state: StateFlow<RemoteConsoleState> = _state.asStateFlow()
 
     private var loop: Job? = null
+    private var lastActiveHostId: String? = null
 
     /**
      * Commands waiting to go out.
@@ -83,11 +89,13 @@ class RemoteConsole(
     init {
         scope.launch {
             store.state.collect { stored ->
-                _state.value = _state.value.copy(
+                val cur = _state.value
+                val updatedActive = cur.active?.let { active ->
+                    stored.bonds.firstOrNull { it.hostId == active.hostId }
+                }
+                _state.value = cur.copy(
                     bonds = stored.bonds,
-                    active = _state.value.active?.let { active ->
-                        stored.bonds.firstOrNull { it.hostId == active.hostId }
-                    },
+                    active = updatedActive,
                 )
             }
         }
@@ -107,28 +115,56 @@ class RemoteConsole(
         }
     }
 
-    /** Starts driving the given television, or the only one there is. */
-    fun open(hostId: String? = null) {
-        val bond = store.value.bonds.let { bonds ->
-            hostId?.let { id -> bonds.firstOrNull { it.hostId == id } } ?: bonds.firstOrNull()
-        }
+    /** Starts driving the given television, or resumes the most recently used one. */
+    fun open(hostId: String? = null, forceSearch: Boolean = false) {
+        val bonds = store.value.bonds
+        val bond = (hostId ?: lastActiveHostId)?.let { id -> bonds.firstOrNull { it.hostId == id } }
+            ?: bonds.firstOrNull()
         if (bond == null) {
-            _state.value = _state.value.copy(active = null, link = RemoteLinkState.Idle)
+            stopLoop()
+            lastActiveHostId = null
+            _state.value = _state.value.copy(
+                active = null,
+                link = RemoteLinkState.Idle,
+                snapshot = null,
+                nodes = emptyList(),
+                subscriptions = emptyList(),
+            )
             look()
             return
         }
-        if (loop?.isActive == true && _state.value.active?.hostId == bond.hostId) return
-        close()
-        _state.value = _state.value.copy(active = bond, link = RemoteLinkState.Connecting)
+        if (!forceSearch && loop?.isActive == true && _state.value.active?.hostId == bond.hostId) return
+        stopLoop()
+        lastActiveHostId = bond.hostId
+        val cur = _state.value
+        _state.value = cur.copy(
+            active = bond,
+            link = RemoteLinkState.Connecting,
+            snapshot = cur.cachedSnapshots[bond.hostId],
+            nodes = cur.cachedNodes[bond.hostId].orEmpty(),
+            subscriptions = cur.cachedSubscriptions[bond.hostId].orEmpty(),
+        )
         outbox = Channel(capacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-        loop = scope.launch { run(bond) }
+        loop = scope.launch { run(bond, initialSearch = forceSearch) }
     }
 
-    fun close() {
+    private fun stopLoop() {
         loop?.cancel()
         loop = null
         outbox.close()
-        _state.value = _state.value.copy(link = RemoteLinkState.Idle, snapshot = null)
+    }
+
+    fun close() {
+        stopLoop()
+        _state.value = _state.value.copy(link = RemoteLinkState.Idle)
+    }
+
+    fun reconnect() {
+        open(_state.value.active?.hostId, forceSearch = true)
+    }
+
+    fun rename(hostId: String, alias: String) {
+        store.renameBond(hostId, alias)
     }
 
     fun send(command: RemoteCommand) {
@@ -139,9 +175,11 @@ class RemoteConsole(
     suspend fun pair(invite: RemoteInvite): Result<RemoteBond> {
         _state.value = _state.value.copy(pairing = true)
         val result = runCatching { client.pair(invite, deviceName()) }
-        result.getOrNull()?.let {
-            store.remember(it)
-            _state.value = _state.value.copy(active = it)
+        result.getOrNull()?.let { paired ->
+            store.remember(paired)
+            val stored = store.value.bonds.firstOrNull { it.hostId == paired.hostId } ?: paired
+            lastActiveHostId = stored.hostId
+            _state.value = _state.value.copy(active = stored)
         }
         _state.value = _state.value.copy(pairing = false)
         result.getOrNull()?.let { open(it.hostId) }
@@ -149,14 +187,29 @@ class RemoteConsole(
     }
 
     fun forget(hostId: String) {
-        if (_state.value.active?.hostId == hostId) close()
+        val wasActive = _state.value.active?.hostId == hostId
+        if (wasActive) stopLoop()
+        if (lastActiveHostId == hostId) lastActiveHostId = null
         store.forgetBond(hostId)
-        _state.value = _state.value.copy(active = null, snapshot = null, nodes = emptyList())
+        _state.value = _state.value.let { cur ->
+            cur.copy(
+                cachedSnapshots = cur.cachedSnapshots - hostId,
+                cachedNodes = cur.cachedNodes - hostId,
+                cachedSubscriptions = cur.cachedSubscriptions - hostId,
+                active = if (wasActive) null else cur.active,
+                snapshot = if (wasActive) null else cur.snapshot,
+                nodes = if (wasActive) emptyList() else cur.nodes,
+                subscriptions = if (wasActive) emptyList() else cur.subscriptions,
+            )
+        }
+        if (wasActive) {
+            open(store.value.bonds.firstOrNull()?.hostId)
+        }
     }
 
-    private suspend fun run(initial: RemoteBond) {
+    private suspend fun run(initial: RemoteBond, initialSearch: Boolean = false) {
         var bond = initial
-        var searched = false
+        var searched = initialSearch
         // The job's own context rather than the container's scope, which never ends: what closes
         // this loop is [close] cancelling the job, and asking the wrong one would leave it running
         // behind a screen nobody is on.
@@ -179,7 +232,7 @@ class RemoteConsole(
                     port = target.second,
                     deviceName = deviceName(),
                     commands = outbox,
-                ) { snapshot -> receive(snapshot) }
+                ) { snapshot -> receive(bond.hostId, snapshot) }
             }
             // runCatching catches everything, and everything here includes the cancellation that
             // closing the screen throws. Rethrown rather than reported as a lost television.
@@ -195,19 +248,41 @@ class RemoteConsole(
             searched = !reached
             _state.value = _state.value.copy(
                 link = RemoteLinkState.Offline(outcome.exceptionOrNull()?.shortReason() ?: LOST),
-                snapshot = null,
             )
             delay(RETRY_MILLIS)
         }
     }
 
-    private fun receive(snapshot: RemoteSnapshot) {
-        val current = _state.value
-        _state.value = current.copy(
-            link = RemoteLinkState.Online,
-            snapshot = snapshot,
-            nodes = snapshot.nodes ?: current.nodes,
+    private fun receive(hostId: String, snapshot: RemoteSnapshot) {
+        store.rememberMeta(
+            hostId = hostId,
+            hostName = snapshot.hostName,
+            palette = snapshot.settings?.palette,
+            visualizer = snapshot.settings?.visualizer,
         )
+        val current = _state.value
+        val updatedNodes = snapshot.nodes ?: current.cachedNodes[hostId].orEmpty()
+        val updatedSubs = snapshot.subscriptions ?: current.cachedSubscriptions[hostId].orEmpty()
+        val nextSnapshots = current.cachedSnapshots + (hostId to snapshot)
+        val nextNodes = current.cachedNodes + (hostId to updatedNodes)
+        val nextSubs = current.cachedSubscriptions + (hostId to updatedSubs)
+        _state.value = if (current.active?.hostId == hostId) {
+            current.copy(
+                link = RemoteLinkState.Online,
+                snapshot = snapshot,
+                nodes = updatedNodes,
+                subscriptions = updatedSubs,
+                cachedSnapshots = nextSnapshots,
+                cachedNodes = nextNodes,
+                cachedSubscriptions = nextSubs,
+            )
+        } else {
+            current.copy(
+                cachedSnapshots = nextSnapshots,
+                cachedNodes = nextNodes,
+                cachedSubscriptions = nextSubs,
+            )
+        }
     }
 
     /** Where to knock: the remembered address, or whatever the network says now. */

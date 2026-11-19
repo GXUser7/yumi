@@ -1,6 +1,8 @@
 package com.mydrop.vpn.ui.screens.servers
 
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CountryFilterMode
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.Protocol
@@ -10,7 +12,10 @@ import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.TlsOptions
 import com.mydrop.vpn.core.model.WorldMap
 import com.mydrop.vpn.data.ProfileState
+import com.mydrop.vpn.remote.RemoteNode
 import com.mydrop.vpn.ui.VisibleNodesCache
+import com.mydrop.vpn.ui.screens.remote.buildRemoteServerGroups
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
@@ -310,5 +315,84 @@ class ServersFilterAndGroupingTest {
         val updatedBadges = updated.badges
         assertNotSame(firstBadges, updatedBadges)
         assertTrue("no-verify" in updatedBadges)
+    }
+
+    @Test
+    fun `buildGroups and filteredNodesForPing exclude selected countries and keep flagless nodes`() {
+        val de = node(id = "de", name = "${WorldMap.flagOf("DE")} Berlin")
+        val nl = node(id = "nl", name = "${WorldMap.flagOf("NL")} Amsterdam")
+        val ru = node(id = "ru", name = "${WorldMap.flagOf("RU")} Moscow")
+        val noFlag = node(id = "auto", name = "Fast Auto")
+        val manual = node(id = "man", name = "Custom Server", subscriptionId = null)
+        val subs = listOf(sub("sub-1", "Main"))
+        val nodes = listOf(de, nl, ru, noFlag, manual)
+
+        val excluded = buildGroups(
+            nodes = nodes,
+            subscriptions = subs,
+            latencies = emptyMap(),
+            query = "",
+            sort = ServerSort.Default,
+            selectedProtocols = emptySet(),
+            selectedCountries = setOf("RU", "DE"),
+            countryMode = CountryFilterMode.Exclude,
+            manualGroupTitle = "Manual",
+        )
+        assertEquals(listOf("sub-1", "manual"), excluded.map { it.id })
+        assertEquals(listOf("nl", "auto"), excluded[0].nodes.map { it.id })
+        assertEquals(listOf("man"), excluded[1].nodes.map { it.id })
+
+        val pingTargets = filteredNodesForPing(
+            nodes = nodes,
+            subscriptions = subs,
+            latencies = emptyMap(),
+            filter = ServerFilterState(
+                selectedCountries = setOf("RU", "DE"),
+                countryMode = CountryFilterMode.Exclude,
+            ),
+        )
+        assertEquals(listOf("nl", "auto", "man"), pingTargets.map { it.id })
+    }
+
+    @Test
+    fun `buildRemoteServerGroups respects Exclude country mode`() {
+        val nodes = listOf(
+            RemoteNode(id = "r-de", name = "${WorldMap.flagOf("DE")} Berlin", group = "Main"),
+            RemoteNode(id = "r-ru", name = "${WorldMap.flagOf("RU")} Moscow", group = "Main"),
+            RemoteNode(id = "r-auto", name = "Auto", group = "Main"),
+        )
+        val groups = buildRemoteServerGroups(
+            nodes = nodes,
+            subscriptions = emptyList(),
+            filter = ServerFilterState(
+                selectedCountries = setOf("RU"),
+                countryMode = CountryFilterMode.Exclude,
+            ),
+            manualGroupTitle = "Manual",
+        )
+        assertEquals(listOf("r-de", "r-auto"), groups.single().nodes.map { it.id })
+    }
+
+    @Test
+    fun `AppSettings persists server filters and defaults cleanly for legacy json`() {
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val configured = AppSettings(
+            serverSort = ServerSort.Latency,
+            serverFilterProtocols = setOf(Protocol.VLESS, Protocol.HYSTERIA2),
+            serverFilterCountries = setOf("RU", "BY"),
+            serverFilterCountryMode = CountryFilterMode.Exclude,
+        )
+        val encoded = json.encodeToString(AppSettings.serializer(), configured)
+        val decoded = json.decodeFromString(AppSettings.serializer(), encoded)
+        assertEquals(ServerSort.Latency, decoded.serverSort)
+        assertEquals(setOf(Protocol.VLESS, Protocol.HYSTERIA2), decoded.serverFilterProtocols)
+        assertEquals(setOf("RU", "BY"), decoded.serverFilterCountries)
+        assertEquals(CountryFilterMode.Exclude, decoded.serverFilterCountryMode)
+
+        val legacy = json.decodeFromString(AppSettings.serializer(), "{}")
+        assertEquals(ServerSort.Default, legacy.serverSort)
+        assertTrue(legacy.serverFilterProtocols.isEmpty())
+        assertTrue(legacy.serverFilterCountries.isEmpty())
+        assertEquals(CountryFilterMode.Include, legacy.serverFilterCountryMode)
     }
 }

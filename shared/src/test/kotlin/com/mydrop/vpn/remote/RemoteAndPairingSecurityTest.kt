@@ -1,5 +1,12 @@
 package com.mydrop.vpn.remote
 
+import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.Palette
+import com.mydrop.vpn.core.model.Protocol
+import com.mydrop.vpn.core.model.RoutingMode
+import com.mydrop.vpn.core.model.SubscriptionUserInfo
+import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.data.sanitizeRemoteMessage
 import com.mydrop.vpn.pairing.PairingCrypto
@@ -44,6 +51,67 @@ class RemoteAndPairingSecurityTest {
         assertFalse(encoded.contains("server"))
         assertFalse(encoded.contains("password"))
         assertFalse(encoded.contains("uuid"))
+        assertFalse(encoded.contains(XrayConfigFactory.TUN_ADDRESS_V4))
+        assertFalse(encoded.contains(XrayConfigFactory.TUN_DNS_V4))
+        assertFalse(encoded.contains(XrayConfigFactory.TUN_ADDRESS_V6))
+        assertFalse(encoded.contains("203.0.113."))
+    }
+
+    @Test
+    fun `Enriched RemoteSnapshot with subscriptions and settings serializes zero banned tokens or TUN IPs`() {
+        val snapshot = RemoteSnapshot(
+            hostName = "Yumi TV · Living room",
+            state = RemoteTunnelState.On,
+            selectedNodeId = "n1",
+            connectedAtEpochMillis = 1_757_000_000_000L,
+            downloadBytesPerSecond = 8192,
+            uploadBytesPerSecond = 2048,
+            nodesRevision = 12,
+            nodes = listOf(
+                RemoteNode(
+                    id = "n1",
+                    name = "🇩🇪 Berlin",
+                    group = "Quattro",
+                    latencyMillis = 36,
+                    latencyFailed = false,
+                    protocol = Protocol.VLESS,
+                    badges = listOf("REALITY", "Vision", "uTLS:chrome"),
+                    subscriptionId = "sub-1",
+                    memberProtocols = listOf(Protocol.VLESS, Protocol.TROJAN),
+                ),
+            ),
+            pingingNodeIds = setOf("n2"),
+            subscriptionsRevision = 3,
+            subscriptions = listOf(
+                RemoteSubscription(
+                    id = "sub-1",
+                    name = "Quattro",
+                    remoteTitle = "Quattro VPN",
+                    urlHost = "panel.example.com",
+                    enabled = true,
+                    nodeCount = 50,
+                    lastUpdatedEpochMillis = 1_757_000_000_000L,
+                    lastError = "dial tcp [redacted]: timeout",
+                    userInfo = SubscriptionUserInfo(100L, 200L, 1000L),
+                ),
+            ),
+            settings = RemoteSettings(
+                visualizer = Visualizer.Planet,
+                themeMode = ThemeMode.Dark,
+                language = AppLanguage.Russian,
+                palette = Palette.Mint,
+                routingMode = RoutingMode.Rules,
+                bypassLan = true,
+                blockAds = true,
+                remoteDns = "https://1.1.1.1/dns-query",
+                directDns = "8.8.8.8",
+                mtu = 1500,
+            ),
+        )
+        val encoded = RemoteCrypto.json.encodeToString(snapshot)
+        assertFalse(encoded.contains("server", ignoreCase = true))
+        assertFalse(encoded.contains("password", ignoreCase = true))
+        assertFalse(encoded.contains("uuid", ignoreCase = true))
         assertFalse(encoded.contains(XrayConfigFactory.TUN_ADDRESS_V4))
         assertFalse(encoded.contains(XrayConfigFactory.TUN_DNS_V4))
         assertFalse(encoded.contains(XrayConfigFactory.TUN_ADDRESS_V6))

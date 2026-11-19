@@ -21,6 +21,7 @@
     <string name="action_copy">Copy</string>
     <string name="action_close">Close</string>
     <string name="action_allow">Allow</string>
+    <string name="action_save">Save</string>
     <string name="action_expand">Expand</string>
     <string name="action_collapse">Collapse</string>
     <string name="action_refresh">Refresh</string>
@@ -192,7 +193,11 @@
     <string name="servers_filter_all">All</string>
     <string name="servers_filter_countries_all">All countries</string>
     <string name="servers_filter_countries_chosen">%1$d selected</string>
+    <string name="servers_filter_countries_except">Except %1$s</string>
+    <string name="servers_filter_countries_excluded">%1$d excluded</string>
     <string name="servers_filter_countries_available">%1$d available</string>
+    <string name="servers_filter_country_mode_include">Only selected</string>
+    <string name="servers_filter_country_mode_exclude">Exclude</string>
     <string name="servers_filter_sort_label">Sort by</string>
     <string name="servers_filter_sort_default_short">Default</string>
     <string name="servers_filter_sort_latency_short">By ping</string>
@@ -202,10 +207,15 @@
     <string name="servers_filter_reset_count">Reset (%1$d)</string>
     <string name="servers_filter_country_search_placeholder">Name or code, e.g. Germany / DE</string>
     <string name="servers_filter_selected_section">Selected</string>
+    <string name="servers_filter_excluded_section">Excluded</string>
     <string name="servers_filter_popular_section">Popular</string>
     <string name="servers_filter_all_countries_az">All countries · A–Z</string>
     <string name="servers_filter_country_not_found">No country matching “%1$s”</string>
     <string name="servers_filter_show_results">Show %1$s</string>
+    <string name="settings_debug_section">Debug</string>
+    <string name="settings_debug_remote_demo">Remote test mode</string>
+    <string name="settings_debug_remote_demo_subtitle">Fake TVs, servers, subscriptions and live traffic without a real television</string>
+    <string name="settings_debug_remote_open">Open remote preview</string>
 
     <!-- ================================================ Subscriptions screen -->
 
@@ -666,6 +676,43 @@ Send it here: %2$s</string>
     <string name="remote_needs_consent">Confirm the VPN request on the TV screen</string>
     <string name="remote_paired">Remote linked to %1$s</string>
     <string name="remote_pair_failed">Could not link the TV. Check that both devices are on the same Wi-Fi.</string>
+    <string name="remote_tv_count_protected">TVs: %1$d · protected: %2$d</string>
+    <string name="remote_tv_count_only">TVs: %1$d</string>
+    <string name="remote_add_tv">Add TV</string>
+    <string name="remote_add_tv_nearby">Nearby: %1$d</string>
+    <string name="remote_add_tv_hint">Scan the QR code on your new TV screen</string>
+    <string name="remote_pick_server">Choose server</string>
+    <string name="remote_find_tv">Find %1$s</string>
+    <string name="remote_status_offline">Offline</string>
+    <string name="remote_status_standby">Off</string>
+    <string name="remote_adblock_on">Ad block on</string>
+    <string name="remote_adblock_off">Standard DNS</string>
+    <string name="remote_add_sheet_title">Add television</string>
+    <string name="remote_nearby_title">Nearby on network</string>
+    <string name="remote_nearby_empty">No new TVs heard yet. Open Yumi on your TV and open Settings → Phone remote to show the QR code.</string>
+    <string name="remote_nearby_linked">Linked</string>
+    <string name="remote_search_again">Search again</string>
+    <string name="remote_manual_code_label">Pairing link</string>
+    <string name="remote_manual_code_hint">yumi://remote?…</string>
+    <string name="remote_connect_code">Connect</string>
+    <string name="remote_section_tv">Television</string>
+    <string name="remote_tv_alias">Name</string>
+    <string name="remote_tv_alias_hint">e.g. Living room or Bedroom</string>
+    <string name="remote_tv_address">Network address</string>
+    <string name="remote_tv_address_unknown">Searching network…</string>
+    <string name="remote_rename_title">Rename television</string>
+    <string name="remote_forget_confirm_title">Unlink %1$s?</string>
+    <string name="remote_forget_confirm_body">This phone will stop connecting to this TV until you scan its QR code again.</string>
+    <string name="remote_legacy_tv_hint">Update Yumi on your TV to manage subscriptions and TV settings from your phone. Power and server switching are ready right now.</string>
+    <string name="remote_sub_delete_title">Delete subscription?</string>
+    <string name="remote_sub_delete_body">Subscription “%1$s” and its servers will be removed from the TV.</string>
+    <string name="remote_sub_send_from_phone">Send from phone</string>
+    <string name="remote_sub_add_manual">Or paste link for TV</string>
+    <string name="remote_sub_added">Subscription sent to TV</string>
+    <string name="remote_sub_url_invalid">Link must start with http:// or https://</string>
+    <string name="remote_palette_title">Palette</string>
+    <string name="remote_routing_title">Routing mode</string>
+    <string name="remote_settings_updated">Setting sent to TV</string>
 
     <!-- ======================================================= 1x1 widget -->
 

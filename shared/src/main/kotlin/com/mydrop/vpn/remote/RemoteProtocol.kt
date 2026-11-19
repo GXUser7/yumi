@@ -1,5 +1,12 @@
 package com.mydrop.vpn.remote
 
+import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.Palette
+import com.mydrop.vpn.core.model.Protocol
+import com.mydrop.vpn.core.model.RoutingMode
+import com.mydrop.vpn.core.model.SubscriptionUserInfo
+import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.pairing.base64Url
 import com.mydrop.vpn.pairing.base64UrlBytes
 import java.net.URI
@@ -49,7 +56,7 @@ const val REMOTE_PORT = 47654
 /** Where the television answers "yes, I am here", so the phone can find it after a new lease. */
 const val REMOTE_BEACON_PORT = 47655
 
-const val REMOTE_MAX_FRAME_BYTES = 256 * 1024
+const val REMOTE_MAX_FRAME_BYTES = 512 * 1024
 
 /** As long as the subscription hand-off gets, and for the same reason: a code on screen is a key. */
 const val REMOTE_PAIRING_LIFETIME_MILLIS = 5 * 60 * 1000L
@@ -161,6 +168,20 @@ sealed interface RemoteCommand {
      * which is what selecting a server does when somebody does it with the set's own remote.
      */
     @Serializable @SerialName("select") data class Select(val nodeId: String) : RemoteCommand
+
+    @Serializable @SerialName("ping_all") data class PingNodes(val nodeIds: List<String> = emptyList()) : RemoteCommand
+
+    @Serializable @SerialName("ping_one") data class PingNode(val nodeId: String) : RemoteCommand
+
+    @Serializable @SerialName("add_sub") data class AddSubscription(val url: String, val name: String? = null) : RemoteCommand
+
+    @Serializable @SerialName("refresh_sub") data class RefreshSubscription(val subscriptionId: String) : RemoteCommand
+
+    @Serializable @SerialName("remove_sub") data class RemoveSubscription(val subscriptionId: String) : RemoteCommand
+
+    @Serializable @SerialName("toggle_sub") data class SetSubscriptionEnabled(val subscriptionId: String, val enabled: Boolean) : RemoteCommand
+
+    @Serializable @SerialName("update_settings") data class UpdateSettings(val patch: RemoteSettingsPatch) : RemoteCommand
 }
 
 /** One server as the phone needs to draw it. Addresses and keys stay on the television. */
@@ -171,6 +192,71 @@ data class RemoteNode(
     val group: String = "",
     val latencyMillis: Int? = null,
     val latencyFailed: Boolean = false,
+    val protocol: Protocol = Protocol.VLESS,
+    val badges: List<String> = emptyList(),
+    val subscriptionId: String? = null,
+    val memberProtocols: List<Protocol> = emptyList(),
+)
+
+/** One subscription on the television without exposing private credentials or token paths. */
+@Serializable
+data class RemoteSubscription(
+    val id: String,
+    val name: String,
+    val remoteTitle: String? = null,
+    val urlHost: String = "",
+    val enabled: Boolean = true,
+    val nodeCount: Int = 0,
+    val lastUpdatedEpochMillis: Long? = null,
+    val lastError: String? = null,
+    val userInfo: SubscriptionUserInfo? = null,
+    val refreshing: Boolean = false,
+)
+
+@Serializable
+data class RemoteSettings(
+    val visualizer: Visualizer = Visualizer.Waves,
+    val themeMode: ThemeMode = ThemeMode.System,
+    val language: AppLanguage = AppLanguage.System,
+    val palette: Palette = Palette.Glacier,
+    val autoConnectOnBoot: Boolean = false,
+    val autoSelectFastest: Boolean = false,
+    val subscriptionAutoUpdate: Boolean = true,
+    val subscriptionUpdateMinutes: Int = 360,
+    val routingMode: RoutingMode = RoutingMode.Rules,
+    val providerRouting: Boolean = false,
+    val bypassLan: Boolean = true,
+    val blockAds: Boolean = false,
+    val blockQuic: Boolean = false,
+    val enableIpv6: Boolean = false,
+    val hijackDns: Boolean = true,
+    val dnsFallback: Boolean = true,
+    val remoteDns: String = "https://1.1.1.1/dns-query",
+    val directDns: String = "8.8.8.8",
+    val mtu: Int = 9000,
+)
+
+@Serializable
+data class RemoteSettingsPatch(
+    val visualizer: Visualizer? = null,
+    val themeMode: ThemeMode? = null,
+    val language: AppLanguage? = null,
+    val palette: Palette? = null,
+    val autoConnectOnBoot: Boolean? = null,
+    val autoSelectFastest: Boolean? = null,
+    val subscriptionAutoUpdate: Boolean? = null,
+    val subscriptionUpdateMinutes: Int? = null,
+    val routingMode: RoutingMode? = null,
+    val providerRouting: Boolean? = null,
+    val bypassLan: Boolean? = null,
+    val blockAds: Boolean? = null,
+    val blockQuic: Boolean? = null,
+    val enableIpv6: Boolean? = null,
+    val hijackDns: Boolean? = null,
+    val dnsFallback: Boolean? = null,
+    val remoteDns: String? = null,
+    val directDns: String? = null,
+    val mtu: Int? = null,
 )
 
 /**
@@ -200,6 +286,10 @@ data class RemoteSnapshot(
     val uploadBytesPerSecond: Long = 0,
     val nodesRevision: Int = 0,
     val nodes: List<RemoteNode>? = null,
+    val pingingNodeIds: Set<String> = emptySet(),
+    val subscriptionsRevision: Int = 0,
+    val subscriptions: List<RemoteSubscription>? = null,
+    val settings: RemoteSettings? = null,
 )
 
 @Serializable
@@ -218,7 +308,12 @@ data class RemoteBond(
     /** Where it answered last. Tried first, because it is usually still right. */
     val lastHost: String = "",
     val lastPort: Int = REMOTE_PORT,
-)
+    val alias: String = "",
+    val lastPalette: Palette = Palette.Glacier,
+    val lastVisualizer: Visualizer = Visualizer.Waves,
+) {
+    val displayName: String get() = alias.ifBlank { hostName }
+}
 
 /** A phone the television has been introduced to. */
 @Serializable
@@ -246,7 +341,7 @@ data class RemotePeer(
  * introduced yet.
  */
 internal object RemoteCrypto {
-    val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
+    val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val random = SecureRandom()
 
     fun keyPair(): KeyPair = KeyPairGenerator.getInstance("EC").apply {

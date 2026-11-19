@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -50,6 +51,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.ui.components.ImportConfirmDialog
@@ -113,6 +115,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val geoHasPermission by viewModel.geoHasPermission.collectAsStateWithLifecycle()
     val geoHasBackgroundPermission by viewModel.geoHasBackgroundPermission.collectAsStateWithLifecycle()
     val geoSpoofDetected by viewModel.geoSpoofDetected.collectAsStateWithLifecycle()
+    val debugRemoteDemo by viewModel.debugRemoteDemo.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -216,6 +219,13 @@ fun MyDropApp(viewModel: MainViewModel) {
             }
 
             composable(Routes.REMOTE) {
+                val remoteFilter by viewModel.remoteServerFilter.collectAsStateWithLifecycle()
+                val remoteCollapsed by viewModel.remoteCollapsedGroups.collectAsStateWithLifecycle()
+                val darkTheme = when (state.settings.themeMode) {
+                    ThemeMode.System -> isSystemInDarkTheme()
+                    ThemeMode.Dark -> true
+                    ThemeMode.Light -> false
+                }
                 // Opened with the screen and closed with it. The console itself outlives both, so
                 // what is kept between visits is the bond and whatever was last heard on the
                 // network — not a socket held open behind a screen nobody is looking at.
@@ -225,12 +235,48 @@ fun MyDropApp(viewModel: MainViewModel) {
                 }
                 RemoteScreen(
                     state = remote,
+                    phoneSubscriptions = state.subscriptions,
+                    darkTheme = darkTheme,
+                    serverFilter = remoteFilter,
+                    collapsedGroupIds = remoteCollapsed,
                     onBack = { navController.popBackStack() },
                     onScan = { navController.navigate(Routes.SCAN) },
+                    onPairCode = viewModel::pairRemoteFromText,
+                    onSwitchTv = viewModel::openRemote,
+                    onReconnect = viewModel::reconnectRemote,
+                    onLookForTvs = viewModel::lookForTelevisions,
+                    onRenameTv = viewModel::renameRemote,
+                    onForgetTv = viewModel::forgetRemote,
                     onConnect = { viewModel.sendToRemote(RemoteCommand.Connect) },
                     onDisconnect = { viewModel.sendToRemote(RemoteCommand.Disconnect) },
-                    onSelect = { viewModel.sendToRemote(RemoteCommand.Select(it)) },
-                    onForget = viewModel::forgetRemote,
+                    onSelectNode = { viewModel.sendToRemote(RemoteCommand.Select(it)) },
+                    onPingNode = { viewModel.sendToRemote(RemoteCommand.PingNode(it)) },
+                    onPingNodes = { ids -> viewModel.sendToRemote(RemoteCommand.PingNodes(ids)) },
+                    onQueryChange = viewModel::setRemoteServerQuery,
+                    onSortChange = viewModel::setRemoteServerSort,
+                    onToggleProtocol = viewModel::toggleRemoteServerProtocol,
+                    onClearProtocols = viewModel::clearRemoteServerProtocols,
+                    onToggleCountry = viewModel::toggleRemoteServerCountry,
+                    onCountryModeChange = viewModel::setRemoteServerCountryMode,
+                    onClearCountries = viewModel::clearRemoteServerCountries,
+                    onResetFilters = viewModel::resetRemoteServerFilters,
+                    onToggleGroup = viewModel::toggleRemoteServerGroup,
+                    onAddSubscription = { url, name ->
+                        viewModel.sendToRemote(RemoteCommand.AddSubscription(url, name))
+                    },
+                    onRefreshSubscription = { id ->
+                        viewModel.sendToRemote(RemoteCommand.RefreshSubscription(id))
+                    },
+                    onRemoveSubscription = { id ->
+                        viewModel.sendToRemote(RemoteCommand.RemoveSubscription(id))
+                    },
+                    onToggleSubscription = { id, enabled ->
+                        viewModel.sendToRemote(RemoteCommand.SetSubscriptionEnabled(id, enabled))
+                    },
+                    onUpdateSettings = { patch ->
+                        viewModel.sendToRemote(RemoteCommand.UpdateSettings(patch))
+                    },
+                    onNotifyMessage = viewModel::notifyRemoteMessage,
                     contentPadding = contentPadding,
                 )
             }
@@ -264,6 +310,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onToggleProtocol = viewModel::toggleServerProtocol,
                     onClearProtocols = viewModel::clearServerProtocols,
                     onToggleCountry = viewModel::toggleServerCountry,
+                    onCountryModeChange = viewModel::setServerCountryMode,
                     onClearCountries = viewModel::clearServerCountries,
                     onResetFilters = viewModel::resetServerFilters,
                     contentPadding = contentPadding,
@@ -306,6 +353,12 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onDownloadUpdate = viewModel::downloadUpdate,
                     onInstallUpdate = viewModel::installUpdate,
                     onDismissUpdate = viewModel::dismissUpdate,
+                    debugRemoteDemo = debugRemoteDemo,
+                    onSetDebugRemoteDemo = viewModel::setDebugRemoteDemo,
+                    onOpenDebugRemote = {
+                        viewModel.setDebugRemoteDemo(true)
+                        navController.navigate(Routes.REMOTE)
+                    },
                     contentPadding = contentPadding,
                 )
             }

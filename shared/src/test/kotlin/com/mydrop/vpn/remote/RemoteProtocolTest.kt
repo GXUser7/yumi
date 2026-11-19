@@ -1,5 +1,12 @@
 package com.mydrop.vpn.remote
 
+import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.Palette
+import com.mydrop.vpn.core.model.Protocol
+import com.mydrop.vpn.core.model.RoutingMode
+import com.mydrop.vpn.core.model.SubscriptionUserInfo
+import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.Visualizer
 import javax.crypto.AEADBadTagException
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertEquals
@@ -186,5 +193,89 @@ class RemoteProtocolTest {
         )
         assertNull(decoded.nodes)
         assertNotEquals(emptyList<RemoteNode>(), decoded.nodes)
+    }
+
+    @Test
+    fun `extended commands, subscriptions, settings, and nodes round-trip through wire json`() {
+        val commands = listOf<RemoteCommand>(
+            RemoteCommand.PingNodes(listOf("n1", "n2")),
+            RemoteCommand.PingNode("n1"),
+            RemoteCommand.AddSubscription("https://example.com/sub", "Quattro"),
+            RemoteCommand.RefreshSubscription("sub-1"),
+            RemoteCommand.RemoveSubscription("sub-1"),
+            RemoteCommand.SetSubscriptionEnabled("sub-1", false),
+            RemoteCommand.UpdateSettings(
+                RemoteSettingsPatch(
+                    visualizer = Visualizer.Planet,
+                    themeMode = ThemeMode.Dark,
+                    language = AppLanguage.Russian,
+                    palette = Palette.Mint,
+                    routingMode = RoutingMode.Global,
+                    blockAds = true,
+                    mtu = 1400,
+                ),
+            ),
+        )
+        for (cmd in commands) {
+            val encoded = RemoteCrypto.json.encodeToString<RemoteCommand>(cmd)
+            val decoded = RemoteCrypto.json.decodeFromString<RemoteCommand>(encoded)
+            assertEquals(cmd, decoded)
+        }
+
+        val snapshot = RemoteSnapshot(
+            hostName = "Yumi TV · Bedroom",
+            state = RemoteTunnelState.On,
+            selectedNodeId = "n1",
+            nodesRevision = 9,
+            nodes = listOf(
+                RemoteNode(
+                    id = "n1",
+                    name = "🇩🇪 Germany",
+                    group = "Provider",
+                    latencyMillis = 42,
+                    latencyFailed = false,
+                    protocol = Protocol.HYSTERIA2,
+                    badges = listOf("Auto ×3", "TLS", "gRPC"),
+                    subscriptionId = "sub-1",
+                    memberProtocols = listOf(Protocol.HYSTERIA2, Protocol.VLESS),
+                ),
+            ),
+            pingingNodeIds = setOf("n2"),
+            subscriptionsRevision = 5,
+            subscriptions = listOf(
+                RemoteSubscription(
+                    id = "sub-1",
+                    name = "Quattro",
+                    remoteTitle = "Quattro VPN",
+                    urlHost = "example.com",
+                    enabled = true,
+                    nodeCount = 12,
+                    lastUpdatedEpochMillis = 1_757_000_000_000L,
+                    userInfo = SubscriptionUserInfo(downloadBytes = 1024L, totalBytes = 4096L),
+                    refreshing = false,
+                ),
+            ),
+            settings = RemoteSettings(
+                visualizer = Visualizer.Planet,
+                palette = Palette.Mint,
+                routingMode = RoutingMode.Global,
+                blockAds = true,
+                mtu = 1400,
+            ),
+        )
+        val encodedSnap = RemoteCrypto.json.encodeToString(snapshot)
+        assertEquals(snapshot, RemoteCrypto.json.decodeFromString<RemoteSnapshot>(encodedSnap))
+    }
+
+    @Test
+    fun `legacy minimal v1 snapshot decodes with safe defaults`() {
+        val legacyJson = """{"hostName":"Old TV","state":"On","nodesRevision":1,"nodes":[{"id":"1","name":"DE"}]}"""
+        val decoded = RemoteCrypto.json.decodeFromString<RemoteSnapshot>(legacyJson)
+        assertEquals("Old TV", decoded.hostName)
+        assertEquals(RemoteTunnelState.On, decoded.state)
+        assertNull(decoded.settings)
+        assertNull(decoded.subscriptions)
+        assertEquals(1, decoded.nodes?.size)
+        assertEquals(Protocol.VLESS, decoded.nodes?.single()?.protocol)
     }
 }

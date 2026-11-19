@@ -6,10 +6,12 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.mydrop.vpn.BuildConfig
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CountryFilterMode
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.GeoSample
 import com.mydrop.vpn.core.model.GeoZoneCluster
@@ -38,11 +40,13 @@ import com.mydrop.vpn.data.Ipv6Guard
 import com.mydrop.vpn.data.ConnectOutcome
 import com.mydrop.vpn.data.MapTileStore
 import com.mydrop.vpn.data.ProfileState
+import com.mydrop.vpn.data.RemoteConsoleState
 import com.mydrop.vpn.data.describe
 import com.mydrop.vpn.pairing.PairingInvite
 import com.mydrop.vpn.pairing.SubscriptionTransfer
 import com.mydrop.vpn.remote.RemoteCommand
 import com.mydrop.vpn.remote.RemoteInvite
+import com.mydrop.vpn.ui.screens.remote.DebugRemoteSandbox
 import com.mydrop.vpn.ui.screens.servers.ServerFilterState
 import com.mydrop.vpn.ui.screens.servers.ServerSort
 import com.mydrop.vpn.ui.screens.servers.filteredNodesForPing
@@ -182,8 +186,24 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      */
     val remote = container.remoteConsole
 
+    private val debugRemoteSandbox: DebugRemoteSandbox? =
+        if (BuildConfig.DEBUG) DebugRemoteSandbox(viewModelScope) else null
+
+    private val _debugRemoteDemo = MutableStateFlow(false)
+    val debugRemoteDemo: StateFlow<Boolean> = _debugRemoteDemo.asStateFlow()
+
     /** Whether the tunnel screen should show a door to the remote at all. */
-    val remoteState = container.remoteConsole.state
+    val remoteState: StateFlow<RemoteConsoleState> = if (BuildConfig.DEBUG && debugRemoteSandbox != null) {
+        combine(
+            container.remoteConsole.state,
+            debugRemoteSandbox.state,
+            _debugRemoteDemo,
+        ) { live, demo, useDemo ->
+            if (useDemo) demo else live
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, container.remoteConsole.state.value)
+    } else {
+        container.remoteConsole.state
+    }
 
     /** Snackbars are user-facing text, so they follow the chosen language like the screens do. */
     private val strings = container.strings
@@ -227,7 +247,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     private val uiNodesCache = VisibleNodesCache()
     private val serversNodesCache = VisibleNodesCache()
-    private val serverFilter = MutableStateFlow(ServerFilterState())
+    private val serverQuery = MutableStateFlow("")
     private val pingCoordinator = FilteredPingCoordinator(viewModelScope, container.profiles::recordLatency)
     private val transientState = combine(
         transient,
@@ -264,6 +284,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
+    private fun AppSettings.toServerFilter(query: String): ServerFilterState = ServerFilterState(
+        query = query,
+        sort = serverSort,
+        selectedProtocols = serverFilterProtocols,
+        selectedCountries = serverFilterCountries,
+        countryMode = serverFilterCountryMode,
+    )
+
     val serversUiState: StateFlow<ServersUiState> = combine(
         container.profiles.state
             .map { profiles ->
@@ -281,7 +309,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         transientState
             .map { it.pingingNodeIds }
             .distinctUntilChanged(),
-        serverFilter,
+        combine(
+            container.settings.settings
+                .map { it.toServerFilter(query = "") }
+                .distinctUntilChanged(),
+            serverQuery,
+        ) { persisted, query ->
+            persisted.copy(query = query)
+        },
     ) { profile, collapsedGroupIds, pingingNodeIds, filter ->
         ServersUiState(
             nodes = profile.nodes,
@@ -296,14 +331,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
         initialValue = container.profiles.state.value.let { profiles ->
+            val settings = container.settings.value
             ServersUiState(
                 nodes = serversNodesCache.resolve(profiles),
                 subscriptions = profiles.subscriptions,
                 selectedNodeId = profiles.selectedNodeId,
                 latencies = profiles.latencies,
-                collapsedGroupIds = container.settings.value.collapsedGroupIds,
+                collapsedGroupIds = settings.collapsedGroupIds,
                 pingingNodeIds = transient.value.pingingNodeIds,
-                filter = serverFilter.value,
+                filter = settings.toServerFilter(serverQuery.value),
             )
         },
     )
@@ -560,63 +596,69 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      * menu keeps its spinner until its own answer arrives.
      */
     fun setServerQuery(query: String) {
-        serverFilter.update { it.copy(query = query) }
+        serverQuery.value = query
     }
 
     fun setServerSort(sort: ServerSort) {
-        serverFilter.update { it.copy(sort = sort) }
+        updateSettings { it.copy(serverSort = sort) }
     }
 
     fun toggleServerProtocol(protocol: Protocol) {
-        serverFilter.update { current ->
-            val updated = if (protocol in current.selectedProtocols) {
-                current.selectedProtocols - protocol
+        updateSettings { settings ->
+            val updated = if (protocol in settings.serverFilterProtocols) {
+                settings.serverFilterProtocols - protocol
             } else {
-                current.selectedProtocols + protocol
+                settings.serverFilterProtocols + protocol
             }
-            current.copy(selectedProtocols = updated)
+            settings.copy(serverFilterProtocols = updated)
         }
     }
 
     fun clearServerProtocols() {
-        serverFilter.update { it.copy(selectedProtocols = emptySet()) }
+        updateSettings { it.copy(serverFilterProtocols = emptySet()) }
     }
 
     fun toggleServerCountry(code: String) {
-        serverFilter.update { current ->
-            val updated = if (code in current.selectedCountries) {
-                current.selectedCountries - code
+        updateSettings { settings ->
+            val updated = if (code in settings.serverFilterCountries) {
+                settings.serverFilterCountries - code
             } else {
-                current.selectedCountries + code
+                settings.serverFilterCountries + code
             }
-            current.copy(selectedCountries = updated)
+            settings.copy(serverFilterCountries = updated)
         }
     }
 
+    fun setServerCountryMode(mode: CountryFilterMode) {
+        updateSettings { it.copy(serverFilterCountryMode = mode) }
+    }
+
     fun clearServerCountries() {
-        serverFilter.update { it.copy(selectedCountries = emptySet()) }
+        updateSettings { it.copy(serverFilterCountries = emptySet()) }
     }
 
     fun resetServerFilters() {
-        serverFilter.update {
+        updateSettings {
             it.copy(
-                sort = ServerSort.Default,
-                selectedProtocols = emptySet(),
-                selectedCountries = emptySet(),
+                serverSort = ServerSort.Default,
+                serverFilterProtocols = emptySet(),
+                serverFilterCountries = emptySet(),
+                serverFilterCountryMode = CountryFilterMode.Include,
             )
         }
     }
 
     fun pingAll() {
         if (pingAllJob?.isActive == true || pingCoordinator.isRunning) return
-        val filter = serverFilter.value
+        val settings = container.settings.value
+        val filter = settings.toServerFilter(serverQuery.value)
         val profileState = container.profiles.state.value
         val nodes = filteredNodesForPing(
             nodes = profileState.visibleNodes,
             subscriptions = profileState.subscriptions,
             latencies = if (filter.sort == ServerSort.Latency) profileState.latencies else emptyMap(),
             filter = filter,
-            collapsedGroupIds = container.settings.value.collapsedGroupIds,
+            collapsedGroupIds = settings.collapsedGroupIds,
         )
         if (nodes.isEmpty()) return
         pingAllJob = pingCoordinator.ping(
@@ -770,7 +812,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         RemoteInvite.decode(raw)?.let { invite ->
             viewModelScope.launch {
                 remote.pair(invite)
-                    .onSuccess { emit(R.string.remote_paired, it.hostName) }
+                    .onSuccess { emit(R.string.remote_paired, it.displayName) }
                     .onFailure { emit(R.string.remote_pair_failed) }
             }
             return
@@ -778,11 +820,158 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         applyImport(DeepLinkParser.parse(raw))
     }
 
-    fun openRemote(hostId: String? = null) = remote.open(hostId)
-    fun closeRemote() = remote.close()
-    fun lookForTelevisions() = remote.look()
-    fun sendToRemote(command: RemoteCommand) = remote.send(command)
-    fun forgetRemote(hostId: String) = remote.forget(hostId)
+    private val _remoteServerFilter = MutableStateFlow(ServerFilterState())
+    val remoteServerFilter: StateFlow<ServerFilterState> = _remoteServerFilter.asStateFlow()
+
+    private val _remoteCollapsedGroups = MutableStateFlow<Set<String>>(emptySet())
+    val remoteCollapsedGroups: StateFlow<Set<String>> = _remoteCollapsedGroups.asStateFlow()
+
+    private fun activeDebugSandbox(): DebugRemoteSandbox? =
+        if (BuildConfig.DEBUG && _debugRemoteDemo.value) debugRemoteSandbox else null
+
+    fun setDebugRemoteDemo(enabled: Boolean) {
+        if (!BuildConfig.DEBUG) return
+        val sandbox = debugRemoteSandbox ?: return
+        _debugRemoteDemo.value = enabled
+        if (enabled) {
+            sandbox.open()
+        } else {
+            sandbox.close()
+        }
+    }
+
+    fun openRemote(hostId: String? = null) {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.open(hostId)
+        } else {
+            remote.open(hostId)
+        }
+    }
+
+    fun closeRemote() {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.close()
+        } else {
+            remote.close()
+        }
+    }
+
+    fun reconnectRemote() {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.reconnect()
+        } else {
+            remote.reconnect()
+        }
+    }
+
+    fun lookForTelevisions() {
+        if (activeDebugSandbox() != null) return
+        remote.look()
+    }
+
+    fun sendToRemote(command: RemoteCommand) {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.send(command)
+        } else {
+            remote.send(command)
+        }
+    }
+
+    fun renameRemote(hostId: String, alias: String) {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.rename(hostId, alias)
+        } else {
+            remote.rename(hostId, alias)
+        }
+    }
+
+    fun forgetRemote(hostId: String) {
+        val sandbox = activeDebugSandbox()
+        if (sandbox != null) {
+            sandbox.forget(hostId)
+        } else {
+            remote.forget(hostId)
+        }
+    }
+
+    fun pairRemoteFromText(raw: String) {
+        val invite = RemoteInvite.decode(raw)
+        if (invite == null) {
+            emit(R.string.remote_pair_failed)
+            return
+        }
+        viewModelScope.launch {
+            remote.pair(invite)
+                .onSuccess { emit(R.string.remote_paired, it.displayName) }
+                .onFailure { emit(R.string.remote_pair_failed) }
+        }
+    }
+
+    fun setRemoteServerQuery(query: String) {
+        _remoteServerFilter.update { it.copy(query = query) }
+    }
+
+    fun setRemoteServerSort(sort: ServerSort) {
+        _remoteServerFilter.update { it.copy(sort = sort) }
+    }
+
+    fun toggleRemoteServerProtocol(protocol: Protocol) {
+        _remoteServerFilter.update { cur ->
+            val next = if (protocol in cur.selectedProtocols) {
+                cur.selectedProtocols - protocol
+            } else {
+                cur.selectedProtocols + protocol
+            }
+            cur.copy(selectedProtocols = next)
+        }
+    }
+
+    fun clearRemoteServerProtocols() {
+        _remoteServerFilter.update { it.copy(selectedProtocols = emptySet()) }
+    }
+
+    fun toggleRemoteServerCountry(code: String) {
+        _remoteServerFilter.update { cur ->
+            val next = if (code in cur.selectedCountries) {
+                cur.selectedCountries - code
+            } else {
+                cur.selectedCountries + code
+            }
+            cur.copy(selectedCountries = next)
+        }
+    }
+
+    fun setRemoteServerCountryMode(mode: CountryFilterMode) {
+        _remoteServerFilter.update { it.copy(countryMode = mode) }
+    }
+
+    fun clearRemoteServerCountries() {
+        _remoteServerFilter.update { it.copy(selectedCountries = emptySet()) }
+    }
+
+    fun resetRemoteServerFilters() {
+        _remoteServerFilter.update {
+            it.copy(
+                sort = ServerSort.Default,
+                selectedProtocols = emptySet(),
+                selectedCountries = emptySet(),
+                countryMode = CountryFilterMode.Include,
+            )
+        }
+    }
+
+    fun toggleRemoteServerGroup(groupId: String) {
+        _remoteCollapsedGroups.update { cur ->
+            if (groupId in cur) cur - groupId else cur + groupId
+        }
+    }
+
+    fun notifyRemoteMessage(@StringRes resId: Int) = emit(resId)
 
     fun dismissPairingInvite() {
         if (!_pairingSending.value) _pairingInvite.value = null

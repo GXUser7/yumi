@@ -271,11 +271,16 @@ class RemoteServer(
      * second spent on a list that has not moved since the app opened.
      */
     private suspend fun pump(link: RemoteLink) {
-        var revision = -1
+        var nodesRevision = -1
+        var subsRevision = -1
         while (currentCoroutineContext().isActive) {
             val snapshot = snapshots.value
-            val payload = if (snapshot.nodesRevision == revision) snapshot.copy(nodes = null) else snapshot
-            revision = snapshot.nodesRevision
+            val payload = snapshot.copy(
+                nodes = if (snapshot.nodesRevision == nodesRevision) null else snapshot.nodes,
+                subscriptions = if (snapshot.subscriptionsRevision == subsRevision) null else snapshot.subscriptions,
+            )
+            nodesRevision = snapshot.nodesRevision
+            subsRevision = snapshot.subscriptionsRevision
             link.write(RemoteCrypto.json.encodeToString(payload).toByteArray())
             withTimeoutOrNull(HEARTBEAT_MILLIS) { snapshots.first { it != snapshot } }
         }

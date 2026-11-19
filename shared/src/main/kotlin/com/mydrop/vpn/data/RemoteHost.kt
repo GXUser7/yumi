@@ -2,6 +2,7 @@ package com.mydrop.vpn.data
 
 import android.content.Context
 import android.content.Intent
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.net.isNumericAddress
 import com.mydrop.vpn.remote.REMOTE_PAIRING_LIFETIME_MILLIS
@@ -13,9 +14,12 @@ import com.mydrop.vpn.remote.RemoteInvite
 import com.mydrop.vpn.remote.RemoteNode
 import com.mydrop.vpn.remote.RemotePeer
 import com.mydrop.vpn.remote.RemoteServer
+import com.mydrop.vpn.remote.RemoteSettings
 import com.mydrop.vpn.remote.RemoteSnapshot
+import com.mydrop.vpn.remote.RemoteSubscription
 import com.mydrop.vpn.remote.RemoteTunnelState
 import com.mydrop.vpn.remote.localAddress
+import java.net.URI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -49,8 +54,11 @@ class RemoteHost(
     private val scope: CoroutineScope,
     private val store: RemoteRepository,
     private val profiles: ProfileRepository,
+    private val settings: SettingsRepository,
     private val tunnel: TunnelController,
     private val launcher: TunnelLauncher,
+    private val latencyTester: LatencyTester,
+    private val subscriptionRefresher: SubscriptionRefresher,
 ) {
     /**
      * Android will not raise a tunnel until the owner of the device has agreed to it in a system
@@ -62,6 +70,13 @@ class RemoteHost(
     val consentRequests = _consentRequests.asSharedFlow()
     private val _needsConsent = MutableStateFlow(false)
     private val _notice = MutableStateFlow("")
+
+    private val pingCoordinator = FilteredPingCoordinator(scope, profiles::recordLatency)
+    private val singlePingingNodeIds = MutableStateFlow<Set<String>>(emptySet())
+    private val pingingNodeIds: StateFlow<Set<String>> = combine(
+        pingCoordinator.pingingNodeIds,
+        singlePingingNodeIds,
+    ) { batch, single -> batch + single }.stateIn(scope, SharingStarted.Eagerly, emptySet())
 
     val peers: StateFlow<List<RemotePeer>> =
         store.state.map { it.peers }.stateIn(scope, SharingStarted.Eagerly, store.value.peers)
@@ -81,6 +96,7 @@ class RemoteHost(
      * better uses for, and it produced the same answer every time.
      */
     private data class NodeList(val revision: Int, val nodes: List<RemoteNode>)
+    private data class SubscriptionList(val revision: Int, val items: List<RemoteSubscription>)
 
     private val nodeList: StateFlow<NodeList> = profiles.state.map { profile ->
         val groups = profile.subscriptions.associate { it.id to (it.remoteTitle ?: it.name) }
@@ -92,18 +108,62 @@ class RemoteHost(
                 group = node.subscriptionId?.let(groups::get).orEmpty(),
                 latencyMillis = latency?.takeUnless { it.failed }?.millis,
                 latencyFailed = latency?.failed == true,
+                protocol = node.protocol,
+                badges = node.badges,
+                subscriptionId = node.subscriptionId,
+                memberProtocols = node.group?.members?.map { it.protocol }?.distinct().orEmpty(),
             )
         }
         NodeList(nodes.hashCode(), nodes)
     }.stateIn(scope, SharingStarted.Eagerly, NodeList(0, emptyList()))
 
+    private val subscriptionList: StateFlow<SubscriptionList> = combine(
+        profiles.state,
+        subscriptionRefresher.running,
+    ) { profile, refreshingIds ->
+        val counts = profile.nodes.groupingBy { it.subscriptionId }.eachCount()
+        val items = profile.subscriptions.map { sub ->
+            RemoteSubscription(
+                id = sub.id,
+                name = sub.name,
+                remoteTitle = sub.remoteTitle,
+                urlHost = runCatching { URI(sub.url).host.orEmpty() }.getOrDefault(""),
+                enabled = sub.enabled,
+                nodeCount = counts[sub.id] ?: 0,
+                lastUpdatedEpochMillis = sub.lastUpdatedEpochMillis,
+                lastError = sub.lastError?.let(::sanitizeRemoteMessage),
+                userInfo = sub.userInfo,
+                refreshing = sub.id in refreshingIds,
+            )
+        }
+        SubscriptionList(items.hashCode(), items)
+    }.stateIn(scope, SharingStarted.Eagerly, SubscriptionList(0, emptyList()))
+
+    private data class ProfileSlice(
+        val selectedNodeId: String?,
+        val nodes: NodeList,
+        val subscriptions: SubscriptionList,
+    )
+
+    private data class TunnelSlice(
+        val vpn: VpnState,
+        val downloadBps: Long,
+        val uploadBps: Long,
+        val consent: Boolean,
+        val notice: String,
+    )
+
     val snapshot: StateFlow<RemoteSnapshot> = combine(
-        combine(profiles.state, nodeList) { profile, list -> profile.selectedNodeId to list },
-        tunnel.state,
-        tunnel.traffic,
-        _needsConsent,
-        _notice,
-    ) { (selectedNodeId, list), vpn, traffic, consent, notice ->
+        combine(profiles.state, nodeList, subscriptionList) { profile, nodes, subs ->
+            ProfileSlice(profile.selectedNodeId, nodes, subs)
+        },
+        combine(tunnel.state, tunnel.traffic, _needsConsent, _notice) { vpn, traffic, consent, notice ->
+            TunnelSlice(vpn, traffic.downloadBytesPerSecond, traffic.uploadBytesPerSecond, consent, notice)
+        },
+        settings.settings,
+        pingingNodeIds,
+    ) { profileSlice, tunnelSlice, currentSettings, pingingIds ->
+        val vpn = tunnelSlice.vpn
         RemoteSnapshot(
             hostName = store.identity().name,
             state = when (vpn) {
@@ -113,17 +173,21 @@ class RemoteHost(
                 is VpnState.Failed -> RemoteTunnelState.Failed
                 VpnState.Disconnected -> RemoteTunnelState.Off
             },
-            message = (vpn as? VpnState.Failed)?.message?.let(::sanitizeRemoteMessage) ?: notice,
-            needsConsentOnTv = consent && !vpn.isActive,
-            selectedNodeId = selectedNodeId,
+            message = (vpn as? VpnState.Failed)?.message?.let(::sanitizeRemoteMessage) ?: tunnelSlice.notice,
+            needsConsentOnTv = tunnelSlice.consent && !vpn.isActive,
+            selectedNodeId = profileSlice.selectedNodeId,
             connectedAtEpochMillis = (vpn as? VpnState.Connected)?.connectedAtEpochMillis ?: 0L,
-            downloadBytesPerSecond = traffic.downloadBytesPerSecond,
-            uploadBytesPerSecond = traffic.uploadBytesPerSecond,
+            downloadBytesPerSecond = tunnelSlice.downloadBps,
+            uploadBytesPerSecond = tunnelSlice.uploadBps,
             // The list's own content hash, so "has this changed" needs nothing kept beside it.
             // A collision would cost one stale list until the next real change, which is a price
             // worth the absence of a revision counter that two writers could disagree about.
-            nodesRevision = list.revision,
-            nodes = list.nodes,
+            nodesRevision = profileSlice.nodes.revision,
+            nodes = profileSlice.nodes.nodes,
+            pingingNodeIds = pingingIds,
+            subscriptionsRevision = profileSlice.subscriptions.revision,
+            subscriptions = profileSlice.subscriptions.items,
+            settings = currentSettings.toRemoteSettings(),
         )
     }.stateIn(scope, SharingStarted.Eagerly, RemoteSnapshot())
 
@@ -206,6 +270,87 @@ class RemoteHost(
                     launcher.connectTo(node, "remote server selected")
                 }
             }
+
+            is RemoteCommand.PingNodes -> {
+                val requested = command.nodeIds.toHashSet()
+                val targets = if (requested.isEmpty()) profiles.nodes else profiles.nodes.filter { it.id in requested }
+                pingCoordinator.ping(
+                    nodes = targets,
+                    mode = settings.value.pingMode,
+                    measure = { list, mode, onResult -> latencyTester.measureAll(list, mode, onResult) },
+                )
+            }
+
+            is RemoteCommand.PingNode -> {
+                val node = profiles.nodes.firstOrNull { it.id == command.nodeId } ?: return
+                scope.launch {
+                    singlePingingNodeIds.update { it + node.id }
+                    try {
+                        profiles.recordLatency(latencyTester.measure(node, settings.value.pingMode))
+                    } finally {
+                        singlePingingNodeIds.update { it - node.id }
+                    }
+                }
+            }
+
+            is RemoteCommand.AddSubscription -> {
+                val trimmed = command.url.trim()
+                if (!trimmed.startsWith("https://", true) && !trimmed.startsWith("http://", true)) return
+                val safeName = command.name?.trim()?.take(96)?.ifBlank { null }
+                    ?: runCatching { URI(trimmed).host }.getOrNull().orEmpty().ifBlank { "TV subscription" }
+                val sub = profiles.upsertSubscriptionSource(safeName, trimmed, null, emptyMap())
+                scope.launch { subscriptionRefresher.refresh(sub) }
+            }
+
+            is RemoteCommand.RefreshSubscription -> {
+                val sub = profiles.state.value.subscriptions.firstOrNull { it.id == command.subscriptionId } ?: return
+                scope.launch { subscriptionRefresher.refresh(sub) }
+            }
+
+            is RemoteCommand.RemoveSubscription -> profiles.removeSubscription(command.subscriptionId)
+
+            is RemoteCommand.SetSubscriptionEnabled ->
+                profiles.setSubscriptionEnabled(command.subscriptionId, command.enabled)
+
+            is RemoteCommand.UpdateSettings -> applySettingsPatch(command.patch)
+        }
+    }
+
+    private fun applySettingsPatch(patch: com.mydrop.vpn.remote.RemoteSettingsPatch) {
+        val previousRouting = settings.value.routingMode
+        val cleanRemoteDns = patch.remoteDns?.trim()?.takeIf { it.isNotBlank() && it.length <= 256 }
+        val cleanDirectDns = patch.directDns?.trim()?.takeIf { it.isNotBlank() && it.length <= 256 }
+        val validMtu = patch.mtu?.takeIf { it in 576..9000 }
+        val validInterval = patch.subscriptionUpdateMinutes?.takeIf { it in 15..10080 }
+
+        settings.update { cur ->
+            cur.copy(
+                visualizer = patch.visualizer ?: cur.visualizer,
+                themeMode = patch.themeMode ?: cur.themeMode,
+                language = patch.language ?: cur.language,
+                palette = patch.palette ?: cur.palette,
+                autoConnectOnBoot = patch.autoConnectOnBoot ?: cur.autoConnectOnBoot,
+                autoSelectFastest = patch.autoSelectFastest ?: cur.autoSelectFastest,
+                subscriptionAutoUpdate = patch.subscriptionAutoUpdate ?: cur.subscriptionAutoUpdate,
+                subscriptionUpdateMinutes = validInterval ?: cur.subscriptionUpdateMinutes,
+                routingMode = patch.routingMode ?: cur.routingMode,
+                providerRouting = patch.providerRouting ?: cur.providerRouting,
+                bypassLan = patch.bypassLan ?: cur.bypassLan,
+                blockAds = patch.blockAds ?: cur.blockAds,
+                blockQuic = patch.blockQuic ?: cur.blockQuic,
+                enableIpv6 = patch.enableIpv6 ?: cur.enableIpv6,
+                hijackDns = patch.hijackDns ?: cur.hijackDns,
+                dnsFallback = patch.dnsFallback ?: cur.dnsFallback,
+                remoteDns = cleanRemoteDns ?: cur.remoteDns,
+                directDns = cleanDirectDns ?: cur.directDns,
+                mtu = validMtu ?: cur.mtu,
+            )
+        }
+
+        if (patch.routingMode != null && patch.routingMode != previousRouting && tunnel.state.value.isActive) {
+            profiles.selectedNode()?.let { node ->
+                launcher.connectTo(node, "remote routing mode changed")
+            }
         }
     }
 
@@ -229,6 +374,28 @@ class RemoteHost(
         _needsConsent.value = !granted
     }
 }
+
+private fun AppSettings.toRemoteSettings(): RemoteSettings = RemoteSettings(
+    visualizer = visualizer,
+    themeMode = themeMode,
+    language = language,
+    palette = palette,
+    autoConnectOnBoot = autoConnectOnBoot,
+    autoSelectFastest = autoSelectFastest,
+    subscriptionAutoUpdate = subscriptionAutoUpdate,
+    subscriptionUpdateMinutes = subscriptionUpdateMinutes,
+    routingMode = routingMode,
+    providerRouting = providerRouting,
+    bypassLan = bypassLan,
+    blockAds = blockAds,
+    blockQuic = blockQuic,
+    enableIpv6 = enableIpv6,
+    hijackDns = hijackDns,
+    dnsFallback = dnsFallback,
+    remoteDns = remoteDns,
+    directDns = directDns,
+    mtu = mtu,
+)
 
 private val BRACKETED_IPV6_PATTERN = Regex("""\[([0-9a-fA-F:.]+)(?:%[^\]\s]+)?\](?::\d{1,5})?""")
 private val IPV4_PORT_PATTERN = Regex("""\b((?:\d{1,3}\.){3}\d{1,3})(?:\.(?=:\d{1,5}\b))?(?::\d{1,5})?\b""")

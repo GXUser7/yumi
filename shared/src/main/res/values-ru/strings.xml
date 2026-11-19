@@ -21,6 +21,7 @@
     <string name="action_refresh">Обновить</string>
     <string name="action_sort">Сортировка</string>
     <string name="action_retry">Повторить</string>
+    <string name="action_save">Сохранить</string>
 
     <string name="unit_millis">мс</string>
 
@@ -190,7 +191,11 @@
     <string name="servers_filter_all">Все</string>
     <string name="servers_filter_countries_all">Все страны</string>
     <string name="servers_filter_countries_chosen">выбрано %1$d</string>
+    <string name="servers_filter_countries_except">Кроме %1$s</string>
+    <string name="servers_filter_countries_excluded">исключено %1$d</string>
     <string name="servers_filter_countries_available">%1$d доступно</string>
+    <string name="servers_filter_country_mode_include">Только выбранные</string>
+    <string name="servers_filter_country_mode_exclude">Исключить</string>
     <string name="servers_filter_sort_label">Сортировка</string>
     <string name="servers_filter_sort_default_short">Обычно</string>
     <string name="servers_filter_sort_latency_short">По пингу</string>
@@ -200,10 +205,15 @@
     <string name="servers_filter_reset_count">Сбросить (%1$d)</string>
     <string name="servers_filter_country_search_placeholder">Название или код, напр. «Герм» / DE</string>
     <string name="servers_filter_selected_section">Выбрано</string>
+    <string name="servers_filter_excluded_section">Исключены</string>
     <string name="servers_filter_popular_section">Популярные</string>
     <string name="servers_filter_all_countries_az">Все страны · А–Я</string>
     <string name="servers_filter_country_not_found">Страна «%1$s» не найдена</string>
     <string name="servers_filter_show_results">Показать %1$s</string>
+    <string name="settings_debug_section">Отладка</string>
+    <string name="settings_debug_remote_demo">Тестовый режим пульта</string>
+    <string name="settings_debug_remote_demo_subtitle">Фейковые ТВ, серверы, подписки и трафик без реального телевизора</string>
+    <string name="settings_debug_remote_open">Открыть пульт (демо)</string>
 
     <!-- ================================================ Экран подписок -->
 
@@ -664,6 +674,43 @@
     <string name="remote_needs_consent">Подтвердите запрос VPN на экране телевизора</string>
     <string name="remote_paired">Пульт привязан к %1$s</string>
     <string name="remote_pair_failed">Не удалось привязать телевизор. Проверьте, что оба устройства в одной Wi-Fi сети.</string>
+    <string name="remote_tv_count_protected">ТВ: %1$d · защищено: %2$d</string>
+    <string name="remote_tv_count_only">Телевизоров: %1$d</string>
+    <string name="remote_add_tv">Добавить ТВ</string>
+    <string name="remote_add_tv_nearby">Найдено рядом: %1$d</string>
+    <string name="remote_add_tv_hint">Сканируйте QR-код с экрана нового телевизора</string>
+    <string name="remote_pick_server">Выбрать сервер</string>
+    <string name="remote_find_tv">Найти %1$s</string>
+    <string name="remote_status_offline">Офлайн</string>
+    <string name="remote_status_standby">Выключен</string>
+    <string name="remote_adblock_on">Без рекламы</string>
+    <string name="remote_adblock_off">Обычный DNS</string>
+    <string name="remote_add_sheet_title">Добавить телевизор</string>
+    <string name="remote_nearby_title">Рядом в сети</string>
+    <string name="remote_nearby_empty">Новых приставок пока не видно. Откройте Yumi на телевизоре и покажите QR-код в разделе Настройки → Пульт с телефона.</string>
+    <string name="remote_nearby_linked">Привязан</string>
+    <string name="remote_search_again">Найти снова</string>
+    <string name="remote_manual_code_label">Код привязки вручную</string>
+    <string name="remote_manual_code_hint">Ссылка yumi://remote?…</string>
+    <string name="remote_connect_code">Подключить</string>
+    <string name="remote_section_tv">Телевизор</string>
+    <string name="remote_tv_alias">Название</string>
+    <string name="remote_tv_alias_hint">Например: Гостиная или Спальня</string>
+    <string name="remote_tv_address">Адрес в сети</string>
+    <string name="remote_tv_address_unknown">Поиск по сети…</string>
+    <string name="remote_rename_title">Переименовать телевизор</string>
+    <string name="remote_forget_confirm_title">Отвязать %1$s?</string>
+    <string name="remote_forget_confirm_body">Телефон перестанет подключаться к этому телевизору, пока вы снова не отсканируете QR-код.</string>
+    <string name="remote_legacy_tv_hint">Чтобы управлять подписками и настройками с телефона, обновите Yumi на телевизоре. Пока доступно переключение серверов и питание туннеля.</string>
+    <string name="remote_sub_delete_title">Удалить подписку?</string>
+    <string name="remote_sub_delete_body">Подписка «%1$s» и её серверы будут удалены с телевизора.</string>
+    <string name="remote_sub_send_from_phone">Отправить с телефона</string>
+    <string name="remote_sub_add_manual">Или вставить ссылку для ТВ</string>
+    <string name="remote_sub_added">Подписка отправлена на телевизор</string>
+    <string name="remote_sub_url_invalid">Ссылка должна начинаться с http:// или https://</string>
+    <string name="remote_palette_title">Палитра</string>
+    <string name="remote_routing_title">Маршрутизация</string>
+    <string name="remote_settings_updated">Настройка отправлена на телевизор</string>
 
     <!-- ======================================================= Виджет 1x1 -->
 

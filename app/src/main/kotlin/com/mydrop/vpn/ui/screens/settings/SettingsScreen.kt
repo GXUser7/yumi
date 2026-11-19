@@ -55,6 +55,8 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Router
+import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -92,6 +94,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mydrop.vpn.BuildConfig
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
@@ -117,7 +120,7 @@ import com.mydrop.vpn.vpn.TunnelWidgetProvider
  * so the last good setting survives an unfinished edit.
  */
 @Composable
-private fun ValidatedField(
+internal fun ValidatedField(
     initial: String,
     label: String,
     hint: String,
@@ -181,6 +184,9 @@ fun SettingsScreen(
     onDownloadUpdate: () -> Unit,
     onInstallUpdate: (Context) -> Unit,
     onDismissUpdate: () -> Unit,
+    debugRemoteDemo: Boolean = false,
+    onSetDebugRemoteDemo: (Boolean) -> Unit = {},
+    onOpenDebugRemote: () -> Unit = {},
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -882,6 +888,35 @@ fun SettingsScreen(
             }
         }
 
+        if (BuildConfig.DEBUG) {
+            item("debug") {
+                SettingsSection(
+                    title = stringResource(R.string.settings_debug_section),
+                    icon = Icons.Rounded.Science,
+                ) {
+                    SwitchRow(
+                        title = stringResource(R.string.settings_debug_remote_demo),
+                        subtitle = stringResource(R.string.settings_debug_remote_demo_subtitle),
+                        checked = debugRemoteDemo,
+                        onCheckedChange = onSetDebugRemoteDemo,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    FilledTonalButton(
+                        onClick = onOpenDebugRemote,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SettingsRemote,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.settings_debug_remote_open))
+                    }
+                }
+            }
+        }
+
         item("version") {
             val context = LocalContext.current
             // Read from the package rather than written here: a hand-maintained string on this
@@ -956,7 +991,7 @@ private fun GeoRow(state: GeoAssetStore.State, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun SettingsSection(
+internal fun SettingsSection(
     title: String,
     icon: ImageVector,
     content: @Composable ColumnScope.() -> Unit,
@@ -998,7 +1033,7 @@ private fun SettingsSection(
  * своего переключателя настолько, чтобы читалось «внутри», а не «следом».
  */
 @Composable
-private fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
+internal fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1012,7 +1047,7 @@ private fun DependentGroup(content: @Composable ColumnScope.() -> Unit) {
 
 /** Волосяная линия внутри группы: строки разные, но принадлежат одному. */
 @Composable
-private fun GroupDivider() {
+internal fun GroupDivider() {
     HorizontalDivider(
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
     )
@@ -1049,7 +1084,7 @@ private fun ipv6Subtitle(enabled: Boolean, status: Ipv6Guard.Status): String = w
  * "Системны". At 8 dp the label gets 77 dp there; the ellipsis is for screens narrower still.
  */
 @Composable
-private fun RowScope.ChoiceButton(label: String, checked: Boolean, onClick: () -> Unit) {
+internal fun RowScope.ChoiceButton(label: String, checked: Boolean, onClick: () -> Unit) {
     ToggleButton(
         checked = checked,
         onCheckedChange = { onClick() },
@@ -1066,7 +1101,7 @@ private fun RowScope.ChoiceButton(label: String, checked: Boolean, onClick: () -
 }
 
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     title: String,
     subtitle: String,
     checked: Boolean,
@@ -1093,7 +1128,7 @@ private fun SwitchRow(
 }
 
 @Composable
-private fun NavigationRow(
+internal fun NavigationRow(
     title: String,
     subtitle: String,
     icon: ImageVector,

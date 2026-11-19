@@ -1,5 +1,7 @@
 package com.mydrop.vpn.data
 
+import com.mydrop.vpn.core.model.Palette
+import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.remote.REMOTE_PAIRING_LIFETIME_MILLIS
 import com.mydrop.vpn.remote.REMOTE_PORT
 import com.mydrop.vpn.remote.RemoteAuthority
@@ -174,7 +176,66 @@ class RemoteRepository(
     /* ── The phone ────────────────────────────────────────────────────────────────────────── */
 
     fun remember(bond: RemoteBond) = store.update { current ->
-        current.copy(bonds = current.bonds.filterNot { it.hostId == bond.hostId } + bond)
+        val existing = current.bonds.firstOrNull { it.hostId == bond.hostId }
+        val merged = if (existing == null) bond else bond.copy(
+            alias = bond.alias.ifBlank { existing.alias },
+            lastPalette = if (bond.lastPalette != Palette.Glacier) bond.lastPalette else existing.lastPalette,
+            lastVisualizer = if (bond.lastVisualizer != Visualizer.Waves) bond.lastVisualizer else existing.lastVisualizer,
+        )
+        current.copy(bonds = current.bonds.filterNot { it.hostId == bond.hostId } + merged)
+    }
+
+    fun renameBond(hostId: String, alias: String) {
+        val clean = alias.trim().take(64)
+        store.update { current ->
+            val target = current.bonds.firstOrNull { it.hostId == hostId } ?: return@update current
+            if (target.alias == clean) return@update current
+            current.copy(
+                bonds = current.bonds.map {
+                    if (it.hostId == hostId) it.copy(alias = clean) else it
+                },
+            )
+        }
+    }
+
+    fun rememberMeta(
+        hostId: String,
+        hostName: String,
+        palette: Palette?,
+        visualizer: Visualizer?,
+    ) {
+        val existing = store.value.bonds.firstOrNull { it.hostId == hostId } ?: return
+        val nextName = hostName.takeIf { it.isNotBlank() } ?: existing.hostName
+        val nextPalette = palette ?: existing.lastPalette
+        val nextVisualizer = visualizer ?: existing.lastVisualizer
+        if (existing.hostName == nextName &&
+            existing.lastPalette == nextPalette &&
+            existing.lastVisualizer == nextVisualizer
+        ) {
+            return
+        }
+        store.update { current ->
+            val bond = current.bonds.firstOrNull { it.hostId == hostId } ?: return@update current
+            if (bond.hostName == nextName &&
+                bond.lastPalette == nextPalette &&
+                bond.lastVisualizer == nextVisualizer
+            ) {
+                return@update current
+            }
+            current.copy(
+                bonds = current.bonds.map {
+                    if (it.hostId == hostId) {
+                        it.copy(
+                            hostName = nextName,
+                            lastPalette = nextPalette,
+                            lastVisualizer = nextVisualizer,
+                        )
+                    } else {
+                        it
+                    }
+                },
+            )
+        }
     }
 
     /** Where the set answered this time, so the next session can try it before it searches. */

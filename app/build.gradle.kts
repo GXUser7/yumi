@@ -93,6 +93,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // One APK per architecture. libbox's native library dominates the download, so a universal

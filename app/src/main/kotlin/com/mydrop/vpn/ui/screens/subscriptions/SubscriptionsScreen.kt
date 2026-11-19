@@ -66,6 +66,7 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.format.daysUntil
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.Subscription
+import com.mydrop.vpn.core.model.SubscriptionUserInfo
 import com.mydrop.vpn.ui.MainUiState
 import com.mydrop.vpn.ui.components.QrShareDialog
 import com.mydrop.vpn.ui.components.ScreenHeader
@@ -246,7 +247,11 @@ private fun SubscriptionCard(
  */
 @Composable
 private fun TrafficQuota(subscription: Subscription) {
-    val info = subscription.userInfo
+    TrafficQuota(subscription.userInfo)
+}
+
+@Composable
+internal fun TrafficQuota(info: SubscriptionUserInfo?) {
     val fraction = info?.usedFraction
 
     if (info == null || fraction == null) {
@@ -309,7 +314,7 @@ private fun TrafficQuota(subscription: Subscription) {
 }
 
 @Composable
-private fun RefreshButton(isRefreshing: Boolean, onClick: () -> Unit) {
+internal fun RefreshButton(isRefreshing: Boolean, onClick: () -> Unit) {
     val infinite = rememberInfiniteTransition(label = "refresh")
     val spin by infinite.animateFloat(
         initialValue = 0f,
