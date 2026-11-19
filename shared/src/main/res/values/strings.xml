@@ -688,6 +688,8 @@ Send it here: %2$s</string>
     <string name="settings_geozones">Whitelist geo-zones</string>
     <string name="settings_geozones_subtitle">Map cellular drop zones locally and pre-switch to mobile servers before connections stall</string>
     <string name="settings_geozones_permission_needed">Location permission needed — toggle on to grant</string>
+    <string name="settings_geozones_bg_permission">Background location</string>
+    <string name="settings_geozones_bg_permission_subtitle">Choose “Allow all the time” so zones are mapped when the tunnel starts from the tile or widget</string>
     <string name="settings_geozones_map">City zones map</string>
     <string name="settings_geozones_map_empty">No zones mapped yet — open the interactive map</string>
     <string name="settings_geozones_map_count">Zones mapped: %1$d</string>

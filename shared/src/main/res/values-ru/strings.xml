@@ -686,6 +686,8 @@
     <string name="settings_geozones">Гео-зоны белых списков</string>
     <string name="settings_geozones_subtitle">Запоминать районы, где обычные серверы падают на мобильной сети, и переключаться заранее</string>
     <string name="settings_geozones_permission_needed">Нужно разрешение на геолокацию — включите переключатель, чтобы выдать</string>
+    <string name="settings_geozones_bg_permission">Фоновая геолокация</string>
+    <string name="settings_geozones_bg_permission_subtitle">Выберите «Разрешить в любом режиме», чтобы зоны создавались при запуске из плитки и виджета</string>
     <string name="settings_geozones_map">Карта зон города</string>
     <string name="settings_geozones_map_empty">Зоны пока не найдены — откройте интерактивную карту</string>
     <string name="settings_geozones_map_count">Нанесено зон: %1$d</string>

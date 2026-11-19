@@ -7,11 +7,13 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.net.ConnectivityManager
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Looper
 import android.os.SystemClock
 import android.telephony.CellIdentityLte
@@ -19,9 +21,13 @@ import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.mydrop.vpn.core.model.GeoSample
+import com.mydrop.vpn.core.model.GeoTrackingTier
 import com.mydrop.vpn.core.model.GeoZoneEngine
 import com.mydrop.vpn.core.model.HexCoord
 import com.mydrop.vpn.core.model.LatLon
@@ -31,7 +37,11 @@ import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.model.WifiAnchor
 import com.mydrop.vpn.core.model.ZoneProximity
 import com.mydrop.vpn.shared.R
+import com.mydrop.vpn.vpn.MyDropVpnService
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.function.Consumer
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,16 +52,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Adaptive location & serving cell-tower monitor for geo-zones.
  *
- * Keeps radio wakeups at zero on Wi-Fi when the map is closed, listens passively/low-power on
- * cellular while VPN is active, boosts to GPS when a drop is suspected or the map is visible,
- * cross-checks satellite fixes against cellular/Wi-Fi network location and anchored cell towers,
- * and falls back to multi-tower signal-weighted triangulation under GPS spoofing/jamming.
+ * Uses event-driven cell changes and the passive location provider as a zero-wakeup baseline on
+ * cellular, resolves one-shot fixes only on demand when mapping a drop or tower change, engages
+ * low-power balanced updates only when moving near known zones, and bursts to GPS briefly only on
+ * immediate drops/approaches or while the map screen is visible.
  */
 class GeoLocationMonitor(
     private val context: Context,
@@ -61,7 +73,21 @@ class GeoLocationMonitor(
     private val logs: LogRepository,
     private val scope: CoroutineScope,
 ) {
-    private enum class TrackingMode { Off, Passive, Active }
+    private data class TierConfigInputs(
+        val enabled: Boolean,
+        val preemptive: Boolean,
+        val perm: Boolean,
+        val mapOpen: Boolean,
+        val burst: Boolean,
+    )
+
+    private data class TierDynamicInputs(
+        val vpnConnected: Boolean,
+        val cellular: Boolean,
+        val screenOn: Boolean,
+        val nearZone: Boolean,
+        val moved: Boolean,
+    )
 
     private val locationManager: LocationManager? =
         context.getSystemService(LocationManager::class.java)
@@ -74,6 +100,9 @@ class GeoLocationMonitor(
 
     private val _hasPermission = MutableStateFlow(checkAnyLocationPermission())
     val hasPermission: StateFlow<Boolean> = _hasPermission.asStateFlow()
+
+    private val _hasBackgroundPermission = MutableStateFlow(checkBackgroundLocationPermission())
+    val hasBackgroundPermission: StateFlow<Boolean> = _hasBackgroundPermission.asStateFlow()
 
     private val _currentSample = MutableStateFlow<GeoSample?>(null)
     val currentSample: StateFlow<GeoSample?> = _currentSample.asStateFlow()
@@ -89,15 +118,31 @@ class GeoLocationMonitor(
 
     private val mapActive = MutableStateFlow(false)
     private val burstActive = MutableStateFlow(false)
+    private val recentlyMoved = MutableStateFlow(false)
 
+    private val burstLock = Any()
     private var burstJob: Job? = null
-    private var towerPollJob: Job? = null
+    private var moveDecayJob: Job? = null
+    private var lastBurstStartedMillis: Long = 0L
+
     private var lastValidSample: GeoSample? = null
     private var previousSample: GeoSample? = null
     private var lastNetworkCoord: LatLon? = null
     private var lastNetworkAtElapsedMillis: Long = 0L
     private var lastSpoofLoggedMillis = 0L
-    private var registeredMode = TrackingMode.Off
+    private var lastCellErrorLoggedMillis = 0L
+    private var lastTowerAnchorKey: Long? = null
+    private var lastTowerAnchorAtElapsedMillis: Long = 0L
+
+    private var lastSeenTowerId: Long? = null
+    private val recentTowerEntries = ArrayDeque<Pair<Long, Long>>()
+    private var lastTowerOneShotMillis: Long = 0L
+    private var activeOneShotCancel: CancellationSignal? = null
+    private var telephonyCallbackApi31: Any? = null
+    @Suppress("DEPRECATION")
+    private var phoneStateListenerLegacy: PhoneStateListener? = null
+
+    private var registeredTier = GeoTrackingTier.Off
     private var lastReportedProximity: ZoneProximity = ZoneProximity.Outside
     private var currentWifiSessionKey: String? = null
     private var currentWifiSessionRecorded: Boolean = false
@@ -120,25 +165,70 @@ class GeoLocationMonitor(
 
     fun start() {
         scope.launch {
-            combine(
-                settings.settings.map { it.geoZonesEnabled }.distinctUntilChanged(),
-                tunnel.state,
-                tunnel.transport,
-                mapActive,
-                combine(burstActive, _hasPermission) { burst, perm -> burst to perm },
-            ) { enabled, vpnState, transport, mapOpen, (burst, perm) ->
-                if (!enabled || !perm) {
-                    TrackingMode.Off
-                } else if (mapOpen || (burst && vpnState is VpnState.Connected)) {
-                    TrackingMode.Active
-                } else if (vpnState is VpnState.Connected && transport == NetworkTransport.Cellular) {
-                    TrackingMode.Passive
-                } else {
-                    TrackingMode.Off
+            settings.settings
+                .map { it.geoZonesEnabled }
+                .distinctUntilChanged()
+                .collect { MyDropVpnService.refreshForegroundType() }
+        }
+
+        scope.launch {
+            MyDropVpnService.locationFgsActive.collect { active ->
+                if (active && registeredTier != GeoTrackingTier.Off) {
+                    applyTier(registeredTier, force = true)
                 }
             }
+        }
+
+        scope.launch {
+            val nearKnownZoneFlow = combine(
+                _lastValidLatLon,
+                _currentSample.map { it?.cellTowerId }.distinctUntilChanged(),
+                geoZones.clusters,
+            ) { coord, tower, clusters ->
+                GeoZoneEngine.isNearActionableZone(coord, tower, clusters)
+            }.distinctUntilChanged()
+
+            val configFlags = combine(
+                settings.settings.map { it.geoZonesEnabled to it.geoPreemptiveSwitch }.distinctUntilChanged(),
+                _hasPermission,
+                mapActive,
+                burstActive,
+            ) { (enabled, preemptive), perm, mapOpen, burst ->
+                TierConfigInputs(enabled, preemptive, perm, mapOpen, burst)
+            }
+
+            val dynamicSignals = combine(
+                tunnel.state,
+                tunnel.transport,
+                tunnel.screenOn,
+                nearKnownZoneFlow,
+                recentlyMoved,
+            ) { vpnState, transport, screenOn, nearZone, moved ->
+                TierDynamicInputs(
+                    vpnConnected = vpnState is VpnState.Connected,
+                    cellular = transport == NetworkTransport.Cellular,
+                    screenOn = screenOn,
+                    nearZone = nearZone,
+                    moved = moved,
+                )
+            }
+
+            combine(configFlags, dynamicSignals) { cfg, dyn ->
+                GeoZoneEngine.selectTrackingTier(
+                    enabled = cfg.enabled,
+                    hasPermission = cfg.perm,
+                    vpnConnected = dyn.vpnConnected,
+                    cellular = dyn.cellular,
+                    mapOpen = cfg.mapOpen,
+                    burstActive = cfg.burst,
+                    screenOn = dyn.screenOn,
+                    nearKnownZone = dyn.nearZone,
+                    recentlyMoved = dyn.moved,
+                    preemptiveEnabled = cfg.preemptive,
+                )
+            }
                 .distinctUntilChanged()
-                .collect { mode -> applyMode(mode) }
+                .collect { tier -> applyTier(tier) }
         }
 
         scope.launch {
@@ -175,13 +265,22 @@ class GeoLocationMonitor(
 
     fun refreshPermission() {
         val prev = _hasPermission.value
+        val prevBg = _hasBackgroundPermission.value
         val now = checkAnyLocationPermission()
+        val nowBg = checkBackgroundLocationPermission()
         _hasPermission.value = now
-        if (prev != now) {
-            logs.trace(TAG, "permission changed: $prev -> $now (fine=${checkFineLocationPermission()})")
+        _hasBackgroundPermission.value = nowBg
+        if (prev != now || prevBg != nowBg) {
+            logs.trace(
+                TAG,
+                "permission changed: perm=$prev->$now fine=${checkFineLocationPermission()} bg=$prevBg->$nowBg",
+            )
         }
+        MyDropVpnService.refreshForegroundType()
         if (now && settings.value.geoZonesEnabled && _lastValidLatLon.value == null) {
-            seedLastKnownLocation()
+            scope.launch(Dispatchers.Main.immediate) {
+                seedLastKnownLocation(allowStaleForMap = mapActive.value)
+            }
         }
     }
 
@@ -193,48 +292,104 @@ class GeoLocationMonitor(
         mapActive.value = active
     }
 
-    fun requestHighAccuracyBurst(durationMillis: Long = DEFAULT_BURST_MILLIS) {
+    fun requestHighAccuracyBurst(
+        durationMillis: Long = DEFAULT_BURST_MILLIS,
+        force: Boolean = false,
+    ) {
         if (!_hasPermission.value || !settings.value.geoZonesEnabled) return
-        logs.trace(TAG, "high-accuracy burst requested (${durationMillis}ms)")
-        burstJob?.cancel()
-        burstActive.value = true
-        burstJob = scope.launch {
-            delay(durationMillis)
-            burstActive.value = false
+        val now = SystemClock.elapsedRealtime()
+        synchronized(burstLock) {
+            if (!force && lastBurstStartedMillis != 0L && (now - lastBurstStartedMillis) < BURST_COOLDOWN_MS) {
+                return
+            }
+            lastBurstStartedMillis = now
+            burstJob?.cancel()
+            burstActive.value = true
+            burstJob = scope.launch {
+                delay(durationMillis)
+                burstActive.value = false
+            }
+        }
+        logs.trace(TAG, "high-accuracy burst requested (${durationMillis}ms, force=$force)")
+        if (freshSampleOrNull() == null) {
+            requestOneShotLocation(preferGps = false, reason = "burst-seed")
         }
     }
 
-    private fun applyMode(mode: TrackingMode) {
-        if (mode == registeredMode) return
+    fun freshSampleOrNull(maxAgeMillis: Long = GeoZoneEngine.MAX_FIX_AGE_MILLIS): GeoSample? {
+        val sample = _currentSample.value ?: return null
+        return sample.takeIf { GeoZoneEngine.isFixFresh(it, SystemClock.elapsedRealtime(), maxAgeMillis) }
+    }
+
+    suspend fun resolveFreshSample(timeoutMillis: Long = DEFAULT_ONESHOT_TIMEOUT_MILLIS): GeoSample? {
+        if (!settings.value.geoZonesEnabled || !_hasPermission.value) return null
+        freshSampleOrNull()?.let { return it }
+
+        val manager = locationManager
+        val provider = manager?.let { pickOneShotProvider(it, preferGps = false) }
+        if (manager != null && provider != null) {
+            val location = requestSingleLocationSuspend(manager, provider, timeoutMillis)
+            if (location != null) {
+                withContext(Dispatchers.Main.immediate) {
+                    handleLocation(location)
+                }
+                freshSampleOrNull()?.let { return it }
+            }
+        }
+
+        withContext(Dispatchers.Main.immediate) {
+            refreshTowerOnly()
+        }
+        return freshSampleOrNull()
+    }
+
+    private fun applyTier(tier: GeoTrackingTier, force: Boolean = false) {
+        if (!force && tier == registeredTier) return
         scope.launch(Dispatchers.Main.immediate) {
-            val prev = registeredMode
+            if (!force && tier == registeredTier) return@launch
+            val prev = registeredTier
             unregisterLocationUpdates()
-            registeredMode = mode
+            unregisterCellListener()
+            if (tier == GeoTrackingTier.Off) {
+                activeOneShotCancel?.cancel()
+                activeOneShotCancel = null
+            }
+            registeredTier = tier
             logs.trace(
                 TAG,
-                "mode=$prev->$mode perm=${_hasPermission.value} fine=${checkFineLocationPermission()} " +
+                "tier=$prev->$tier force=$force perm=${_hasPermission.value} " +
+                    "fine=${checkFineLocationPermission()} bg=${_hasBackgroundPermission.value} " +
+                    "fgsLoc=${MyDropVpnService.locationFgsActive.value} " +
                     "enabled=${settings.value.geoZonesEnabled} vpn=${tunnel.state.value::class.simpleName} " +
-                    "transport=${tunnel.transport.value} map=${mapActive.value} burst=${burstActive.value}",
+                    "transport=${tunnel.transport.value} map=${mapActive.value} " +
+                    "burst=${burstActive.value} moved=${recentlyMoved.value}",
             )
-            when (mode) {
-                TrackingMode.Off -> {
-                    towerPollJob?.cancel()
-                    towerPollJob = null
+            when (tier) {
+                GeoTrackingTier.Off -> Unit
+
+                GeoTrackingTier.Dormant -> {
+                    seedLastKnownLocation(allowStaleForMap = false)
+                    registerProvider(LocationManager.PASSIVE_PROVIDER, PASSIVE_INTERVAL_MS, PASSIVE_DISTANCE_M)
+                    registerCellListener()
                 }
 
-                TrackingMode.Passive -> {
-                    seedLastKnownLocation()
-                    registerProvider(LocationManager.NETWORK_PROVIDER, PASSIVE_INTERVAL_MS, PASSIVE_DISTANCE_M)
-                    registerProvider(LocationManager.PASSIVE_PROVIDER, PASSIVE_FAST_INTERVAL_MS, PASSIVE_FAST_DISTANCE_M)
-                    startTowerPolling()
+                GeoTrackingTier.Balanced -> {
+                    seedLastKnownLocation(allowStaleForMap = false)
+                    registerBalancedProvider()
+                    registerProvider(LocationManager.PASSIVE_PROVIDER, PASSIVE_INTERVAL_MS, PASSIVE_DISTANCE_M)
+                    registerCellListener()
                 }
 
-                TrackingMode.Active -> {
-                    seedLastKnownLocation()
+                GeoTrackingTier.HighAccuracy -> {
+                    seedLastKnownLocation(allowStaleForMap = mapActive.value)
                     registerProvider(LocationManager.GPS_PROVIDER, ACTIVE_INTERVAL_MS, ACTIVE_DISTANCE_M)
-                    registerProvider(LocationManager.NETWORK_PROVIDER, ACTIVE_NETWORK_INTERVAL_MS, ACTIVE_NETWORK_DISTANCE_M)
+                    registerProvider(
+                        LocationManager.NETWORK_PROVIDER,
+                        ACTIVE_NETWORK_INTERVAL_MS,
+                        ACTIVE_NETWORK_DISTANCE_M,
+                    )
                     registerProvider(LocationManager.PASSIVE_PROVIDER, ACTIVE_INTERVAL_MS, ACTIVE_DISTANCE_M)
-                    startTowerPolling()
+                    registerCellListener()
                 }
             }
         }
@@ -255,7 +410,41 @@ class GeoLocationMonitor(
                     Looper.getMainLooper(),
                 )
             }
+        }.onFailure { error ->
+            logs.trace(TAG, "registerProvider($provider) failed: ${error.message}")
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun registerBalancedProvider() {
+        val manager = locationManager ?: return
+        if (!checkAnyLocationPermission()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val providers = runCatching { manager.allProviders }.getOrDefault(emptyList())
+            val provider = when {
+                LocationManager.FUSED_PROVIDER in providers -> LocationManager.FUSED_PROVIDER
+                LocationManager.NETWORK_PROVIDER in providers -> LocationManager.NETWORK_PROVIDER
+                else -> return
+            }
+            runCatching {
+                registerBalancedProviderApi31(manager, provider)
+            }.onFailure { error ->
+                logs.trace(TAG, "registerBalancedProvider($provider) failed: ${error.message}")
+            }
+        } else {
+            registerProvider(LocationManager.NETWORK_PROVIDER, BALANCED_INTERVAL_MS, BALANCED_DISTANCE_M)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun registerBalancedProviderApi31(manager: LocationManager, provider: String) {
+        val request = LocationRequest.Builder(BALANCED_INTERVAL_MS)
+            .setQuality(LocationRequest.QUALITY_LOW_POWER)
+            .setMinUpdateDistanceMeters(BALANCED_DISTANCE_M)
+            .setMinUpdateIntervalMillis(BALANCED_MIN_INTERVAL_MS)
+            .build()
+        manager.requestLocationUpdates(provider, request, context.mainExecutor, locationListener)
     }
 
     private fun unregisterLocationUpdates() {
@@ -263,7 +452,221 @@ class GeoLocationMonitor(
     }
 
     @SuppressLint("MissingPermission")
-    private fun seedLastKnownLocation() {
+    private fun registerCellListener() {
+        if (!checkFineLocationPermission()) return
+        val manager = telephonyManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (telephonyCallbackApi31 != null) return
+            runCatching {
+                registerTelephonyCallbackApi31(manager)
+            }.onFailure { error ->
+                logs.trace(TAG, "registerTelephonyCallback failed: ${error.message}")
+            }
+        } else {
+            if (phoneStateListenerLegacy != null) return
+            runCatching {
+                registerLegacyPhoneStateListener(manager)
+            }.onFailure { error ->
+                logs.trace(TAG, "PhoneStateListener.listen failed: ${error.message}")
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun registerTelephonyCallbackApi31(manager: TelephonyManager) {
+        val callback = object : TelephonyCallback(), TelephonyCallback.CellInfoListener {
+            override fun onCellInfoChanged(cellInfo: MutableList<CellInfo>) {
+                handleCellInfoList(cellInfo)
+            }
+        }
+        manager.registerTelephonyCallback(context.mainExecutor, callback)
+        telephonyCallbackApi31 = callback
+    }
+
+    @Suppress("DEPRECATION")
+    private fun registerLegacyPhoneStateListener(manager: TelephonyManager) {
+        val listener = object : PhoneStateListener() {
+            override fun onCellInfoChanged(cellInfo: MutableList<CellInfo>?) {
+                if (cellInfo != null) handleCellInfoList(cellInfo)
+            }
+        }
+        manager.listen(listener, PhoneStateListener.LISTEN_CELL_INFO)
+        phoneStateListenerLegacy = listener
+    }
+
+    private fun unregisterCellListener() {
+        val manager = telephonyManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cb = telephonyCallbackApi31 as? TelephonyCallback
+            if (cb != null) {
+                runCatching { manager.unregisterTelephonyCallback(cb) }
+                telephonyCallbackApi31 = null
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val listener = phoneStateListenerLegacy
+            if (listener != null) {
+                @Suppress("DEPRECATION")
+                runCatching { manager.listen(listener, PhoneStateListener.LISTEN_NONE) }
+                phoneStateListenerLegacy = null
+            }
+        }
+    }
+
+    private fun handleCellInfoList(infos: List<CellInfo>) {
+        if (registeredTier == GeoTrackingTier.Off || !settings.value.geoZonesEnabled || !_hasPermission.value) return
+        val observedTowers = extractObservedTowers(infos)
+        val towerId = observedTowers.firstOrNull { it.registered }?.towerId ?: return
+        if (towerId == lastSeenTowerId) return
+
+        val now = SystemClock.elapsedRealtime()
+        val isPingPong = recentTowerEntries.any { (id, ts) ->
+            id == towerId && (now - ts) in 0L..TOWER_PINGPONG_WINDOW_MS
+        }
+        lastSeenTowerId?.let { prevId ->
+            if (recentTowerEntries.size >= TOWER_HISTORY_SIZE) {
+                recentTowerEntries.removeFirst()
+            }
+            recentTowerEntries.addLast(prevId to now)
+        }
+        lastSeenTowerId = towerId
+
+        applyObservedTowers(observedTowers, towerId)
+        if (!isPingPong) {
+            markRecentlyMoved()
+            if (freshSampleOrNull() == null && (now - lastTowerOneShotMillis) >= TOWER_ONESHOT_COOLDOWN_MS) {
+                lastTowerOneShotMillis = now
+                requestOneShotLocation(preferGps = false, reason = "tower-change")
+            }
+        }
+    }
+
+    private fun markRecentlyMoved() {
+        recentlyMoved.value = true
+        moveDecayJob?.cancel()
+        moveDecayJob = scope.launch {
+            delay(MOVEMENT_WINDOW_MILLIS)
+            recentlyMoved.value = false
+        }
+    }
+
+    private fun requestOneShotLocation(preferGps: Boolean, reason: String) {
+        if (!_hasPermission.value || !settings.value.geoZonesEnabled) return
+        scope.launch(Dispatchers.Main.immediate) {
+            val manager = locationManager ?: return@launch
+            val provider = pickOneShotProvider(manager, preferGps) ?: return@launch
+            activeOneShotCancel?.cancel()
+            val signal = CancellationSignal()
+            activeOneShotCancel = signal
+            logs.trace(TAG, "one-shot location requested ($reason, provider=$provider)")
+            requestSingleLocationCallback(manager, provider, signal) { location ->
+                if (activeOneShotCancel === signal) {
+                    activeOneShotCancel = null
+                }
+                if (location != null) {
+                    handleLocation(location)
+                }
+            }
+        }
+    }
+
+    private fun pickOneShotProvider(manager: LocationManager, preferGps: Boolean): String? {
+        val providers = runCatching { manager.allProviders }.getOrDefault(emptyList())
+        return when {
+            preferGps && checkFineLocationPermission() && LocationManager.GPS_PROVIDER in providers ->
+                LocationManager.GPS_PROVIDER
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && LocationManager.FUSED_PROVIDER in providers ->
+                LocationManager.FUSED_PROVIDER
+            LocationManager.NETWORK_PROVIDER in providers ->
+                LocationManager.NETWORK_PROVIDER
+            checkFineLocationPermission() && LocationManager.GPS_PROVIDER in providers ->
+                LocationManager.GPS_PROVIDER
+            else -> null
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestSingleLocationCallback(
+        manager: LocationManager,
+        provider: String,
+        signal: CancellationSignal,
+        onResult: (Location?) -> Unit,
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                requestCurrentLocationApi30(manager, provider, signal, onResult)
+            }.onFailure { error ->
+                logs.trace(TAG, "getCurrentLocation($provider) failed: ${error.message}")
+                onResult(null)
+            }
+        } else {
+            val done = AtomicBoolean(false)
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (done.compareAndSet(false, true)) {
+                        runCatching { manager.removeUpdates(this) }
+                        onResult(location)
+                    }
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+                override fun onProviderEnabled(provider: String) = Unit
+                override fun onProviderDisabled(provider: String) = Unit
+            }
+            signal.setOnCancelListener {
+                if (done.compareAndSet(false, true)) {
+                    runCatching { manager.removeUpdates(listener) }
+                    onResult(null)
+                }
+            }
+            @Suppress("DEPRECATION")
+            runCatching {
+                manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            }.onFailure { error ->
+                if (done.compareAndSet(false, true)) {
+                    logs.trace(TAG, "requestSingleUpdate($provider) failed: ${error.message}")
+                    onResult(null)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun requestCurrentLocationApi30(
+        manager: LocationManager,
+        provider: String,
+        signal: CancellationSignal,
+        onResult: (Location?) -> Unit,
+    ) {
+        manager.getCurrentLocation(
+            provider,
+            signal,
+            context.mainExecutor,
+            Consumer { location -> onResult(location) },
+        )
+    }
+
+    private suspend fun requestSingleLocationSuspend(
+        manager: LocationManager,
+        provider: String,
+        timeoutMillis: Long,
+    ): Location? = withTimeoutOrNull(timeoutMillis) {
+        suspendCancellableCoroutine { cont ->
+            val signal = CancellationSignal()
+            val resumed = AtomicBoolean(false)
+            cont.invokeOnCancellation { signal.cancel() }
+            requestSingleLocationCallback(manager, provider, signal) { location ->
+                if (resumed.compareAndSet(false, true) && cont.isActive) {
+                    cont.resume(location)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun seedLastKnownLocation(allowStaleForMap: Boolean = false) {
         val manager = locationManager ?: return
         if (!checkAnyLocationPermission()) return
         // Seed Network before GPS so cold-start cross-checking has cellular/Wi-Fi reference first.
@@ -272,32 +675,42 @@ class GeoLocationMonitor(
             add(LocationManager.PASSIVE_PROVIDER)
             if (checkFineLocationPermission()) add(LocationManager.GPS_PROVIDER)
         }
-        var seededAny = false
+        val nowElapsed = SystemClock.elapsedRealtime()
+        var seededFresh = false
         for (provider in orderedProviders) {
             val fix = runCatching {
                 if (provider in manager.allProviders) manager.getLastKnownLocation(provider) else null
             }.getOrNull() ?: continue
-            handleLocation(fix)
-            seededAny = true
-        }
-        if (!seededAny) {
-            refreshTowerOnly()
-        }
-    }
-
-    private fun startTowerPolling() {
-        if (towerPollJob?.isActive == true) return
-        towerPollJob = scope.launch {
-            while (isActive) {
-                delay(TOWER_POLL_INTERVAL_MS)
-                refreshTowerOnly()
+            val fixElapsed = runCatching { fix.elapsedRealtimeNanos / 1_000_000L }.getOrNull()
+            val isFresh = fixElapsed != null && (nowElapsed - fixElapsed) in 0L..SEED_MAX_AGE_MILLIS
+            if (isFresh) {
+                handleLocation(fix)
+                seededFresh = true
+            } else if (allowStaleForMap && _lastValidLatLon.value == null) {
+                val isMock = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    fix.isMock
+                } else {
+                    @Suppress("DEPRECATION")
+                    fix.isFromMockProvider
+                }
+                val accuracy = if (fix.hasAccuracy()) fix.accuracy else 100f
+                if (!isMock && accuracy <= 1000f) {
+                    _lastValidLatLon.value = LatLon(fix.latitude, fix.longitude)
+                }
             }
+        }
+        if (!seededFresh) {
+            refreshTowerOnly()
         }
     }
 
     private fun refreshTowerOnly() {
         val observedTowers = readObservedCellTowers()
         val towerId = observedTowers.firstOrNull { it.registered }?.towerId ?: readCellTowerId() ?: return
+        applyObservedTowers(observedTowers, towerId)
+    }
+
+    private fun applyObservedTowers(observedTowers: List<ObservedCellTower>, towerId: Long) {
         val current = _currentSample.value
         val nowElapsed = SystemClock.elapsedRealtime()
 
@@ -427,16 +840,40 @@ class GeoLocationMonitor(
         }
 
         _spoofDetected.value = false
+        val nowElapsed = SystemClock.elapsedRealtime()
         if (location.provider == LocationManager.NETWORK_PROVIDER) {
             lastNetworkCoord = LatLon(candidate.latitude, candidate.longitude)
             lastNetworkAtElapsedMillis = elapsedMillis
         }
-        if (towerId != null && candidate.accuracyMeters <= MAX_ANCHOR_ACCURACY_METERS) {
-            geoZones.recordTowerObservation(towerId, candidate.latitude, candidate.longitude)
+
+        val prevValid = lastValidSample
+        if (prevValid != null) {
+            val movedMeters = GeoZoneEngine.haversineMeters(
+                prevValid.latitude,
+                prevValid.longitude,
+                candidate.latitude,
+                candidate.longitude,
+            )
+            if (movedMeters >= MOVEMENT_DISTANCE_METERS) {
+                markRecentlyMoved()
+            }
         }
+
+        if (towerId != null && candidate.accuracyMeters <= MAX_ANCHOR_ACCURACY_METERS) {
+            val towerSamples = anchors[towerId]?.samples ?: 0
+            val anchorDue = towerId != lastTowerAnchorKey ||
+                (nowElapsed - lastTowerAnchorAtElapsedMillis) !in 0L until TOWER_ANCHOR_RECORD_COOLDOWN_MS ||
+                towerSamples < 3
+            if (anchorDue) {
+                lastTowerAnchorKey = towerId
+                lastTowerAnchorAtElapsedMillis = nowElapsed
+                geoZones.recordTowerObservation(towerId, candidate.latitude, candidate.longitude)
+            }
+        }
+
         if (tunnel.transport.value == NetworkTransport.Wifi &&
             candidate.accuracyMeters <= MAX_ANCHOR_ACCURACY_METERS &&
-            (SystemClock.elapsedRealtime() - elapsedMillis) in 0L..WIFI_ANCHOR_FIX_MAX_AGE_MILLIS
+            (nowElapsed - elapsedMillis) in 0L..WIFI_ANCHOR_FIX_MAX_AGE_MILLIS
         ) {
             recordWifiAnchorAt(candidate.latitude, candidate.longitude)
         }
@@ -445,6 +882,20 @@ class GeoLocationMonitor(
         lastValidSample = candidate
         _lastValidLatLon.value = LatLon(candidate.latitude, candidate.longitude)
         _currentSample.value = candidate
+
+        if (burstActive.value &&
+            !mapActive.value &&
+            candidate.accuracyMeters <= BURST_GOOD_ACCURACY_METERS &&
+            (nowElapsed - elapsedMillis) in 0L..DEFAULT_BURST_MILLIS
+        ) {
+            synchronized(burstLock) {
+                burstJob?.cancel()
+                burstJob = null
+                burstActive.value = false
+            }
+            logs.trace(TAG, "burst satisfied early acc=${candidate.accuracyMeters.toInt()}m")
+        }
+
         val hex = HexCoord.fromLatLon(candidate.latitude, candidate.longitude)
         logs.trace(
             TAG,
@@ -459,7 +910,13 @@ class GeoLocationMonitor(
     fun readObservedCellTowers(): List<ObservedCellTower> {
         if (!checkFineLocationPermission()) return emptyList()
         val manager = telephonyManager ?: return emptyList()
-        val infos = runCatching { manager.allCellInfo }.getOrNull() ?: return emptyList()
+        val infos = runCatching { manager.allCellInfo }
+            .onFailure { logCellReadFailure(it) }
+            .getOrNull() ?: return emptyList()
+        return extractObservedTowers(infos)
+    }
+
+    private fun extractObservedTowers(infos: List<CellInfo>): List<ObservedCellTower> {
         val result = ArrayList<ObservedCellTower>(infos.size)
         for (info in infos) {
             val id = extractTowerId(info) ?: continue
@@ -484,12 +941,22 @@ class GeoLocationMonitor(
     fun readCellTowerId(): Long? {
         if (!checkFineLocationPermission()) return null
         val manager = telephonyManager ?: return null
-        val infos = runCatching { manager.allCellInfo }.getOrNull() ?: return null
+        val infos = runCatching { manager.allCellInfo }
+            .onFailure { logCellReadFailure(it) }
+            .getOrNull() ?: return null
         for (info in infos) {
             if (!info.isRegistered) continue
             extractTowerId(info)?.let { return it }
         }
         return null
+    }
+
+    private fun logCellReadFailure(error: Throwable) {
+        val now = SystemClock.elapsedRealtime()
+        if (lastCellErrorLoggedMillis == 0L || (now - lastCellErrorLoggedMillis) >= CELL_ERROR_LOG_COOLDOWN_MS) {
+            lastCellErrorLoggedMillis = now
+            logs.trace(TAG, "allCellInfo failed: ${error.message}")
+        }
     }
 
     private fun extractTowerId(info: CellInfo): Long? = when (info) {
@@ -554,7 +1021,9 @@ class GeoLocationMonitor(
                 settings.value.geoZonesEnabled &&
                 checkAnyLocationPermission()
             ) {
-                seedLastKnownLocation()
+                scope.launch(Dispatchers.Main.immediate) {
+                    seedLastKnownLocation(allowStaleForMap = mapActive.value)
+                }
             }
         } else {
             if (currentWifiSessionKey != null) {
@@ -650,18 +1119,38 @@ class GeoLocationMonitor(
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    private fun checkBackgroundLocationPermission(): Boolean =
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            checkAnyLocationPermission()
+        } else {
+            checkAnyLocationPermission() &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+
     private companion object {
         const val TAG = "YumiGeo"
         const val PASSIVE_INTERVAL_MS = 15_000L
         const val PASSIVE_DISTANCE_M = 35f
-        const val PASSIVE_FAST_INTERVAL_MS = 10_000L
-        const val PASSIVE_FAST_DISTANCE_M = 25f
+        const val BALANCED_INTERVAL_MS = 45_000L
+        const val BALANCED_MIN_INTERVAL_MS = 30_000L
+        const val BALANCED_DISTANCE_M = 100f
         const val ACTIVE_INTERVAL_MS = 3_000L
         const val ACTIVE_DISTANCE_M = 5f
         const val ACTIVE_NETWORK_INTERVAL_MS = 5_000L
         const val ACTIVE_NETWORK_DISTANCE_M = 10f
-        const val DEFAULT_BURST_MILLIS = 45_000L
-        const val TOWER_POLL_INTERVAL_MS = 20_000L
+        const val DEFAULT_BURST_MILLIS = 15_000L
+        const val BURST_COOLDOWN_MS = 60_000L
+        const val BURST_GOOD_ACCURACY_METERS = 80f
+        const val DEFAULT_ONESHOT_TIMEOUT_MILLIS = 3_500L
+        const val SEED_MAX_AGE_MILLIS = 300_000L
+        const val MOVEMENT_WINDOW_MILLIS = 180_000L
+        const val MOVEMENT_DISTANCE_METERS = 50.0
+        const val TOWER_HISTORY_SIZE = 3
+        const val TOWER_PINGPONG_WINDOW_MS = 180_000L
+        const val TOWER_ONESHOT_COOLDOWN_MS = 120_000L
+        const val TOWER_ANCHOR_RECORD_COOLDOWN_MS = 90_000L
+        const val CELL_ERROR_LOG_COOLDOWN_MS = 120_000L
         const val SPOOF_LOG_COOLDOWN_MS = 120_000L
         const val MAX_ANCHOR_ACCURACY_METERS = 300f
         const val WIFI_ANCHOR_FIX_MAX_AGE_MILLIS = 300_000L

@@ -330,6 +330,8 @@ sealed interface ZoneProximity {
     ) : ZoneProximity
 }
 
+enum class GeoTrackingTier { Off, Dormant, Balanced, HighAccuracy }
+
 /**
  * Pure clustering, anti-spoofing, and proximity rules for geo-zones.
  */
@@ -365,8 +367,56 @@ object GeoZoneEngine {
     /** Grace window after disconnecting from Wi-Fi where handover fixes are still anchored. */
     const val HOME_WIFI_HANDOVER_GRACE_MILLIS = 90_000L
 
+    /** Search radius around known Whitelist/Suspect clusters that keeps Balanced polling awake. */
+    const val PROXIMITY_WATCH_RADIUS_METERS = 2_500.0
+
+    /** Maximum age of a location fix considered fresh enough to map drops/passes without re-querying. */
+    const val MAX_FIX_AGE_MILLIS = 180_000L
+
     private const val EARTH_RADIUS_METERS = 6_371_000.0
     private const val MAX_PREDICTION_SPEED_MPS = 35.0
+
+    fun isFixFresh(
+        sample: GeoSample?,
+        nowElapsedMillis: Long,
+        maxAgeMillis: Long = MAX_FIX_AGE_MILLIS,
+    ): Boolean = sample != null && (nowElapsedMillis - sample.elapsedRealtimeMillis) in 0L..maxAgeMillis
+
+    fun isNearActionableZone(
+        coord: LatLon?,
+        cellTowerId: Long?,
+        clusters: List<GeoZoneCluster>,
+        radiusMeters: Double = PROXIMITY_WATCH_RADIUS_METERS,
+    ): Boolean {
+        val actionable = clusters.filter { it.kind == ZoneKind.Whitelist || it.kind == ZoneKind.Suspect }
+        if (actionable.isEmpty()) return false
+        if (cellTowerId != null && actionable.any { cellTowerId in it.cellTowerIds }) return true
+        if (coord == null) return false
+        return actionable.any {
+            haversineMeters(coord.latitude, coord.longitude, it.center.latitude, it.center.longitude) <=
+                radiusMeters + it.approximateRadiusMeters
+        }
+    }
+
+    fun selectTrackingTier(
+        enabled: Boolean,
+        hasPermission: Boolean,
+        vpnConnected: Boolean,
+        cellular: Boolean,
+        mapOpen: Boolean,
+        burstActive: Boolean,
+        screenOn: Boolean,
+        nearKnownZone: Boolean,
+        recentlyMoved: Boolean,
+        preemptiveEnabled: Boolean,
+    ): GeoTrackingTier = when {
+        !enabled || !hasPermission -> GeoTrackingTier.Off
+        mapOpen -> GeoTrackingTier.HighAccuracy
+        !vpnConnected || !cellular -> GeoTrackingTier.Off
+        burstActive -> GeoTrackingTier.HighAccuracy
+        preemptiveEnabled && nearKnownZone && (screenOn || recentlyMoved) -> GeoTrackingTier.Balanced
+        else -> GeoTrackingTier.Dormant
+    }
 
     fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val phi1 = Math.toRadians(lat1)

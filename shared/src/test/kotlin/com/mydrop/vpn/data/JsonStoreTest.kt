@@ -137,4 +137,43 @@ class JsonStoreTest {
         while (failure.get() == null && System.currentTimeMillis() < deadline) Thread.sleep(20)
         assertNotNull("the write failure never surfaced", failure.get())
     }
+
+    @Test
+    fun `a no-op transform returning the same instance does not touch disk`() = withScope { scope ->
+        val file = File(folder.root, "noop.json")
+        val s = store(file, scope)
+
+        val changed = s.updateChanged { it }
+
+        assertFalse(changed)
+        Thread.sleep(100)
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `debounced store coalesces routine updates and writes immediately on urgent or flush`() = withScope { scope ->
+        val file = File(folder.root, "debounced.json")
+        val s = JsonStore(
+            file = file,
+            serializer = Box.serializer(),
+            defaultValue = Box(),
+            scope = scope,
+            saveDebounceMillis = 60_000L,
+        )
+
+        s.update { it.copy(value = 1, note = "queued-1") }
+        s.update { it.copy(value = 2, note = "queued-2") }
+        Thread.sleep(120)
+        assertFalse("debounced updates must wait before writing", file.exists())
+
+        s.flush()
+        awaitFile(file) { it.contains("\"value\": 2") && it.contains("queued-2") }
+
+        s.update { it.copy(value = 3, note = "queued-3") }
+        Thread.sleep(100)
+        assertFalse(file.readText().contains("queued-3"))
+
+        assertTrue(s.updateChanged(urgent = true) { it.copy(value = 4, note = "urgent-4") })
+        awaitFile(file) { it.contains("\"value\": 4") && it.contains("urgent-4") }
+    }
 }

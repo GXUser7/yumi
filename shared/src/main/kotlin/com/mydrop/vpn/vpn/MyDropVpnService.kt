@@ -1,5 +1,7 @@
 package com.mydrop.vpn.vpn
 
+import android.Manifest
+import android.app.ActivityManager
 import android.app.Notification as AndroidNotification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.InetAddresses
@@ -247,6 +250,9 @@ class MyDropVpnService : VpnService() {
         /** See [com.mydrop.vpn.data.TunnelController.wakeups] for what this is for. */
         val wakeups: SharedFlow<Unit> = _wakeups.asSharedFlow()
 
+        private val _locationFgsActive = MutableStateFlow(false)
+        val locationFgsActive: StateFlow<Boolean> = _locationFgsActive.asStateFlow()
+
         /**
          * The live service, so a switch that does not restart anything can still tell the truth.
          *
@@ -256,6 +262,15 @@ class MyDropVpnService : VpnService() {
          * reason — the watchdog and the UI live in the same process and need them.
          */
         private var live: MyDropVpnService? = null
+
+        fun refreshForegroundType() {
+            val service = live ?: return
+            service.interfaceHandler.post {
+                if (_state.value.isActive) {
+                    service.startForegroundNotification()
+                }
+            }
+        }
 
         /**
          * Records which server is carrying traffic now, without touching the core.
@@ -458,6 +473,8 @@ class MyDropVpnService : VpnService() {
     /** Notification copy and failure messages both surface to the user; both follow the setting. */
     private val strings by lazy { (application as MyDropApplication).container.strings }
 
+    @Volatile private var locationFgsActive = false
+
     // ------------------------------------------------------------ Lifecycle
 
     override fun onCreate() {
@@ -597,6 +614,7 @@ class MyDropVpnService : VpnService() {
             logs.trace(NATIVE_TAG, "teardown could not take the lock in time, stopping anyway")
             stopTunnel()
         }
+        setLocationFgsActive(false)
         scope.cancel()
         super.onDestroy()
     }
@@ -810,6 +828,7 @@ class MyDropVpnService : VpnService() {
         _traffic.value = TrafficStats.Zero
         _coreDelays.value = emptyMap()
         _state.value = failure ?: VpnState.Disconnected
+        setLocationFgsActive(false)
 
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -1627,17 +1646,110 @@ class MyDropVpnService : VpnService() {
             .build()
     }
 
+    private fun setLocationFgsActive(active: Boolean) {
+        if (locationFgsActive != active) {
+            logs.trace(NATIVE_TAG, "foreground service location capability -> $active")
+        }
+        locationFgsActive = active
+        _locationFgsActive.value = active
+    }
+
+    private fun hasAnyLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun hasBackgroundLocationPermission(): Boolean =
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            hasAnyLocationPermission()
+        } else {
+            hasAnyLocationPermission() &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+
+    private fun isProcessForeground(): Boolean = runCatching {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }.getOrDefault(false)
+
     private fun startForegroundNotification() {
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            } else {
-                0
-            },
-        )
+        val container = (application as MyDropApplication).container
+        val geoEnabled = container.settings.value.geoZonesEnabled
+        val hasLocPerm = hasAnyLocationPermission()
+        val canAttachLocation = geoEnabled &&
+            hasLocPerm &&
+            (locationFgsActive || hasBackgroundLocationPermission() || isProcessForeground())
+        val notification = buildNotification()
+
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+                if (canAttachLocation) {
+                    try {
+                        ServiceCompat.startForeground(
+                            this,
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                        )
+                        setLocationFgsActive(true)
+                        return
+                    } catch (error: SecurityException) {
+                        logs.trace(
+                            NATIVE_TAG,
+                            "location FGS type refused, falling back to specialUse: ${error.message}",
+                        )
+                    } catch (error: IllegalStateException) {
+                        logs.trace(
+                            NATIVE_TAG,
+                            "location FGS type refused, falling back to specialUse: ${error.message}",
+                        )
+                    }
+                }
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+                setLocationFgsActive(false)
+            }
+
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                if (canAttachLocation) {
+                    try {
+                        ServiceCompat.startForeground(
+                            this,
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+                        )
+                        setLocationFgsActive(true)
+                        return
+                    } catch (error: SecurityException) {
+                        logs.trace(
+                            NATIVE_TAG,
+                            "location FGS type refused, falling back to default: ${error.message}",
+                        )
+                    } catch (error: IllegalStateException) {
+                        logs.trace(
+                            NATIVE_TAG,
+                            "location FGS type refused, falling back to default: ${error.message}",
+                        )
+                    }
+                }
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+                setLocationFgsActive(false)
+            }
+
+            else -> {
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+                setLocationFgsActive(geoEnabled && hasLocPerm)
+            }
+        }
     }
 
     private fun updateNotification() {

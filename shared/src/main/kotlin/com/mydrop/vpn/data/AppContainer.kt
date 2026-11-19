@@ -266,8 +266,13 @@ class AppContainer(context: Context) {
     val geoAssets: GeoAssetStore =
         GeoAssetStore(context.applicationContext, logs)
 
-    val geoZones: GeoZoneRepository =
-        GeoZoneRepository(context.filesDir, applicationScope, writeFailure, logs)
+    val geoZones: GeoZoneRepository = GeoZoneRepository(
+        filesDir = context.filesDir,
+        scope = applicationScope,
+        onWriteFailure = writeFailure,
+        logs = logs,
+        saveDebounceMillis = GeoZoneRepository.DEFAULT_SAVE_DEBOUNCE_MILLIS,
+    )
 
     val geoMonitor: GeoLocationMonitor = GeoLocationMonitor(
         context = appContext,

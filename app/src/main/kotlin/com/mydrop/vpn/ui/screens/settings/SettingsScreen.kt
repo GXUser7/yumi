@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Palette
@@ -169,6 +170,7 @@ fun SettingsScreen(
     onOpenMobileNodes: () -> Unit,
     geoZonesCount: Int = 0,
     geoHasPermission: Boolean = true,
+    geoHasBackgroundPermission: Boolean = true,
     onGeoPermissionChanged: () -> Unit = {},
     onOpenZonesMap: () -> Unit = {},
     geoAssets: GeoAssetStore.State,
@@ -657,6 +659,12 @@ fun SettingsScreen(
                     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 onUpdate { s -> s.copy(geoZonesEnabled = granted) }
             }
+            var triedDirectBgRequest by remember { mutableStateOf(false) }
+            val bgPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) {
+                onGeoPermissionChanged()
+            }
             SettingsSection(
                 title = stringResource(R.string.settings_geozones),
                 icon = Icons.Rounded.Explore,
@@ -702,6 +710,32 @@ fun SettingsScreen(
                 )
                 AnimatedVisibility(visible = settings.geoZonesEnabled) {
                     DependentGroup {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            geoHasPermission &&
+                            !geoHasBackgroundPermission
+                        ) {
+                            NavigationRow(
+                                title = stringResource(R.string.settings_geozones_bg_permission),
+                                subtitle = stringResource(R.string.settings_geozones_bg_permission_subtitle),
+                                icon = Icons.Rounded.MyLocation,
+                                onClick = {
+                                    if (!triedDirectBgRequest) {
+                                        triedDirectBgRequest = true
+                                        bgPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    } else {
+                                        runCatching {
+                                            context.startActivity(
+                                                android.content.Intent(
+                                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                    android.net.Uri.fromParts("package", context.packageName, null),
+                                                ),
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                            GroupDivider()
+                        }
                         SwitchRow(
                             title = stringResource(R.string.settings_geozones_preemptive),
                             subtitle = stringResource(R.string.settings_geozones_preemptive_subtitle),

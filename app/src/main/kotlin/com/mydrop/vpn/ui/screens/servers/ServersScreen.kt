@@ -161,10 +161,19 @@ internal fun filteredNodesForPing(
     subscriptions: List<Subscription>,
     latencies: Map<String, LatencyResult>,
     filter: ServerFilterState,
+    collapsedGroupIds: Set<String> = emptySet(),
 ): List<ProxyNode> {
-    val resolved = resolveServerFilters(nodes, filter)
+    val disabledIds = subscriptions.asSequence()
+        .filterNot { it.enabled }
+        .mapTo(HashSet()) { it.id }
+    val enabledNodes = if (disabledIds.isEmpty()) {
+        nodes
+    } else {
+        nodes.filterNot { it.subscriptionId in disabledIds }
+    }
+    val resolved = resolveServerFilters(enabledNodes, filter)
     return buildGroups(
-        nodes = nodes,
+        nodes = enabledNodes,
         subscriptions = subscriptions,
         latencies = latencies,
         query = filter.query,
@@ -172,7 +181,9 @@ internal fun filteredNodesForPing(
         selectedProtocols = resolved.activeProtocols,
         selectedCountries = resolved.activeCountries,
         manualGroupTitle = "",
-    ).flatMap { it.nodes }
+    )
+        .filterNot { it.id in collapsedGroupIds }
+        .flatMap { it.nodes }
 }
 
 internal data class ProtocolFacet(

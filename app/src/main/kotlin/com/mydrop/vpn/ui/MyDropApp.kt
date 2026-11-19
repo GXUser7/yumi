@@ -111,6 +111,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val geoLocationSample by viewModel.geoLocationSample.collectAsStateWithLifecycle()
     val geoLastValidCoord by viewModel.geoLastValidCoord.collectAsStateWithLifecycle()
     val geoHasPermission by viewModel.geoHasPermission.collectAsStateWithLifecycle()
+    val geoHasBackgroundPermission by viewModel.geoHasBackgroundPermission.collectAsStateWithLifecycle()
     val geoSpoofDetected by viewModel.geoSpoofDetected.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -294,6 +295,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
                     geoZonesCount = geoClusters.size,
                     geoHasPermission = geoHasPermission,
+                    geoHasBackgroundPermission = geoHasBackgroundPermission,
                     onGeoPermissionChanged = viewModel::refreshGeoPermission,
                     onOpenZonesMap = { navController.navigate(Routes.ZONES_MAP) },
                     geoAssets = geoAssets,

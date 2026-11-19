@@ -421,4 +421,143 @@ class FilteredServerPingTest {
                 pool.shutdownNow()
             }
         }
+
+    @Test
+    fun `collapsed subscription group is excluded from filteredNodesForPing and receives zero loopback dials`() =
+        runBlocking {
+            val loopback = InetAddress.getByName("127.0.0.1")
+            val expandedAccepts = AtomicInteger(0)
+            val collapsedAccepts = AtomicInteger(0)
+            val running = AtomicBoolean(true)
+            val threadsReady = CountDownLatch(2)
+            val expandedAccepted = CountDownLatch(1)
+
+            ServerSocket(0, 8, loopback).use { expandedSocket ->
+                ServerSocket(0, 8, loopback).use { collapsedSocket ->
+                    val t1 = thread(isDaemon = true) {
+                        threadsReady.countDown()
+                        while (running.get() && !expandedSocket.isClosed) {
+                            runCatching {
+                                expandedSocket.accept().use {
+                                    expandedAccepts.incrementAndGet()
+                                    expandedAccepted.countDown()
+                                }
+                            }
+                        }
+                    }
+                    val t2 = thread(isDaemon = true) {
+                        threadsReady.countDown()
+                        while (running.get() && !collapsedSocket.isClosed) {
+                            runCatching { collapsedSocket.accept().use { collapsedAccepts.incrementAndGet() } }
+                        }
+                    }
+
+                    try {
+                        val sOpen = sub("sub-open", enabled = true)
+                        val sCollapsed = sub("sub-collapsed", enabled = true)
+                        val openNode = node(
+                            id = "open-node",
+                            name = "${WorldMap.flagOf("DE")} Berlin Open",
+                            server = "127.0.0.1",
+                            port = expandedSocket.localPort,
+                            subscriptionId = sOpen.id,
+                        )
+                        val collapsedNode = node(
+                            id = "collapsed-node",
+                            name = "${WorldMap.flagOf("DE")} Berlin Collapsed",
+                            server = "127.0.0.1",
+                            port = collapsedSocket.localPort,
+                            subscriptionId = sCollapsed.id,
+                        )
+
+                        val targets = filteredNodesForPing(
+                            nodes = listOf(openNode, collapsedNode),
+                            subscriptions = listOf(sOpen, sCollapsed),
+                            latencies = emptyMap(),
+                            filter = ServerFilterState(),
+                            collapsedGroupIds = setOf(sCollapsed.id),
+                        )
+                        assertEquals(listOf("open-node"), targets.map { it.id })
+
+                        assertTrue(
+                            "Accept threads did not start within timeout",
+                            threadsReady.await(5, TimeUnit.SECONDS),
+                        )
+                        val results = LatencyTester().measureAll(targets, PingMode.Tcp)
+                        assertEquals(listOf("open-node"), results.map { it.nodeId })
+                        assertTrue(expandedAccepted.await(5, TimeUnit.SECONDS))
+                        Thread.sleep(50)
+                        assertEquals(1, expandedAccepts.get())
+                        assertEquals(0, collapsedAccepts.get())
+                    } finally {
+                        running.set(false)
+                        runCatching { expandedSocket.close() }
+                        runCatching { collapsedSocket.close() }
+                        t1.join(2_000)
+                        t2.join(2_000)
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `collapsed manual group and disabled subscriptions are excluded and all-collapsed short-circuits`() =
+        runBlocking {
+            val sEnabled = sub("sub-on", enabled = true)
+            val sDisabled = sub("sub-off", enabled = false)
+            val enabledNode = node("on-1", "DE On", subscriptionId = sEnabled.id)
+            val disabledNode = node("off-1", "DE Off", subscriptionId = sDisabled.id)
+            val manualNode = node("man-1", "Manual", subscriptionId = null)
+            val allNodes = listOf(enabledNode, disabledNode, manualNode)
+            val subs = listOf(sEnabled, sDisabled)
+
+            // Disabled subscription excluded even when raw allNodes is passed directly.
+            assertEquals(
+                listOf("on-1", "man-1"),
+                filteredNodesForPing(
+                    nodes = allNodes,
+                    subscriptions = subs,
+                    latencies = emptyMap(),
+                    filter = ServerFilterState(),
+                ).map { it.id },
+            )
+
+            // Collapsing manual group skips manual servers while keeping expanded enabled subscription.
+            assertEquals(
+                listOf("on-1"),
+                filteredNodesForPing(
+                    nodes = allNodes,
+                    subscriptions = subs,
+                    latencies = emptyMap(),
+                    filter = ServerFilterState(),
+                    collapsedGroupIds = setOf("manual"),
+                ).map { it.id },
+            )
+
+            // All groups collapsed yields empty targets and coordinator performs 0 dials.
+            val emptyTargets = filteredNodesForPing(
+                nodes = allNodes,
+                subscriptions = subs,
+                latencies = emptyMap(),
+                filter = ServerFilterState(),
+                collapsedGroupIds = setOf(sEnabled.id, "manual"),
+            )
+            assertTrue(emptyTargets.isEmpty())
+
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val coordinator = FilteredPingCoordinator(scope) {}
+                var measureCalls = 0
+                assertNull(
+                    coordinator.ping(
+                        nodes = emptyTargets,
+                        mode = PingMode.Tcp,
+                        measure = { _, _, _ -> measureCalls++; emptyList() },
+                    ),
+                )
+                assertEquals(0, measureCalls)
+            } finally {
+                scope.cancel()
+            }
+        }
 }

@@ -456,6 +456,277 @@ class GeoZonesTest {
         }
     }
 
+    @Test
+    fun `isFixFresh accepts fresh fixes and rejects stale or future-skewed samples`() {
+        val base = GeoSample(55.7512, 37.6184, 15f, 0f, 0f, elapsedRealtimeMillis = 50_000L)
+        assertFalse(GeoZoneEngine.isFixFresh(null, nowElapsedMillis = 60_000L))
+        assertTrue(GeoZoneEngine.isFixFresh(base, nowElapsedMillis = 50_000L))
+        assertTrue(GeoZoneEngine.isFixFresh(base, nowElapsedMillis = 50_000L + GeoZoneEngine.MAX_FIX_AGE_MILLIS))
+        assertFalse(GeoZoneEngine.isFixFresh(base, nowElapsedMillis = 50_000L + GeoZoneEngine.MAX_FIX_AGE_MILLIS + 1L))
+        assertFalse(GeoZoneEngine.isFixFresh(base, nowElapsedMillis = 49_999L))
+    }
+
+    @Test
+    fun `isNearActionableZone ignores dead spots and matches radius or cell tower`() {
+        val zoneHex = HexCoord.fromLatLon(55.7512, 37.6184)
+        val zoneCenter = zoneHex.center()
+        val towerId = 555_001L
+        val deadSpot = GeoZoneEngine.clusterCells(
+            listOf(GeoCellRecord(hex = zoneHex, totalBlackouts = 3)),
+        )
+        assertFalse(GeoZoneEngine.isNearActionableZone(zoneCenter, towerId, deadSpot))
+
+        val whitelist = GeoZoneEngine.clusterCells(
+            listOf(
+                GeoCellRecord(
+                    hex = zoneHex,
+                    ordinaryFailures = 2,
+                    mobileSuccesses = 1,
+                    cellTowerIds = setOf(towerId),
+                ),
+            ),
+        )
+        assertFalse(GeoZoneEngine.isNearActionableZone(zoneCenter, null, emptyList()))
+
+        // ~1.5 km north -> inside PROXIMITY_WATCH_RADIUS_METERS (2.5 km)
+        val nearby = LatLon(zoneCenter.latitude + 0.0135, zoneCenter.longitude)
+        assertTrue(GeoZoneEngine.isNearActionableZone(nearby, null, whitelist))
+
+        // ~10 km north -> outside radius, unless matched by serving tower
+        val far = LatLon(zoneCenter.latitude + 0.09, zoneCenter.longitude)
+        assertFalse(GeoZoneEngine.isNearActionableZone(far, null, whitelist))
+        assertTrue(GeoZoneEngine.isNearActionableZone(far, towerId, whitelist))
+        assertTrue(GeoZoneEngine.isNearActionableZone(null, towerId, whitelist))
+        assertFalse(GeoZoneEngine.isNearActionableZone(null, null, whitelist))
+    }
+
+    @Test
+    fun `selectTrackingTier picks expected power tier across states`() {
+        assertEquals(
+            GeoTrackingTier.Off,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = false,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = true,
+                burstActive = true,
+                screenOn = true,
+                nearKnownZone = true,
+                recentlyMoved = true,
+                preemptiveEnabled = true,
+            ),
+        )
+        assertEquals(
+            GeoTrackingTier.Off,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = false,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = true,
+                burstActive = false,
+                screenOn = true,
+                nearKnownZone = true,
+                recentlyMoved = true,
+                preemptiveEnabled = true,
+            ),
+        )
+        // Map screen stays HighAccuracy even on Wi-Fi / disconnected.
+        assertEquals(
+            GeoTrackingTier.HighAccuracy,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = false,
+                cellular = false,
+                mapOpen = true,
+                burstActive = false,
+                screenOn = true,
+                nearKnownZone = false,
+                recentlyMoved = false,
+                preemptiveEnabled = false,
+            ),
+        )
+        // Disconnected or Wi-Fi with closed map is Off.
+        assertEquals(
+            GeoTrackingTier.Off,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = false,
+                mapOpen = false,
+                burstActive = true,
+                screenOn = true,
+                nearKnownZone = true,
+                recentlyMoved = true,
+                preemptiveEnabled = true,
+            ),
+        )
+        // Burst on connected cellular -> HighAccuracy.
+        assertEquals(
+            GeoTrackingTier.HighAccuracy,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = true,
+                screenOn = false,
+                nearKnownZone = false,
+                recentlyMoved = false,
+                preemptiveEnabled = false,
+            ),
+        )
+        // Balanced only when near known zone, preemptive enabled, and screenOn or recentlyMoved.
+        assertEquals(
+            GeoTrackingTier.Balanced,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = false,
+                screenOn = true,
+                nearKnownZone = true,
+                recentlyMoved = false,
+                preemptiveEnabled = true,
+            ),
+        )
+        assertEquals(
+            GeoTrackingTier.Balanced,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = false,
+                screenOn = false,
+                nearKnownZone = true,
+                recentlyMoved = true,
+                preemptiveEnabled = true,
+            ),
+        )
+        // Stationary with screen off near zone, far from zone, or preemptive off -> Dormant.
+        assertEquals(
+            GeoTrackingTier.Dormant,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = false,
+                screenOn = false,
+                nearKnownZone = true,
+                recentlyMoved = false,
+                preemptiveEnabled = true,
+            ),
+        )
+        assertEquals(
+            GeoTrackingTier.Dormant,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = false,
+                screenOn = true,
+                nearKnownZone = false,
+                recentlyMoved = true,
+                preemptiveEnabled = true,
+            ),
+        )
+        assertEquals(
+            GeoTrackingTier.Dormant,
+            GeoZoneEngine.selectTrackingTier(
+                enabled = true,
+                hasPermission = true,
+                vpnConnected = true,
+                cellular = true,
+                mapOpen = false,
+                burstActive = false,
+                screenOn = true,
+                nearKnownZone = true,
+                recentlyMoved = true,
+                preemptiveEnabled = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `repository throttles repeated healthy touches while healing anomalies on consecutive passes`() {
+        val dir = folder.newFolder("healthythrottle")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val healthyHex = HexCoord.fromLatLon(55.7512, 37.6184)
+        val anomalyHex = healthyHex.neighbors().first()
+        try {
+            val repo = GeoZoneRepository(dir, scope)
+            repo.recordOrdinaryOutcome(healthyHex, cellTowerId = 1L, passed = true, nowEpochMillis = 10_000L)
+            assertEquals(1, repo.state.value.cells[healthyHex.key]?.ordinarySuccesses)
+
+            // Repeated healthy pass within HEALTHY_TOUCH_INTERVAL_MS is ignored.
+            repo.recordOrdinaryOutcome(
+                healthyHex,
+                cellTowerId = 1L,
+                passed = true,
+                nowEpochMillis = 10_000L + GeoZoneRepository.HEALTHY_TOUCH_INTERVAL_MS - 1L,
+            )
+            assertEquals(1, repo.state.value.cells[healthyHex.key]?.ordinarySuccesses)
+
+            // Pass at or past interval updates normally.
+            repo.recordOrdinaryOutcome(
+                healthyHex,
+                cellTowerId = 1L,
+                passed = true,
+                nowEpochMillis = 10_000L + GeoZoneRepository.HEALTHY_TOUCH_INTERVAL_MS,
+            )
+            assertEquals(2, repo.state.value.cells[healthyHex.key]?.ordinarySuccesses)
+
+            // Anomaly cells ignore the healthy throttle so healing streak advances immediately.
+            repo.recordOrdinaryOutcome(anomalyHex, cellTowerId = 2L, passed = false, nowEpochMillis = 20_000L)
+            repo.recordMobileOutcome(anomalyHex, cellTowerId = 2L, nodeId = "mob-1", millis = 50, passed = true, nowEpochMillis = 20_500L)
+            assertEquals(1, repo.clusters.value.size)
+
+            repeat(GeoZoneEngine.HEAL_ORDINARY_STREAK) { idx ->
+                repo.recordOrdinaryOutcome(
+                    anomalyHex,
+                    cellTowerId = 2L,
+                    passed = true,
+                    nowEpochMillis = 21_000L + idx * 1_000L,
+                )
+            }
+            assertTrue("anomaly cell should heal even with 1s steps", repo.clusters.value.isEmpty())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `debounced repository coalesces routine writes and flushes urgently on zone creation`() {
+        val dir = folder.newFolder("debouncedrepo")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val file = File(dir, "geo_zones.json")
+        try {
+            val repo = GeoZoneRepository(dir, scope, saveDebounceMillis = 60_000L)
+            repo.recordBreadcrumb(55.7512, 37.6184, onMobileList = false, failed = false, timestampMillis = 1_000L)
+            repo.recordTowerObservation(999L, 55.7512, 37.6184, nowEpochMillis = 2_000L)
+            Thread.sleep(100)
+            assertFalse("routine updates should stay debounced", file.exists())
+
+            repo.addManualZone(55.7512, 37.6184, radiusRings = 1, name = "UrgentZone", nowEpochMillis = 3_000L)
+            awaitFileContains(file, "UrgentZone")
+            assertTrue(file.readText().contains("\"999\":"))
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private fun awaitFileContains(file: File, snippet: String) {
         val deadline = System.currentTimeMillis() + 5_000L
         while (System.currentTimeMillis() < deadline) {

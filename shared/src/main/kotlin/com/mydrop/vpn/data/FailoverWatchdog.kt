@@ -5,6 +5,7 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.FailoverChoice
 import com.mydrop.vpn.core.model.FailoverGroup
 import com.mydrop.vpn.core.model.FailoverPolicy
+import com.mydrop.vpn.core.model.GeoSample
 import com.mydrop.vpn.core.model.GeoZoneCluster
 import com.mydrop.vpn.core.model.HexCoord
 import com.mydrop.vpn.core.model.LatencyResult
@@ -18,6 +19,7 @@ import com.mydrop.vpn.core.model.ZoneProximity
 import com.mydrop.vpn.core.xray.XrayConfigFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -567,7 +569,7 @@ class FailoverWatchdog(
                             outsideZoneSinceMillis = 0L
                             if (!watch.flags.preemptive || mobileIds.isEmpty()) return@collectLatest
                             if (carrying.id in mobileIds) return@collectLatest
-                            monitor.requestHighAccuracyBurst()
+                            monitor.requestHighAccuracyBurst(force = false)
                             val freshWarm = warmedClusterId == trigger.clusterId &&
                                 (SystemClock.elapsedRealtime() - warmedZoneAtMillis) < WARMED_TTL_MILLIS
                             if (freshWarm && warmedZoneNode != null) return@collectLatest
@@ -974,22 +976,22 @@ class FailoverWatchdog(
                     tunnel.transport.value == NetworkTransport.Cellular &&
                     settings.value.geoZonesEnabled
                 ) {
-                    geoMonitor?.requestHighAccuracyBurst()
+                    geoMonitor?.requestHighAccuracyBurst(force = true)
                 }
                 if (alive &&
                     tunnel.transport.value == NetworkTransport.Cellular &&
                     settings.value.geoZonesEnabled &&
                     tunnel.hasNetwork.value
                 ) {
-                    val coord = geoMonitor?.lastValidLatLon?.value
-                    if (coord != null) {
-                        val tower = geoMonitor?.currentSample?.value?.cellTowerId
-                        val hex = HexCoord.fromLatLon(coord.latitude, coord.longitude)
+                    val sample = geoMonitor?.freshSampleOrNull()
+                    if (sample != null) {
+                        val tower = sample.cellTowerId
+                        val hex = HexCoord.fromLatLon(sample.latitude, sample.longitude)
                         val mobileIds = settings.value.mobileNodeIds
                         val onMobile = current.id in mobileIds
                         geoZones?.recordBreadcrumb(
-                            latitude = coord.latitude,
-                            longitude = coord.longitude,
+                            latitude = sample.latitude,
+                            longitude = sample.longitude,
                             onMobileList = onMobile,
                             failed = false,
                         )
@@ -1293,257 +1295,298 @@ class FailoverWatchdog(
     private suspend fun swapAwayFrom(dead: ProxyNode) {
         val mobileIds = settings.value.mobileNodeIds
         val currentTransport = tunnel.transport.value
-        val geoCoord = if (currentTransport == NetworkTransport.Cellular &&
+        val wantGeoRecord = currentTransport == NetworkTransport.Cellular &&
             settings.value.geoZonesEnabled &&
-            tunnel.hasNetwork.value
-        ) {
-            geoMonitor?.lastValidLatLon?.value
+            tunnel.hasNetwork.value &&
+            geoZones != null &&
+            geoMonitor != null
+        val initialSample = if (wantGeoRecord) geoMonitor?.freshSampleOrNull() else null
+        val deferredSample = if (wantGeoRecord && initialSample == null) {
+            scope.async { geoMonitor?.resolveFreshSample(timeoutMillis = 4_000L) }
         } else {
             null
         }
-        val geoTower = if (geoCoord != null) geoMonitor?.currentSample?.value?.cellTowerId else null
-        val geoHex = geoCoord?.let { HexCoord.fromLatLon(it.latitude, it.longitude) }
-        if (geoCoord != null && geoHex != null) {
+        var resolvedSample: GeoSample? = initialSample
+        var dropRecorded = false
+
+        fun recordDrop(sample: GeoSample) {
+            if (dropRecorded) return
+            dropRecorded = true
+            val hex = HexCoord.fromLatLon(sample.latitude, sample.longitude)
             geoZones?.recordBreadcrumb(
-                latitude = geoCoord.latitude,
-                longitude = geoCoord.longitude,
+                latitude = sample.latitude,
+                longitude = sample.longitude,
                 onMobileList = dead.id in mobileIds,
                 failed = true,
             )
             if (dead.id !in mobileIds) {
-                geoZones?.recordOrdinaryOutcome(hex = geoHex, cellTowerId = geoTower, passed = false)
+                geoZones?.recordOrdinaryOutcome(hex = hex, cellTowerId = sample.cellTowerId, passed = false)
             }
         }
-        // Which list is allowed, before which member of it is best.
-        //
-        // This asked nothing about the network at all, and drew from the ordinary spares on every
-        // one of them. On Wi-Fi that is right by accident; on cellular it quietly undid the whole
-        // mobile list, because the only other place the list was consulted is applyTransport,
-        // which asks whether the tunnel needs *moving* onto it and says no once it is already
-        // there. So a mobile server dying under a phone on LTE fell straight through to the
-        // Wi-Fi spares — see NetworkEnvironment.restrictsToMobileList for the journal.
-        //
-        // The exclusion on the other branch is the same rule read backwards, and ordinaryPoolFor
-        // has always had it: servers the user nominated for cellular are not ordinary spares to
-        // be landed on at home.
-        // Ordinary first, when asked for. The mobile list then stops being the pool and becomes
-        // the fallback: it is reached below, once the ordinary servers have been measured in full
-        // and none of them answered. See AppSettings.preferOrdinaryOnCellular.
-        val ordinaryFirst = NetworkEnvironment.triesOrdinaryFirst(
-            tunnel.transport.value,
-            mobileIds,
-            settings.value.preferOrdinaryOnCellular,
-        )
-        val onMobileList =
-            NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds) &&
-                !ordinaryFirst
-        val drawn = if (onMobileList) {
-            // The whole list rather than a sample of it. It is already the user's own short list,
-            // and it is in the core's group in full — see AppContainer.switchableGroup — so every
-            // member is a switch the core can make without a restart.
-            sortWithPreferredIds(
-                profiles.nodes.filter {
-                    it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
-                },
-                currentZonePreferredNodeIds(),
-            )
-        } else {
-            // The whole group first, then seven of it by lot. Drawing from the group and not from
-            // the raw list is what keeps the switch instant: the core can only be pointed at its own
-            // members, and everything in here is one.
-            val eligible = FailoverGroup.candidates(
-                nodes = profiles.nodes,
-                selected = dead,
-                latencies = profiles.state.value.latencies,
-                // Everything, when the answer decides whether to abandon the ordinary servers
-                // altogether; seven by lot when it only decides where to go next.
-                limit = if (ordinaryFirst) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
-                chosen = settings.value.failoverNodeIds,
-                exclude = mobileIds,
-            )
-            if (ordinaryFirst) eligible else FailoverGroup.sample(eligible)
+
+        suspend fun awaitDropSample(): GeoSample? {
+            resolvedSample?.let {
+                recordDrop(it)
+                return it
+            }
+            val fresh = deferredSample?.let { withTimeoutOrNull(1_500L) { it.await() } }
+            if (fresh != null) {
+                resolvedSample = fresh
+                recordDrop(fresh)
+            }
+            return fresh
         }
-        // Narrowed to what the running core actually holds, so the switch stays a pointer swap.
-        // Drawing a server the core was never given costs a full restart — and until the reload
-        // path stops leaking instances, every restart is another chance to leave one running.
-        // Narrowing to the core's group before measuring would undo the point of measuring
-        // everything: the group holds a dozen ordinary servers and the user's list can hold two
-        // dozen, so the twelve that fit would decide the fate of all of them. On this path the
-        // preference is applied to the survivors instead, further down — a reconnect to a server
-        // that answers beats a pointer swap to nothing.
-        val candidates =
-            if (ordinaryFirst) drawn else FailoverGroup.preferSwitchable(drawn, configs.switchable.value)
-        if (candidates.isEmpty()) {
-            // Sitting on a dead server beats moving the user's exit country without being asked.
-            // An empty mobile list is an answer — these and no others may carry cellular traffic —
-            // rather than a gap to be filled from somewhere the user did not nominate. Same words
-            // applyTransport uses when it finds the list empty, because it is the same finding.
-            if (onMobileList) {
-                logs.warn(R.string.log_mobile_none_left)
+
+        if (initialSample != null) recordDrop(initialSample)
+
+        try {
+            // Which list is allowed, before which member of it is best.
+            //
+            // This asked nothing about the network at all, and drew from the ordinary spares on every
+            // one of them. On Wi-Fi that is right by accident; on cellular it quietly undid the whole
+            // mobile list, because the only other place the list was consulted is applyTransport,
+            // which asks whether the tunnel needs *moving* onto it and says no once it is already
+            // there. So a mobile server dying under a phone on LTE fell straight through to the
+            // Wi-Fi spares — see NetworkEnvironment.restrictsToMobileList for the journal.
+            //
+            // The exclusion on the other branch is the same rule read backwards, and ordinaryPoolFor
+            // has always had it: servers the user nominated for cellular are not ordinary spares to
+            // be landed on at home.
+            // Ordinary first, when asked for. The mobile list then stops being the pool and becomes
+            // the fallback: it is reached below, once the ordinary servers have been measured in full
+            // and none of them answered. See AppSettings.preferOrdinaryOnCellular.
+            val ordinaryFirst = NetworkEnvironment.triesOrdinaryFirst(
+                tunnel.transport.value,
+                mobileIds,
+                settings.value.preferOrdinaryOnCellular,
+            )
+            val onMobileList =
+                NetworkEnvironment.restrictsToMobileList(tunnel.transport.value, mobileIds) &&
+                    !ordinaryFirst
+            val drawn = if (onMobileList) {
+                // The whole list rather than a sample of it. It is already the user's own short list,
+                // and it is in the core's group in full — see AppContainer.switchableGroup — so every
+                // member is a switch the core can make without a restart.
+                sortWithPreferredIds(
+                    profiles.nodes.filter {
+                        it.id in mobileIds && it.id != dead.id && it.settings != ProxySettings.Direct
+                    },
+                    currentZonePreferredNodeIds(),
+                )
             } else {
-                logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
+                // The whole group first, then seven of it by lot. Drawing from the group and not from
+                // the raw list is what keeps the switch instant: the core can only be pointed at its own
+                // members, and everything in here is one.
+                val eligible = FailoverGroup.candidates(
+                    nodes = profiles.nodes,
+                    selected = dead,
+                    latencies = profiles.state.value.latencies,
+                    // Everything, when the answer decides whether to abandon the ordinary servers
+                    // altogether; seven by lot when it only decides where to go next.
+                    limit = if (ordinaryFirst) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
+                    chosen = settings.value.failoverNodeIds,
+                    exclude = mobileIds,
+                )
+                if (ordinaryFirst) eligible else FailoverGroup.sample(eligible)
             }
-            alerts.serverStranded(dead.name)
-            return
-        }
-
-        logs.warn(R.string.log_failover_probing, dead.name, candidates.size)
-        // Measured now, not read from the profile: what mattered an hour ago says nothing about
-        // which servers are up during the outage this is reacting to.
-        //
-        // Built from what measureAll returns, not collected in its callback along the way. That
-        // callback runs on up to sixteen coroutines at once — see LatencyTester.measureAll — and
-        // the map it used to fill was an ordinary LinkedHashMap. Concurrent writes to one of those
-        // lose entries, and a lost entry is indistinguishable here from a server that never
-        // answered: the choice below sees fewer live candidates than there are, picks a slower
-        // one, or finds none at all and leaves the tunnel sitting on the dead server it was
-        // supposed to be escaping. Worst exactly when it matters most, because the more spares
-        // the user has chosen, the more writers there are to collide.
-        //
-        // The callback stays, but only for the side effect that is already safe.
-        val throughCore = coreMeasured(candidates)
-
-        // The core's own silence outranks a handshake, past a point — see
-        // FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD for the field evidence. One or two blind
-        // guesses cover a core that just needed another moment to dial; a run past that is the
-        // core repeatedly finding nobody while raw TCP/TLS keeps saying yes, which twenty-five
-        // switches in ninety-three minutes showed to be the censor answering handshakes and
-        // nothing past them, not the next candidate being the one that works.
-        val holding = FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)
-
-        // The mobile list gets its turn *before* the hold, not after it, and that ordering is the
-        // whole fix rather than a tidy-up.
-        //
-        // The guard below is right about what it distrusts: a bare TCP/TLS handshake proves nothing
-        // about whether a proxy carries traffic, and acting on a run of them is how ninety-three
-        // minutes went by in twenty-five switches. But this list is measured with [coreMeasured] —
-        // the very evidence the guard is holding out for — so consulting it is not another blind
-        // guess, and refusing to consult it buys nothing.
-        //
-        // While it sat below the guard it could never be reached in the one situation it exists
-        // for. On cellular with the ordinary servers blocked, the core names nobody among them
-        // *every* round, because that is what the outage is; so the second round running always
-        // took the guard's early return, the user's cellular servers were never asked, and the
-        // tunnel sat on a server it had itself declared dead — waking every thirty seconds to
-        // declare it dead again. Twenty-nine such holds across ten episodes in one journal, every
-        // one of them with the last known transport cellular, ended by a handover or by somebody
-        // reconnecting by hand. An hour and a quarter of measurable outage; the true figure is
-        // larger and unknown, because the journal rotates and two episodes run past its edge.
-        val rescue = if (holding && ordinaryFirst) mobileFallback(dead, mobileIds, blind = false) else null
-        val rescued = if (rescue == null) null else FailoverChoice.pick(rescue.pool, rescue.measured)
-
-        if (holding && rescued == null) {
-            if (geoHex != null) geoZones?.recordBlackout(geoHex, geoTower)
-            logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
-            alerts.serverStranded(dead.name)
-            giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
-            return
-        }
-
-        var fresh: Map<String, LatencyResult>
-        var chosen: ProxyNode?
-        var coreConfirmed = throughCore.isNotEmpty()
-
-        if (rescue != null && rescued != null) {
-            // Drawn from the core's own measurement of the cellular list, so there is nothing left
-            // to ask and no reason to spend a handshake asking it.
-            fresh = rescue.measured
-            chosen = rescued
-            coreConfirmed = rescue.coreConfirmed
-        } else {
-            fresh = throughCore.ifEmpty {
-                latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
-                    profiles.recordLatency(result)
-                }.associateBy { it.nodeId }
-            }
-
-            chosen = FailoverChoice.pick(
-                // Group members preferred among the servers that actually answered, rather than
-                // among the ones that were going to be asked.
-                if (ordinaryFirst) {
-                    FailoverGroup.preferSwitchable(
-                        candidates.filter { fresh[it.id]?.failed == false },
-                        configs.switchable.value,
-                    ).ifEmpty { candidates }
+            // Narrowed to what the running core actually holds, so the switch stays a pointer swap.
+            // Drawing a server the core was never given costs a full restart — and until the reload
+            // path stops leaking instances, every restart is another chance to leave one running.
+            // Narrowing to the core's group before measuring would undo the point of measuring
+            // everything: the group holds a dozen ordinary servers and the user's list can hold two
+            // dozen, so the twelve that fit would decide the fate of all of them. On this path the
+            // preference is applied to the survivors instead, further down — a reconnect to a server
+            // that answers beats a pointer swap to nothing.
+            val candidates =
+                if (ordinaryFirst) drawn else FailoverGroup.preferSwitchable(drawn, configs.switchable.value)
+            if (candidates.isEmpty()) {
+                awaitDropSample()
+                // Sitting on a dead server beats moving the user's exit country without being asked.
+                // An empty mobile list is an answer — these and no others may carry cellular traffic —
+                // rather than a gap to be filled from somewhere the user did not nominate. Same words
+                // applyTransport uses when it finds the list empty, because it is the same finding.
+                if (onMobileList) {
+                    logs.warn(R.string.log_mobile_none_left)
                 } else {
-                    candidates
-                },
-                fresh,
-            )
+                    logs.warn(R.string.log_failover_nothing_to_swap, dead.name)
+                }
+                alerts.serverStranded(dead.name)
+                return
+            }
 
-            // The ordinary servers were measured in full and none of them answered, which is the
-            // whole condition the mobile list was named for. Nothing here is a guess about which
-            // network the phone is on: ordinaryFirst is already that question answered.
-            if (chosen == null && ordinaryFirst) {
-                val fallback = mobileFallback(dead, mobileIds, blind = true)
-                if (fallback != null) {
-                    fresh = fallback.measured
-                    chosen = FailoverChoice.pick(fallback.pool, fallback.measured)
-                    if (chosen != null) coreConfirmed = fallback.coreConfirmed
+            logs.warn(R.string.log_failover_probing, dead.name, candidates.size)
+            // Measured now, not read from the profile: what mattered an hour ago says nothing about
+            // which servers are up during the outage this is reacting to.
+            //
+            // Built from what measureAll returns, not collected in its callback along the way. That
+            // callback runs on up to sixteen coroutines at once — see LatencyTester.measureAll — and
+            // the map it used to fill was an ordinary LinkedHashMap. Concurrent writes to one of those
+            // lose entries, and a lost entry is indistinguishable here from a server that never
+            // answered: the choice below sees fewer live candidates than there are, picks a slower
+            // one, or finds none at all and leaves the tunnel sitting on the dead server it was
+            // supposed to be escaping. Worst exactly when it matters most, because the more spares
+            // the user has chosen, the more writers there are to collide.
+            //
+            // The callback stays, but only for the side effect that is already safe.
+            val throughCore = coreMeasured(candidates)
+
+            // The core's own silence outranks a handshake, past a point — see
+            // FailoverPolicy.BLIND_ESCAPES_BEFORE_HOLD for the field evidence. One or two blind
+            // guesses cover a core that just needed another moment to dial; a run past that is the
+            // core repeatedly finding nobody while raw TCP/TLS keeps saying yes, which twenty-five
+            // switches in ninety-three minutes showed to be the censor answering handshakes and
+            // nothing past them, not the next candidate being the one that works.
+            val holding = FailoverPolicy.shouldHoldOnBlindRun(throughCore.isEmpty(), blindEscapes)
+
+            // The mobile list gets its turn *before* the hold, not after it, and that ordering is the
+            // whole fix rather than a tidy-up.
+            //
+            // The guard below is right about what it distrusts: a bare TCP/TLS handshake proves nothing
+            // about whether a proxy carries traffic, and acting on a run of them is how ninety-three
+            // minutes went by in twenty-five switches. But this list is measured with [coreMeasured] —
+            // the very evidence the guard is holding out for — so consulting it is not another blind
+            // guess, and refusing to consult it buys nothing.
+            //
+            // While it sat below the guard it could never be reached in the one situation it exists
+            // for. On cellular with the ordinary servers blocked, the core names nobody among them
+            // *every* round, because that is what the outage is; so the second round running always
+            // took the guard's early return, the user's cellular servers were never asked, and the
+            // tunnel sat on a server it had itself declared dead — waking every thirty seconds to
+            // declare it dead again. Twenty-nine such holds across ten episodes in one journal, every
+            // one of them with the last known transport cellular, ended by a handover or by somebody
+            // reconnecting by hand. An hour and a quarter of measurable outage; the true figure is
+            // larger and unknown, because the journal rotates and two episodes run past its edge.
+            val rescue = if (holding && ordinaryFirst) mobileFallback(dead, mobileIds, blind = false) else null
+            val rescued = if (rescue == null) null else FailoverChoice.pick(rescue.pool, rescue.measured)
+
+            if (holding && rescued == null) {
+                val geoSample = awaitDropSample()
+                if (geoSample != null) {
+                    geoZones?.recordBlackout(
+                        HexCoord.fromLatLon(geoSample.latitude, geoSample.longitude),
+                        geoSample.cellTowerId,
+                    )
+                }
+                logs.warn(R.string.log_failover_core_blind, dead.name, blindEscapes)
+                alerts.serverStranded(dead.name)
+                giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
+                return
+            }
+
+            var fresh: Map<String, LatencyResult>
+            var chosen: ProxyNode?
+            var coreConfirmed = throughCore.isNotEmpty()
+
+            if (rescue != null && rescued != null) {
+                // Drawn from the core's own measurement of the cellular list, so there is nothing left
+                // to ask and no reason to spend a handshake asking it.
+                fresh = rescue.measured
+                chosen = rescued
+                coreConfirmed = rescue.coreConfirmed
+            } else {
+                fresh = throughCore.ifEmpty {
+                    latencyTester.measureAll(candidates, settings.value.pingMode) { result ->
+                        profiles.recordLatency(result)
+                    }.associateBy { it.nodeId }
+                }
+
+                chosen = FailoverChoice.pick(
+                    // Group members preferred among the servers that actually answered, rather than
+                    // among the ones that were going to be asked.
+                    if (ordinaryFirst) {
+                        FailoverGroup.preferSwitchable(
+                            candidates.filter { fresh[it.id]?.failed == false },
+                            configs.switchable.value,
+                        ).ifEmpty { candidates }
+                    } else {
+                        candidates
+                    },
+                    fresh,
+                )
+
+                // The ordinary servers were measured in full and none of them answered, which is the
+                // whole condition the mobile list was named for. Nothing here is a guess about which
+                // network the phone is on: ordinaryFirst is already that question answered.
+                if (chosen == null && ordinaryFirst) {
+                    val fallback = mobileFallback(dead, mobileIds, blind = true)
+                    if (fallback != null) {
+                        fresh = fallback.measured
+                        chosen = FailoverChoice.pick(fallback.pool, fallback.measured)
+                        if (chosen != null) coreConfirmed = fallback.coreConfirmed
+                    }
                 }
             }
-        }
 
-        if (chosen == null) {
-            if (geoHex != null) geoZones?.recordBlackout(geoHex, geoTower)
-            logs.warn(R.string.log_failover_all_dead, dead.name)
-            alerts.serverStranded(dead.name)
-            giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
-            return
-        }
+            if (chosen == null) {
+                val geoSample = awaitDropSample()
+                if (geoSample != null) {
+                    geoZones?.recordBlackout(
+                        HexCoord.fromLatLon(geoSample.latitude, geoSample.longitude),
+                        geoSample.cellTowerId,
+                    )
+                }
+                logs.warn(R.string.log_failover_all_dead, dead.name)
+                alerts.serverStranded(dead.name)
+                giveUpFor(FailoverPolicy.ESCAPE_COOLDOWN_MILLIS)
+                return
+            }
 
-        if (geoHex != null && chosen.id in mobileIds) {
-            geoZones?.recordMobileOutcome(
-                hex = geoHex,
-                cellTowerId = geoTower,
-                nodeId = chosen.id,
-                millis = fresh[chosen.id]?.millis,
-                passed = true,
-            )
-        }
+            val geoSample = awaitDropSample()
+            if (geoSample != null && chosen.id in mobileIds) {
+                geoZones?.recordMobileOutcome(
+                    hex = HexCoord.fromLatLon(geoSample.latitude, geoSample.longitude),
+                    cellTowerId = geoSample.cellTowerId,
+                    nodeId = chosen.id,
+                    millis = fresh[chosen.id]?.millis,
+                    passed = true,
+                )
+            }
 
-        // Confirmed by the core: real evidence arrived, so whatever run of blind guesses came
-        // before it is over. Reset here rather than only on reconnect, because the run this
-        // counts is "since the core last agreed with the raw probe", not "since the tunnel came
-        // up" — a courier's ninety-three minutes was one connection throughout.
-        // A switch drawn from the mobile list's own core measurement counts as confirmed too, even
-        // though the ordinary measurement before it named nobody: what this counts is whether the
-        // core vouched for the server being moved to, not which pool it came out of.
-        blindEscapes = if (coreConfirmed) 0 else blindEscapes + 1
+            // Confirmed by the core: real evidence arrived, so whatever run of blind guesses came
+            // before it is over. Reset here rather than only on reconnect, because the run this
+            // counts is "since the core last agreed with the raw probe", not "since the tunnel came
+            // up" — a courier's ninety-three minutes was one connection throughout.
+            // A switch drawn from the mobile list's own core measurement counts as confirmed too, even
+            // though the ordinary measurement before it named nobody: what this counts is whether the
+            // core vouched for the server being moved to, not which pool it came out of.
+            blindEscapes = if (coreConfirmed) 0 else blindEscapes + 1
 
-        logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
-        alerts.serverLeft(dead.name, chosen.name)
-        // Recorded before the switch, because moving the tunnel takes this coroutine down with it.
-        // Only the first departure counts: hop twice and home is still the server the user chose,
-        // not the replacement this watchdog installed on the way.
-        // A server already given up on does not become home again; otherwise the give-up counter
-        // would reset itself every time the tunnel wandered back past it.
-        //
-        // And nothing is remembered at all when the user has said a switch is final. Then this
-        // watchdog only ever moves away from servers that stopped working, and where it lands is
-        // where the tunnel stays until somebody chooses otherwise.
-        if (settings.value.returnHome &&
-            homeNode == null &&
-            (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS
-        ) {
-            homeNode = dead
+            logs.info(R.string.log_failover_switching, chosen.name, fresh[chosen.id]?.millis.toString())
+            alerts.serverLeft(dead.name, chosen.name)
+            // Recorded before the switch, because moving the tunnel takes this coroutine down with it.
+            // Only the first departure counts: hop twice and home is still the server the user chose,
+            // not the replacement this watchdog installed on the way.
+            // A server already given up on does not become home again; otherwise the give-up counter
+            // would reset itself every time the tunnel wandered back past it.
+            //
+            // And nothing is remembered at all when the user has said a switch is final. Then this
+            // watchdog only ever moves away from servers that stopped working, and where it lands is
+            // where the tunnel stays until somebody chooses otherwise.
+            if (settings.value.returnHome &&
+                homeNode == null &&
+                (failbacks[dead.id] ?: 0) < FailoverPolicy.MAX_FAILBACKS
+            ) {
+                homeNode = dead
+            }
+            // Re-arm the network check against wherever the tunnel is about to land.
+            //
+            // A pointer swap leaves the tunnel Connected, so watchTransport's guard — "this transport
+            // is the one already arranged for" — stays satisfied and applyTransport never runs again.
+            // That is the second half of the journal above: having been put on France over LTE, the
+            // tunnel stayed there for eight minutes, and came back only because an unrelated config
+            // reload happened to restart the core and reset this by the disconnected path. The state
+            // flow does re-emit on a swap — selectOutbound notes the new node before returning — so
+            // clearing this is enough for the affinity to be asked again about the new server.
+            //
+            // Belt and braces now that the branch above cannot land wrong on its own. It still earns
+            // its place: transport can read Other for a moment, and this is the one place the tunnel
+            // moves without anybody having chosen to.
+            confirmedTransport = NetworkTransport.None
+            noteSwitch(chosen)
+            launcher.switchTo(chosen)
+        } finally {
+            deferredSample?.cancel()
         }
-        // Re-arm the network check against wherever the tunnel is about to land.
-        //
-        // A pointer swap leaves the tunnel Connected, so watchTransport's guard — "this transport
-        // is the one already arranged for" — stays satisfied and applyTransport never runs again.
-        // That is the second half of the journal above: having been put on France over LTE, the
-        // tunnel stayed there for eight minutes, and came back only because an unrelated config
-        // reload happened to restart the core and reset this by the disconnected path. The state
-        // flow does re-emit on a swap — selectOutbound notes the new node before returning — so
-        // clearing this is enough for the affinity to be asked again about the new server.
-        //
-        // Belt and braces now that the branch above cannot land wrong on its own. It still earns
-        // its place: transport can read Other for a moment, and this is the one place the tunnel
-        // moves without anybody having chosen to.
-        confirmedTransport = NetworkTransport.None
-        noteSwitch(chosen)
-        launcher.switchTo(chosen)
     }
 
     private companion object {

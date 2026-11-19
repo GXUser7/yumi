@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 
@@ -36,6 +37,7 @@ class JsonStore<T>(
     private val defaultValue: T,
     scope: CoroutineScope,
     private val onWriteFailure: (Throwable) -> Unit = {},
+    private val saveDebounceMillis: Long = 0L,
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -57,23 +59,43 @@ class JsonStore<T>(
     private val saveRequests =
         Channel<Unit>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
+    private val flushSignals =
+        Channel<Unit>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     init {
         scope.launch(Dispatchers.IO) {
-            for (request in saveRequests) persist(_state.value)
+            for (request in saveRequests) {
+                if (saveDebounceMillis > 0L) {
+                    withTimeoutOrNull(saveDebounceMillis) {
+                        flushSignals.receive()
+                    }
+                }
+                flushSignals.tryReceive()
+                persist(_state.value)
+            }
         }
     }
 
     fun update(transform: (T) -> T) {
-        _state.updateAndGetValue(transform)
-        saveRequests.trySend(Unit)
+        updateChanged(urgent = false, transform = transform)
     }
 
-    private fun MutableStateFlow<T>.updateAndGetValue(transform: (T) -> T): T {
+    internal fun updateChanged(urgent: Boolean = false, transform: (T) -> T): Boolean {
         while (true) {
-            val current = value
+            val current = _state.value
             val next = transform(current)
-            if (compareAndSet(current, next)) return next
+            if (next === current) return false
+            if (_state.compareAndSet(current, next)) {
+                saveRequests.trySend(Unit)
+                if (urgent && saveDebounceMillis > 0L) flushSignals.trySend(Unit)
+                return true
+            }
         }
+    }
+
+    fun flush() {
+        saveRequests.trySend(Unit)
+        if (saveDebounceMillis > 0L) flushSignals.trySend(Unit)
     }
 
     /**

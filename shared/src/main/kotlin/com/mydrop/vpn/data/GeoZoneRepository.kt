@@ -24,6 +24,7 @@ class GeoZoneRepository(
     scope: CoroutineScope,
     onWriteFailure: (Throwable) -> Unit = {},
     private val logs: LogRepository? = null,
+    saveDebounceMillis: Long = 0L,
 ) {
     private val store = JsonStore(
         file = File(filesDir, "geo_zones.json"),
@@ -31,6 +32,7 @@ class GeoZoneRepository(
         defaultValue = GeoZoneStoreState(),
         scope = scope,
         onWriteFailure = onWriteFailure,
+        saveDebounceMillis = saveDebounceMillis,
     )
 
     private val clusterLock = Any()
@@ -54,7 +56,7 @@ class GeoZoneRepository(
     ): WifiAnchor {
         var wasFrequent = false
         var updatedAnchor: WifiAnchor? = null
-        mutate { current ->
+        mutate(recluster = false, urgent = incrementConnect) { current ->
             val existing = current.wifiAnchors[networkKey]
             wasFrequent = existing?.isFrequentHome == true
             val next = existing?.updateWith(
@@ -82,6 +84,7 @@ class GeoZoneRepository(
                 "connects=${anchor.connectCount} home=${anchor.isFrequentHome} hex=$hexKey",
         )
         if (!wasFrequent && anchor.isFrequentHome) {
+            store.flush()
             logs?.info(
                 R.string.log_geozone_home_wifi_learned,
                 anchor.ssidLabel ?: networkKey,
@@ -98,7 +101,7 @@ class GeoZoneRepository(
         nowEpochMillis: Long = System.currentTimeMillis(),
     ) {
         var updatedAnchor: TowerAnchor? = null
-        mutate { current ->
+        mutate(recluster = false, urgent = false) { current ->
             val existing = current.towerAnchors[towerId]
             val next = existing?.updateWith(latitude, longitude, nowEpochMillis)
                 ?: TowerAnchor(
@@ -130,9 +133,20 @@ class GeoZoneRepository(
         var transition: Pair<ZoneKind, ZoneKind>? = null
         var snapshotRecord: GeoCellRecord? = null
         var ignoredByHomeWifi = false
-        mutate { current ->
+        mutate(recluster = true, urgent = !passed) { current ->
             val key = hex.key
-            val existing = current.cells[key] ?: GeoCellRecord(hex = hex)
+            val existingRecord = current.cells[key]
+            if (passed &&
+                existingRecord != null &&
+                !existingRecord.isAnomaly() &&
+                existingRecord.ordinaryFailures == 0 &&
+                existingRecord.totalBlackouts == 0 &&
+                !existingRecord.pinned &&
+                (nowEpochMillis - existingRecord.lastUpdatedEpochMillis) in 0L until HEALTHY_TOUCH_INTERVAL_MS
+            ) {
+                return@mutate current
+            }
+            val existing = existingRecord ?: GeoCellRecord(hex = hex)
             if (!passed &&
                 !existing.pinned &&
                 GeoZoneEngine.isProtectedByHomeWifi(hex, current.wifiAnchors.values)
@@ -183,6 +197,7 @@ class GeoZoneRepository(
                 "blackout=${rec.totalBlackouts} tower=${cellTowerId ?: "none"} pinned=${rec.pinned}",
         )
         if (oldKind != newKind) {
+            store.flush()
             if (newKind == ZoneKind.Whitelist && !rec.pinned) {
                 logs?.info(R.string.log_geozone_learned, hex.key, rec.ordinaryFailures, rec.mobileSuccesses)
             } else if (oldKind != ZoneKind.Healthy && newKind == ZoneKind.Healthy) {
@@ -202,11 +217,22 @@ class GeoZoneRepository(
         if (!passed) return
         var transition: Pair<ZoneKind, ZoneKind>? = null
         var snapshotRecord: GeoCellRecord? = null
-        mutate { current ->
+        mutate(recluster = true, urgent = false) { current ->
             val key = hex.key
-            val existing = current.cells[key] ?: GeoCellRecord(hex = hex)
-            val oldKind = existing.kind()
+            val existingRecord = current.cells[key]
             val latency = (millis ?: DEFAULT_FALLBACK_LATENCY_MS).coerceAtLeast(1)
+            if (existingRecord != null) {
+                val prevLatency = existingRecord.workingMobileNodeIds[nodeId]
+                val latencyImproved = prevLatency == null || latency < prevLatency
+                val newTower = cellTowerId != null && cellTowerId !in existingRecord.cellTowerIds
+                val wouldPromote = existingRecord.mobileSuccesses == 0 && existingRecord.ordinaryFailures > 0
+                val touchDue = (nowEpochMillis - existingRecord.lastUpdatedEpochMillis) !in 0L until MOBILE_TOUCH_INTERVAL_MS
+                if (!wouldPromote && !latencyImproved && !newTower && !touchDue) {
+                    return@mutate current
+                }
+            }
+            val existing = existingRecord ?: GeoCellRecord(hex = hex)
+            val oldKind = existing.kind()
             val updatedNodes = existing.workingMobileNodeIds.toMutableMap()
             val prev = updatedNodes[nodeId]
             updatedNodes[nodeId] = if (prev == null) latency else minOf(prev, latency)
@@ -235,8 +261,11 @@ class GeoZoneRepository(
                 "kind=$oldKind->$newKind ordFail=${rec.ordinaryFailures} mobOk=${rec.mobileSuccesses} " +
                 "tower=${cellTowerId ?: "none"} working=${rec.workingMobileNodeIds.keys.joinToString(",")}",
         )
-        if (oldKind != newKind && newKind == ZoneKind.Whitelist && !rec.pinned) {
-            logs?.info(R.string.log_geozone_learned, hex.key, rec.ordinaryFailures, rec.mobileSuccesses)
+        if (oldKind != newKind) {
+            store.flush()
+            if (newKind == ZoneKind.Whitelist && !rec.pinned) {
+                logs?.info(R.string.log_geozone_learned, hex.key, rec.ordinaryFailures, rec.mobileSuccesses)
+            }
         }
     }
 
@@ -247,7 +276,7 @@ class GeoZoneRepository(
     ) {
         var transition: Pair<ZoneKind, ZoneKind>? = null
         var snapshotRecord: GeoCellRecord? = null
-        mutate { current ->
+        mutate(recluster = true, urgent = true) { current ->
             val key = hex.key
             val existing = current.cells[key] ?: GeoCellRecord(hex = hex)
             val oldKind = existing.kind()
@@ -286,7 +315,7 @@ class GeoZoneRepository(
         failed: Boolean = false,
         timestampMillis: Long = System.currentTimeMillis(),
     ) {
-        mutate { current ->
+        mutate(recluster = false, urgent = false) { current ->
             val last = current.breadcrumbs.lastOrNull()
             if (last != null) {
                 val dist = GeoZoneEngine.haversineMeters(
@@ -319,7 +348,7 @@ class GeoZoneRepository(
     ) {
         val center = HexCoord.fromLatLon(latitude, longitude)
         val targets = center.ring(radiusRings)
-        mutate { current ->
+        mutate(recluster = true, urgent = true) { current ->
             val updatedCells = current.cells.toMutableMap()
             for (hex in targets) {
                 val key = hex.key
@@ -340,7 +369,7 @@ class GeoZoneRepository(
     fun togglePinCluster(clusterId: String) {
         var newPinned: Boolean? = null
         var cellCount = 0
-        mutate { current ->
+        mutate(recluster = true, urgent = true) { current ->
             val cluster = _clusters.value.firstOrNull { it.id == clusterId } ?: return@mutate current
             val nextPinned = !cluster.pinned
             newPinned = nextPinned
@@ -360,7 +389,7 @@ class GeoZoneRepository(
 
     fun removeCluster(clusterId: String) {
         var removedCount = 0
-        mutate { current ->
+        mutate(recluster = true, urgent = true) { current ->
             val cluster = _clusters.value.firstOrNull { it.id == clusterId } ?: return@mutate current
             val keysToRemove = cluster.hexSet.mapTo(HashSet(cluster.hexSet.size)) { it.key }
             removedCount = keysToRemove.size
@@ -372,14 +401,20 @@ class GeoZoneRepository(
     }
 
     fun clearAll() {
-        mutate { GeoZoneStoreState() }
+        mutate(recluster = true, urgent = true) { GeoZoneStoreState() }
         logs?.trace(TAG, "zonesCleared")
     }
 
-    private fun mutate(transform: (GeoZoneStoreState) -> GeoZoneStoreState) {
+    private fun mutate(
+        recluster: Boolean = true,
+        urgent: Boolean = false,
+        transform: (GeoZoneStoreState) -> GeoZoneStoreState,
+    ) {
         synchronized(clusterLock) {
-            store.update(transform)
-            _clusters.value = GeoZoneEngine.clusterCells(store.value.cells.values)
+            val changed = store.updateChanged(urgent = urgent, transform = transform)
+            if (changed && recluster) {
+                _clusters.value = GeoZoneEngine.clusterCells(store.value.cells.values)
+            }
         }
     }
 
@@ -415,13 +450,16 @@ class GeoZoneRepository(
             .associate { it.key to it.value }
     }
 
-    private companion object {
-        const val TAG = "YumiGeo"
-        const val MAX_BREADCRUMBS = 240
-        const val MAX_CELLS = 2_000
-        const val MAX_TOWER_ANCHORS = 3_000
-        const val MAX_WIFI_ANCHORS = 200
-        const val MIN_BREADCRUMB_DISTANCE_METERS = 35.0
-        const val DEFAULT_FALLBACK_LATENCY_MS = 250
+    companion object {
+        const val DEFAULT_SAVE_DEBOUNCE_MILLIS = 8_000L
+        const val HEALTHY_TOUCH_INTERVAL_MS = 120_000L
+        const val MOBILE_TOUCH_INTERVAL_MS = 120_000L
+        private const val TAG = "YumiGeo"
+        private const val MAX_BREADCRUMBS = 240
+        private const val MAX_CELLS = 2_000
+        private const val MAX_TOWER_ANCHORS = 3_000
+        private const val MAX_WIFI_ANCHORS = 200
+        private const val MIN_BREADCRUMB_DISTANCE_METERS = 35.0
+        private const val DEFAULT_FALLBACK_LATENCY_MS = 250
     }
 }

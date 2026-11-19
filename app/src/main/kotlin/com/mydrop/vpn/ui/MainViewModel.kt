@@ -448,6 +448,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val geoLocationSample: StateFlow<GeoSample?> = container.geoMonitor.currentSample
     val geoLastValidCoord: StateFlow<LatLon?> = container.geoMonitor.lastValidLatLon
     val geoHasPermission: StateFlow<Boolean> = container.geoMonitor.hasPermission
+    val geoHasBackgroundPermission: StateFlow<Boolean> = container.geoMonitor.hasBackgroundPermission
     val geoSpoofDetected: StateFlow<Boolean> = container.geoMonitor.spoofDetected
     val mapTiles: MapTileStore = container.mapTiles
 
@@ -615,6 +616,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             subscriptions = profileState.subscriptions,
             latencies = if (filter.sort == ServerSort.Latency) profileState.latencies else emptyMap(),
             filter = filter,
+            collapsedGroupIds = container.settings.value.collapsedGroupIds,
         )
         if (nodes.isEmpty()) return
         pingAllJob = pingCoordinator.ping(
