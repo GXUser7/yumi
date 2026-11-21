@@ -98,14 +98,20 @@ object FailoverGroup {
         limit: Int,
         chosen: Set<String> = emptySet(),
         exclude: Set<String> = emptySet(),
+        filterSettings: AppSettings? = null,
     ): List<ProxyNode> {
         if (limit <= 1) return emptyList()
 
         // Two rows can carry the same endpoint — the same server present in two subscriptions,
         // or re-added by hand. Probing it twice measures the same thing twice.
         val takenAddresses = mutableSetOf(selected.address)
+        val allowedNodes = if (chosen.isEmpty() && filterSettings != null) {
+            ServerFilter.filterNodes(nodes, filterSettings)
+        } else {
+            nodes
+        }
 
-        val pool = nodes
+        val pool = allowedNodes
             .asSequence()
             .filter { it.id != selected.id }
             // Excluded before the cut, not after it. Filtering a list that has already been
@@ -128,6 +134,50 @@ object FailoverGroup {
             .toList()
 
         return pool.take(limit - 1)
+    }
+
+    /**
+     * Whether an automatic target (a remembered Wi-Fi server or a home server under `returnHome`)
+     * still passes the persisted server filters while failover is choosing automatically.
+     *
+     * An explicit hand-picked failover list (`failoverNodeIds` non-empty) stays under the user's
+     * direct control.
+     */
+    fun isAllowedAutomaticTarget(
+        node: ProxyNode,
+        nodes: List<ProxyNode>,
+        settings: AppSettings,
+    ): Boolean {
+        if (settings.failoverNodeIds.isNotEmpty()) return true
+        val activeProtocols = ServerFilter.resolveProtocols(nodes, settings.serverFilterProtocols)
+        val activeCountries = ServerFilter.resolveCountries(nodes, settings.serverFilterCountries)
+        return ServerFilter.matches(node, activeProtocols, activeCountries, settings.serverFilterCountryMode)
+    }
+
+    /**
+     * Builds the selector group handed to the core at startup, keeping mobile servers, allowed
+     * automatic/chosen spares, and [selected] aligned with [FailoverWatchdog].
+     */
+    fun switchable(
+        nodes: List<ProxyNode>,
+        selected: ProxyNode,
+        latencies: Map<String, LatencyResult>,
+        settings: AppSettings,
+        limit: Int = SWITCHABLE,
+    ): List<ProxyNode> {
+        val byId = nodes.associateBy { it.id }
+        val named = settings.mobileNodeIds.mapNotNull(byId::get)
+        val mobile = named.take(mobileSlots(named.size))
+        val failover = candidates(
+            nodes = nodes,
+            selected = selected,
+            latencies = latencies,
+            limit = roomFor(named.size),
+            chosen = settings.failoverNodeIds,
+            exclude = settings.mobileNodeIds,
+            filterSettings = settings,
+        )
+        return (listOf(selected) + mobile + failover).distinctBy { it.id }.take(limit)
     }
 
     /**

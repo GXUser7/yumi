@@ -198,29 +198,13 @@ class AppContainer(context: Context) {
     private fun switchableGroup(selected: com.mydrop.vpn.core.model.ProxyNode):
         List<com.mydrop.vpn.core.model.ProxyNode> {
         val state = profiles.state.value
-        val current = settings.value
-        val byId = state.nodes.associateBy { it.id }
-        // Truncated here rather than by the `take` at the end, which trims the tail — and the
-        // tail is the ordinary spares. A long mobile list used to consume every slot before they
-        // were ever reached.
-        val named = current.mobileNodeIds.mapNotNull(byId::get)
-        val mobile = named.take(com.mydrop.vpn.core.model.FailoverGroup.mobileSlots(named.size))
-        val failover = com.mydrop.vpn.core.model.FailoverGroup.candidates(
-            nodes = state.nodes,
+        return com.mydrop.vpn.core.model.FailoverGroup.switchable(
+            nodes = state.visibleNodes,
             selected = selected,
             latencies = state.latencies,
-            limit = com.mydrop.vpn.core.model.FailoverGroup.roomFor(named.size),
-            chosen = current.failoverNodeIds,
-            // Excluded here for the same reason FailoverWatchdog.swapAwayFrom excludes them: the
-            // mobile servers are added above, by name, and a candidate list that can also contain
-            // them spends slots on duplicates that `distinctBy` then throws away — a group smaller
-            // than the twenty-four it was sized for. More than tidiness: the watchdog and this
-            // have to compute the same list, or the lot can fall on a server the core was never
-            // told about and an instant switch becomes a reconnect.
-            exclude = current.mobileNodeIds,
+            settings = settings.value,
+            limit = SWITCHABLE_LIMIT,
         )
-        // The chosen server first, so a truncated group still contains the one that matters.
-        return (listOf(selected) + mobile + failover).distinctBy { it.id }.take(SWITCHABLE_LIMIT)
     }
 
     /**

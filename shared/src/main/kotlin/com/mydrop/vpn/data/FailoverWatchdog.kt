@@ -271,9 +271,11 @@ class FailoverWatchdog(
                 if (transport == NetworkTransport.Cellular && insideWhitelist) {
                     return true
                 }
-                val remembered = savedOrdinaryNodeId
+                val savedOrdinary = savedOrdinaryNodeId
                     ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
                     ?.takeIf { it.id !in current.mobileNodeIds }
+                val remembered = savedOrdinary
+                    ?.takeIf { FailoverGroup.isAllowedAutomaticTarget(it, profiles.nodes, current) }
                 // The switch says which of two answers to prefer, and both are deliberate.
                 //
                 // Remembering is predictable: the tunnel comes back to the server it left. Not
@@ -308,7 +310,7 @@ class FailoverWatchdog(
                 val whole = current.preferOrdinaryOnCellular &&
                     transport == NetworkTransport.Cellular
                 val pool = FailoverGroup.preferSwitchable(
-                    ordinaryPoolFor(remembered ?: carrying, current.mobileNodeIds, whole),
+                    ordinaryPoolFor(savedOrdinary ?: carrying, current.mobileNodeIds, whole),
                     configs.switchable.value,
                 )
                 if (pool.isEmpty()) return true
@@ -361,13 +363,15 @@ class FailoverWatchdog(
         mobileIds: Set<String>,
         whole: Boolean = false,
     ): List<ProxyNode> {
+        val currentSettings = settings.value
         val eligible = FailoverGroup.candidates(
             nodes = profiles.nodes,
             selected = anchor,
             latencies = profiles.state.value.latencies,
             limit = if (whole) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
-            chosen = settings.value.failoverNodeIds,
+            chosen = currentSettings.failoverNodeIds,
             exclude = mobileIds,
+            filterSettings = currentSettings,
         )
         return if (whole) eligible else FailoverGroup.sample(eligible)
     }
@@ -676,14 +680,17 @@ class FailoverWatchdog(
                             val activeCarrying = profiles.selectedNode() ?: return@collectLatest
                             if (activeCarrying.id !in settings.value.mobileNodeIds) return@collectLatest
 
-                            val remembered = (geoSwitchedFromOrdinaryId ?: savedOrdinaryNodeId)
+                            val currentSettings = settings.value
+                            val savedOrdinary = (geoSwitchedFromOrdinaryId ?: savedOrdinaryNodeId)
                                 ?.let { id -> profiles.nodes.firstOrNull { it.id == id } }
-                                ?.takeIf { it.id !in settings.value.mobileNodeIds && it.settings != ProxySettings.Direct }
+                                ?.takeIf { it.id !in currentSettings.mobileNodeIds && it.settings != ProxySettings.Direct }
+                            val remembered = savedOrdinary
+                                ?.takeIf { FailoverGroup.isAllowedAutomaticTarget(it, profiles.nodes, currentSettings) }
 
                             val pool = FailoverGroup.preferSwitchable(
                                 buildList {
                                     if (remembered != null) add(remembered)
-                                    addAll(ordinaryPoolFor(remembered ?: activeCarrying, settings.value.mobileNodeIds, whole = true))
+                                    addAll(ordinaryPoolFor(savedOrdinary ?: activeCarrying, currentSettings.mobileNodeIds, whole = true))
                                 }.distinctBy { it.id },
                                 configs.switchable.value,
                             )
@@ -914,6 +921,7 @@ class FailoverWatchdog(
                 // A subscription refresh retires ids, so the saved server can stop existing. Then
                 // there is nowhere to go back to and the memory is only a probe against a ghost.
                 val home = homeNode?.let { saved -> profiles.nodes.firstOrNull { it.id == saved.id } }
+                    ?.takeIf { FailoverGroup.isAllowedAutomaticTarget(it, profiles.nodes, settings.value) }
                 if (homeNode != null && home == null) forgetHome()
 
                 // Probed first, and always: the count of good probes in a row is what the
@@ -1377,6 +1385,7 @@ class FailoverWatchdog(
                 // The whole group first, then seven of it by lot. Drawing from the group and not from
                 // the raw list is what keeps the switch instant: the core can only be pointed at its own
                 // members, and everything in here is one.
+                val currentSettings = settings.value
                 val eligible = FailoverGroup.candidates(
                     nodes = profiles.nodes,
                     selected = dead,
@@ -1384,8 +1393,9 @@ class FailoverWatchdog(
                     // Everything, when the answer decides whether to abandon the ordinary servers
                     // altogether; seven by lot when it only decides where to go next.
                     limit = if (ordinaryFirst) FailoverGroup.NO_LIMIT else FailoverGroup.roomFor(mobileIds.size),
-                    chosen = settings.value.failoverNodeIds,
+                    chosen = currentSettings.failoverNodeIds,
                     exclude = mobileIds,
+                    filterSettings = currentSettings,
                 )
                 if (ordinaryFirst) eligible else FailoverGroup.sample(eligible)
             }

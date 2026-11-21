@@ -2,6 +2,7 @@ package com.mydrop.vpn.core.model
 
 import kotlin.random.Random
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,13 +14,16 @@ class FailoverGroupTest {
         port: Int = 443,
         subscriptionId: String? = "sub-a",
         settings: ProxySettings = ProxySettings.Trojan(password = "p"),
+        name: String = id,
+        group: NodeGroup? = null,
     ) = ProxyNode(
         id = id,
-        name = id,
+        name = name,
         server = server,
         port = port,
         settings = settings,
         subscriptionId = subscriptionId,
+        group = group,
     )
 
     private fun latency(id: String, millis: Int, failed: Boolean = false) =
@@ -348,5 +352,180 @@ class FailoverGroupTest {
 
         assertTrue("nothing to come back to", ordinary.isNotEmpty())
         assertTrue("a mobile server leaked in", ordinary.none { it.id in mobileIds })
+    }
+
+    @Test
+    fun `automatic failover skips excluded countries even when they are fastest`() {
+        val current = node("cur", name = "${WorldMap.flagOf("NL")} Current")
+        val eu = node("eu", name = "${WorldMap.flagOf("EU")} Europe")
+        val ru = node("ru", name = "${WorldMap.flagOf("RU")} Moscow")
+        val de = node("de", name = "${WorldMap.flagOf("DE")} Berlin")
+        val nl = node("nl", name = "${WorldMap.flagOf("NL")} Amsterdam")
+        val nodes = listOf(current, eu, ru, de, nl)
+
+        val group = FailoverGroup.candidates(
+            nodes = nodes,
+            selected = current,
+            latencies = mapOf(
+                latency("eu", 5),
+                latency("ru", 10),
+                latency("de", 40),
+                latency("nl", 80),
+            ),
+            limit = FailoverGroup.MAX_GROUP,
+            filterSettings = AppSettings(
+                serverFilterCountries = setOf("EU", "RU"),
+                serverFilterCountryMode = CountryFilterMode.Exclude,
+            ),
+        )
+
+        assertEquals(listOf("de", "nl"), group.map { it.id })
+    }
+
+    @Test
+    fun `automatic failover honors Include country mode and protocol filter including group members`() {
+        val current = node(
+            "cur",
+            name = "${WorldMap.flagOf("DE")} Current",
+            settings = ProxySettings.Vless(uuid = "u0"),
+        )
+        val euVless = node(
+            "eu-vless",
+            name = "${WorldMap.flagOf("EU")} Europe VLESS",
+            settings = ProxySettings.Vless(uuid = "u1"),
+        )
+        val nlTrojan = node(
+            "nl-trojan",
+            name = "${WorldMap.flagOf("NL")} Amsterdam Trojan",
+            settings = ProxySettings.Trojan(password = "p1"),
+        )
+        val nlVless = node(
+            "nl-vless",
+            name = "${WorldMap.flagOf("NL")} Amsterdam VLESS",
+            settings = ProxySettings.Vless(uuid = "u2"),
+        )
+        val nlGroupWithVless = node(
+            "nl-grp",
+            name = "${WorldMap.flagOf("NL")} Amsterdam Group",
+            settings = ProxySettings.Shadowsocks(method = "aes-128-gcm", password = "p2"),
+            group = NodeGroup(
+                members = listOf(
+                    node("m1", settings = ProxySettings.Shadowsocks(method = "aes-128-gcm", password = "p2")),
+                    node("m2", settings = ProxySettings.Vless(uuid = "u3")),
+                ),
+            ),
+        )
+        val nodes = listOf(current, euVless, nlTrojan, nlVless, nlGroupWithVless)
+
+        val group = FailoverGroup.candidates(
+            nodes = nodes,
+            selected = current,
+            latencies = mapOf(
+                latency("nl-vless", 30),
+                latency("nl-grp", 50),
+            ),
+            limit = FailoverGroup.MAX_GROUP,
+            filterSettings = AppSettings(
+                serverFilterProtocols = setOf(Protocol.VLESS),
+                serverFilterCountries = setOf("NL"),
+                serverFilterCountryMode = CountryFilterMode.Include,
+            ),
+        )
+
+        assertEquals(listOf("nl-vless", "nl-grp"), group.map { it.id })
+    }
+
+    @Test
+    fun `automatic failover returns empty when every other server is excluded`() {
+        val current = node("cur", name = "${WorldMap.flagOf("DE")} Berlin")
+        val eu1 = node("eu1", name = "${WorldMap.flagOf("EU")} Europe 1")
+        val eu2 = node("eu2", name = "${WorldMap.flagOf("EU")} Europe 2")
+
+        val group = FailoverGroup.candidates(
+            nodes = listOf(current, eu1, eu2),
+            selected = current,
+            latencies = emptyMap(),
+            limit = FailoverGroup.MAX_GROUP,
+            filterSettings = AppSettings(
+                serverFilterCountries = setOf("EU"),
+                serverFilterCountryMode = CountryFilterMode.Exclude,
+            ),
+        )
+
+        assertTrue(group.isEmpty())
+    }
+
+    @Test
+    fun `explicit manual failover list is not overridden by server filters`() {
+        val current = node("cur", name = "${WorldMap.flagOf("DE")} Berlin")
+        val eu = node("eu", name = "${WorldMap.flagOf("EU")} Europe")
+        val nl = node("nl", name = "${WorldMap.flagOf("NL")} Amsterdam")
+
+        val group = FailoverGroup.candidates(
+            nodes = listOf(current, eu, nl),
+            selected = current,
+            latencies = emptyMap(),
+            limit = FailoverGroup.MAX_GROUP,
+            chosen = setOf("eu"),
+            filterSettings = AppSettings(
+                failoverNodeIds = setOf("eu"),
+                serverFilterCountries = setOf("EU"),
+                serverFilterCountryMode = CountryFilterMode.Exclude,
+            ),
+        )
+
+        assertEquals(listOf("eu"), group.map { it.id })
+    }
+
+    @Test
+    fun `switchable group omits excluded servers from automatic spares while keeping selected and mobile`() {
+        val selected = node("cur", name = "${WorldMap.flagOf("DE")} Selected")
+        val mobileEu = node("mob-eu", name = "${WorldMap.flagOf("EU")} Mobile EU")
+        val spareEu = node("spare-eu", name = "${WorldMap.flagOf("EU")} Spare EU")
+        val spareRu = node("spare-ru", name = "${WorldMap.flagOf("RU")} Spare RU")
+        val spareNl = node("spare-nl", name = "${WorldMap.flagOf("NL")} Spare NL")
+
+        val group = FailoverGroup.switchable(
+            nodes = listOf(selected, mobileEu, spareEu, spareRu, spareNl),
+            selected = selected,
+            latencies = mapOf(
+                latency("spare-eu", 5),
+                latency("spare-ru", 10),
+                latency("spare-nl", 40),
+            ),
+            settings = AppSettings(
+                mobileNodeIds = setOf("mob-eu"),
+                serverFilterCountries = setOf("EU", "RU"),
+                serverFilterCountryMode = CountryFilterMode.Exclude,
+            ),
+        )
+
+        assertEquals(listOf("cur", "mob-eu", "spare-nl"), group.map { it.id })
+    }
+
+    @Test
+    fun `isAllowedAutomaticTarget enforces filters only in automatic mode and ignores stale filters`() {
+        val eu = node("eu", name = "${WorldMap.flagOf("EU")} Europe", settings = ProxySettings.Trojan(password = "p"))
+        val de = node("de", name = "${WorldMap.flagOf("DE")} Berlin", settings = ProxySettings.Vless(uuid = "u1"))
+        val nl = node("nl", name = "${WorldMap.flagOf("NL")} Amsterdam", settings = ProxySettings.Vless(uuid = "u2"))
+        val nodes = listOf(eu, de, nl)
+
+        val autoSettings = AppSettings(
+            serverFilterProtocols = setOf(Protocol.VLESS),
+            serverFilterCountries = setOf("EU"),
+            serverFilterCountryMode = CountryFilterMode.Exclude,
+        )
+        assertFalse(FailoverGroup.isAllowedAutomaticTarget(eu, nodes, autoSettings))
+        assertTrue(FailoverGroup.isAllowedAutomaticTarget(de, nodes, autoSettings))
+
+        val staleFilterSettings = AppSettings(
+            serverFilterProtocols = setOf(Protocol.WIREGUARD),
+            serverFilterCountries = setOf("JP"),
+            serverFilterCountryMode = CountryFilterMode.Include,
+        )
+        assertTrue(FailoverGroup.isAllowedAutomaticTarget(eu, nodes, staleFilterSettings))
+
+        val manualListSettings = autoSettings.copy(failoverNodeIds = setOf("eu"))
+        assertTrue(FailoverGroup.isAllowedAutomaticTarget(eu, nodes, manualListSettings))
     }
 }
