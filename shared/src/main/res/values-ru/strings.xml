@@ -518,6 +518,7 @@
 
     <string name="log_autoselect">Автовыбор: %1$s</string>
     <string name="log_autoselect_measuring">Автовыбор: измеряю задержки (%1$d)</string>
+    <string name="log_autoselect_no_filtered">Автовыбор: по текущим фильтрам нет подходящих серверов</string>
 
     <string name="log_georules_missing">Гео-правила недоступны (%1$s) — маршрутизация без них</string>
     <string name="log_geo_missing">Гео-базы ещё не скачаны — пока весь трафик идёт через прокси</string>
@@ -556,6 +557,7 @@
     <string name="error_unsupported_format">Формат %1$s пока не поддерживается</string>
     <string name="error_too_many_redirects">Слишком много перенаправлений</string>
     <string name="error_no_server_selected">Сначала выберите сервер</string>
+    <string name="error_no_filtered_servers">По текущим фильтрам нет подходящих серверов</string>
 
     <string name="error_speed_no_connection">нет связи</string>
     <string name="error_speed_no_length">ответ без длины тела</string>

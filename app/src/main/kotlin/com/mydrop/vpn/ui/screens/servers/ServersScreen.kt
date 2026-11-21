@@ -94,6 +94,7 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.ServerFilter
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.WorldMap
 import com.mydrop.vpn.ui.ServersUiState
@@ -453,22 +454,11 @@ internal fun buildGroups(
     manualGroupTitle: String,
 ): List<ServerGroup> {
     val trimmedQuery = query.trim()
-    val hasProtocols = selectedProtocols.isNotEmpty()
-    val hasCountries = selectedCountries.isNotEmpty()
     val hasQuery = trimmedQuery.isNotEmpty()
 
     fun matches(node: ProxyNode): Boolean {
-        if (hasProtocols) {
-            val protocolMatches = node.protocol in selectedProtocols ||
-                node.group?.members?.any { it.protocol in selectedProtocols } == true
-            if (!protocolMatches) return false
-        }
-        if (hasCountries) {
-            val code = WorldMap.countryCodeOf(node.name)
-            when (countryMode) {
-                CountryFilterMode.Include -> if (code == null || code !in selectedCountries) return false
-                CountryFilterMode.Exclude -> if (code != null && code in selectedCountries) return false
-            }
+        if (!ServerFilter.matches(node, selectedProtocols, selectedCountries, countryMode)) {
+            return false
         }
         if (hasQuery) {
             return node.name.contains(trimmedQuery, ignoreCase = true) ||

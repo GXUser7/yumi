@@ -676,6 +676,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         // whatever measurements existed, however old, while the launcher discarded anything past
         // half an hour — so the same button picked different servers depending on which code path
         // reached it.
+        if (container.profiles.nodes.isNotEmpty() && container.tunnelLauncher.filteredNodes().isEmpty()) {
+            emit(R.string.error_no_filtered_servers)
+            return
+        }
         val fastest = container.tunnelLauncher.fastestNode()
         if (fastest == null) {
             emit(R.string.message_measure_first)

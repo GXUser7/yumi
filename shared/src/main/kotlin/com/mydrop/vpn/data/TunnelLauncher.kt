@@ -4,6 +4,7 @@ import android.content.Intent
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.model.ServerFilter
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** What came of asking for the tunnel. */
@@ -14,6 +15,15 @@ sealed interface ConnectOutcome {
     data class NeedsConsent(val intent: Intent) : ConnectOutcome
 
     data class Rejected(val reason: String) : ConnectOutcome
+}
+
+/** Result of choosing a server to dial. */
+sealed interface ResolveOutcome {
+    data class Selected(val node: ProxyNode) : ResolveOutcome
+
+    data object NoServers : ResolveOutcome
+
+    data object NoFilteredServers : ResolveOutcome
 }
 
 /**
@@ -39,8 +49,13 @@ class TunnelLauncher(
 ) {
 
     suspend fun connect(): ConnectOutcome {
-        val node = resolveNode()
-            ?: return ConnectOutcome.Rejected(strings.get(R.string.error_no_server_selected))
+        val node = when (val resolved = resolveNodeOutcome()) {
+            is ResolveOutcome.Selected -> resolved.node
+            ResolveOutcome.NoServers ->
+                return ConnectOutcome.Rejected(strings.get(R.string.error_no_server_selected))
+            ResolveOutcome.NoFilteredServers ->
+                return ConnectOutcome.Rejected(strings.get(R.string.error_no_filtered_servers))
+        }
 
         tunnel.permissionIntent()?.let { return ConnectOutcome.NeedsConsent(it) }
 
@@ -100,41 +115,66 @@ class TunnelLauncher(
 
     fun disconnect() = tunnel.disconnect()
 
+    /** Servers from enabled subscriptions that pass the current protocol and country filters. */
+    fun filteredNodes(): List<ProxyNode> = ServerFilter.filterNodes(profiles.nodes, settings.value)
+
     /**
-     * The server to dial, honouring "pick the fastest". Returns null when there is nothing to
-     * dial at all.
+     * The server to dial, honouring "pick the fastest" and active server filters. Returns null
+     * when there is nothing to dial or no server matches the active filters.
      *
      * The choice is written back to the profile, so the server list and the connect screen show
      * the server that is actually carrying traffic rather than the one the user last tapped.
      */
-    suspend fun resolveNode(): ProxyNode? {
+    suspend fun resolveNode(): ProxyNode? = (resolveNodeOutcome() as? ResolveOutcome.Selected)?.node
+
+    /** Resolves the server to dial, distinguishing an empty profile from an empty filter match. */
+    suspend fun resolveNodeOutcome(): ResolveOutcome {
         val nodes = profiles.nodes
-        if (nodes.isEmpty()) return null
+        if (nodes.isEmpty()) return ResolveOutcome.NoServers
 
+        val currentSettings = settings.value
         val chosen = profiles.selectedNode() ?: nodes.first()
-        if (!settings.value.autoSelectFastest || nodes.size == 1) return chosen
+        if (!currentSettings.autoSelectFastest) return ResolveOutcome.Selected(chosen)
 
-        val fastest = fastestNode() ?: run {
+        val candidates = ServerFilter.filterNodes(nodes, currentSettings)
+        if (candidates.isEmpty()) {
+            logs.warn(R.string.log_autoselect_no_filtered)
+            return ResolveOutcome.NoFilteredServers
+        }
+
+        if (candidates.size == 1) {
+            val only = candidates.first()
+            if (only.id != chosen.id) {
+                logs.info(R.string.log_autoselect, only.name)
+                profiles.selectNode(only.id)
+            }
+            return ResolveOutcome.Selected(only)
+        }
+
+        val fastest = fastestNode(candidates) ?: run {
             // Measuring is worth a few seconds here and nowhere else: this is the one moment the
             // user is already waiting for a tunnel, and picking "the fastest" off numbers from
             // last week is how the setting stops meaning anything.
-            sweep(nodes)
-            fastestNode()
+            sweep(candidates)
+            fastestNode(candidates)
         }
 
-        if (fastest == null || fastest.id == chosen.id) return chosen
-        logs.info(R.string.log_autoselect, fastest.name)
-        profiles.selectNode(fastest.id)
-        return fastest
+        val picked = fastest ?: if (candidates.any { it.id == chosen.id }) chosen else candidates.first()
+        if (picked.id != chosen.id) {
+            logs.info(R.string.log_autoselect, picked.name)
+            profiles.selectNode(picked.id)
+        }
+        return ResolveOutcome.Selected(picked)
     }
 
     // ----------------------------------------------------------- Internals
 
-    /** Fastest server with a usable, recent measurement, or null when there is none. */
-    fun fastestNode(): ProxyNode? {
+    /** Fastest server among [candidates] with a usable, recent measurement, or null when there is none. */
+    fun fastestNode(candidates: List<ProxyNode> = filteredNodes()): ProxyNode? {
+        if (candidates.isEmpty()) return null
         val latencies = profiles.state.value.latencies
         val freshEnough = System.currentTimeMillis() - FRESH_WINDOW_MILLIS
-        return profiles.nodes
+        return candidates
             .mapNotNull { node ->
                 latencies[node.id]
                     ?.takeIf { !it.failed && it.measuredAtEpochMillis >= freshEnough }

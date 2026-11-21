@@ -520,6 +520,7 @@ Send it here: %2$s</string>
 
     <string name="log_autoselect">Auto-select: %1$s</string>
     <string name="log_autoselect_measuring">Auto-select: measuring latencies (%1$d)</string>
+    <string name="log_autoselect_no_filtered">Auto-select: no servers match the current filters</string>
 
     <string name="log_georules_missing">Geo rules unavailable (%1$s) — routing without them</string>
     <string name="log_geo_missing">Geo databases not downloaded yet — routing everything through the proxy until they are</string>
@@ -558,6 +559,7 @@ Send it here: %2$s</string>
     <string name="error_unsupported_format">Format %1$s is not supported yet</string>
     <string name="error_too_many_redirects">Too many redirects</string>
     <string name="error_no_server_selected">Choose a server first</string>
+    <string name="error_no_filtered_servers">No servers match the current filters</string>
 
     <string name="error_speed_no_connection">no connection</string>
     <string name="error_speed_no_length">response without a body length</string>
