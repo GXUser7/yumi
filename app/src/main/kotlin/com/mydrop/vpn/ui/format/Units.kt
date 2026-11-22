@@ -82,3 +82,7 @@ fun pluralServers(count: Int): String = pluralStringResource(R.plurals.servers, 
 @Composable
 @ReadOnlyComposable
 fun pluralSources(count: Int): String = pluralStringResource(R.plurals.sources, count, count)
+
+@Composable
+@ReadOnlyComposable
+fun pluralRules(count: Int): String = pluralStringResource(R.plurals.rules, count, count)

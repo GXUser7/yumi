@@ -65,6 +65,12 @@
         <item quantity="many">%1$d строк</item>
         <item quantity="other">%1$d строки</item>
     </plurals>
+    <plurals name="rules">
+        <item quantity="one">%1$d правило</item>
+        <item quantity="few">%1$d правила</item>
+        <item quantity="many">%1$d правил</item>
+        <item quantity="other">%1$d правила</item>
+    </plurals>
 
     <!-- ========================================================= Навигация -->
 
@@ -138,6 +144,9 @@
     <string name="connect_tunnel_primary">Туннель</string>
     <string name="connect_tunnel_secondary">выключен</string>
     <string name="connect_pull_to_return">Потяните вниз, чтобы вернуться к потоку</string>
+    <string name="connect_swipe_modes_traffic">Режимы и трафик</string>
+    <string name="connect_open_stats">Открыть режимы и трафик</string>
+    <string name="connect_close_stats">Вернуться к потоку</string>
     <string name="connect_connecting_with">%1$s с %2$s</string>
     <string name="connect_the_server">сервером</string>
     <string name="connect_tunnel_active">Туннель активен</string>
@@ -331,6 +340,9 @@
     <string name="settings_split_tunnel_off">Все приложения через VPN</string>
     <string name="settings_split_tunnel_allow">Только выбранные: %1$d</string>
     <string name="settings_split_tunnel_block">Исключено приложений: %1$d</string>
+    <string name="settings_custom_rules">Свои правила маршрутизации</string>
+    <string name="settings_custom_rules_off">Исключений нет — по режиму маршрутизации</string>
+    <string name="settings_custom_rules_count">Настроено: %1$s</string>
 
     <string name="settings_tunnel">Туннель</string>
     <string name="settings_ipv6_subtitle">Приложения получают только IPv4-адреса</string>
@@ -393,6 +405,11 @@
     <string name="settings_dns_empty_error">Адрес не может быть пустым</string>
     <string name="settings_dns_fallback">Запасной DNS</string>
     <string name="settings_dns_fallback_subtitle">Если ваш DNS перестанет отвечать — перейти на 1.1.1.1 до следующего переподключения. DNS по умолчанию не проверяется</string>
+    <string name="settings_resolve_server_doh">Узнавать адрес сервера через DoH</string>
+    <string name="settings_resolve_server_doh_subtitle">Определяет IP сервера через HTTPS-DNS, чтобы подмена DNS оператором не ломала подключение</string>
+    <string name="settings_resolve_doh_url">DoH-сервер для адреса</string>
+    <string name="settings_resolve_doh_url_hint">Адрес https://… в формате RFC 8484</string>
+    <string name="settings_resolve_doh_url_error">Укажите корректный внешний адрес https://…</string>
     <string name="settings_dns_resolvers">Добавленные резолверы</string>
     <string name="settings_dns_provider_note">Включена маршрутизация провайдера: на серверах, чей провайдер прислал свой DNS, используется он. Настройки ниже — для остальных серверов</string>
     <string name="settings_dns_from_settings">Из настроек</string>
@@ -851,4 +868,35 @@
     <string name="zones_legend_approach">Подлёт</string>
     <string name="zones_legend_dead">Глушняк</string>
     <string name="zones_legend_healthy">Чисто</string>
+
+    <!-- ============================================== Свои правила и соединения -->
+
+    <string name="custom_rules_title">Свои правила</string>
+    <string name="custom_rules_subtitle">Приоритет выше режима маршрутизации и правил провайдера</string>
+    <string name="custom_rules_tab_rules">Правила</string>
+    <string name="custom_rules_tab_connections">Соединения</string>
+    <string name="custom_rules_action_proxy">Через VPN</string>
+    <string name="custom_rules_action_direct">Напрямую</string>
+    <string name="custom_rules_action_block">Блок</string>
+    <string name="custom_rules_input_label">Сайт, ссылка, IP или подсеть</string>
+    <string name="custom_rules_input_hint">youtube.com, geosite:category-ru, 1.2.3.0/24, geoip:ru</string>
+    <string name="custom_rules_input_error">Неверный формат — введите домен, URL, IP, подсеть или geosite:/geoip:</string>
+    <string name="custom_rules_priority_note">Порядок применения: Блок → Через VPN → Напрямую</string>
+    <string name="custom_rules_empty">В этом списке пока пусто</string>
+    <string name="custom_rules_prefix_domain">домен</string>
+    <string name="custom_rules_connections_filter_all">Все</string>
+    <string name="custom_rules_connections_filter_proxy">VPN</string>
+    <string name="custom_rules_connections_filter_direct">Напрямую</string>
+    <string name="custom_rules_connections_filter_block">Блок</string>
+    <string name="custom_rules_connections_empty">Соединений пока нет — подключите туннель и откройте любой сайт</string>
+    <string name="custom_rules_route_direct">Напрямую</string>
+    <string name="custom_rules_route_block">Блок</string>
+    <string name="custom_rules_route_rejected">Отклонено</string>
+    <string name="custom_rules_menu_always_proxy">Всегда через VPN</string>
+    <string name="custom_rules_menu_always_direct">Всегда напрямую</string>
+    <string name="custom_rules_menu_block">Блокировать</string>
+    <string name="custom_rules_menu_copy">Скопировать адрес</string>
+    <string name="custom_rules_copied">Адрес скопирован</string>
+    <string name="message_custom_rule_added">Добавлено в «%1$s»: %2$s</string>
+    <string name="message_custom_rule_invalid">Не удалось распознать сайт или адрес</string>
 </resources>

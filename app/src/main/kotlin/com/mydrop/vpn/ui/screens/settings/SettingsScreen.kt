@@ -33,9 +33,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
+import com.mydrop.vpn.data.ServerAddressResolver
 import com.mydrop.vpn.ui.format.formatBytes
+import com.mydrop.vpn.ui.format.pluralRules
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.rounded.AddCircleOutline
@@ -379,6 +382,7 @@ fun SettingsScreen(
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
     onOpenLogs: () -> Unit,
     onOpenSplitTunnel: () -> Unit,
+    onOpenCustomRules: () -> Unit = {},
     onOpenFailover: () -> Unit,
     onOpenMobileNodes: () -> Unit,
     geoZonesCount: Int = 0,
@@ -534,6 +538,16 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Apps,
                     onClick = onOpenSplitTunnel,
                 )
+                NavigationRow(
+                    title = stringResource(R.string.settings_custom_rules),
+                    subtitle = if (settings.customRules.isEmpty) {
+                        stringResource(R.string.settings_custom_rules_off)
+                    } else {
+                        stringResource(R.string.settings_custom_rules_count, pluralRules(settings.customRules.size))
+                    },
+                    icon = Icons.AutoMirrored.Rounded.AltRoute,
+                    onClick = onOpenCustomRules,
+                )
             }
         }
 
@@ -648,6 +662,27 @@ fun SettingsScreen(
                     checked = settings.dnsFallback,
                     onCheckedChange = { onUpdate { s -> s.copy(dnsFallback = it) } },
                 )
+                SwitchRow(
+                    title = stringResource(R.string.settings_resolve_server_doh),
+                    subtitle = stringResource(R.string.settings_resolve_server_doh_subtitle),
+                    checked = settings.resolveServerAddress,
+                    onCheckedChange = { onUpdate { s -> s.copy(resolveServerAddress = it) } },
+                )
+                AnimatedVisibility(visible = settings.resolveServerAddress) {
+                    DependentGroup {
+                        Column(Modifier.padding(vertical = 10.dp)) {
+                            ValidatedField(
+                                initial = settings.resolveDohUrl,
+                                label = stringResource(R.string.settings_resolve_doh_url),
+                                hint = stringResource(R.string.settings_resolve_doh_url_hint),
+                                error = stringResource(R.string.settings_resolve_doh_url_error),
+                                isValid = ServerAddressResolver::isValidDohUrl,
+                                onCommit = { value -> onUpdate { s -> s.copy(resolveDohUrl = value.trim()) } },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            )
+                        }
+                    }
+                }
 
                 if (dnsProfiles.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))

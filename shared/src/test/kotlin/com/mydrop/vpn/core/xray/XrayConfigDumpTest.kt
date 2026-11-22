@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
@@ -205,6 +206,13 @@ class XrayConfigDumpTest {
             "ipv6" to AppSettings(enableIpv6 = true),
             "log-debug" to AppSettings(logLevel = LogLevel.Debug),
             "mtu-1500" to AppSettings(mtu = 1500),
+            "custom-rules" to AppSettings(
+                customRules = CustomRules(
+                    proxy = listOf("domain:youtube.com", "203.0.113.0/24"),
+                    direct = listOf("domain:corp.example", "198.51.100.1"),
+                    block = listOf("domain:ads.example", "192.0.2.5"),
+                ),
+            ),
         )
         val reference = nodes.first().second
         settingsMatrix.forEach { (name, s) ->
@@ -236,6 +244,7 @@ class XrayConfigDumpTest {
             val profile = ProviderProfileParser.parse(documentJson)!!.values.single()
             listOf(
                 name to AppSettings(),
+                "$name-parallel-named-doh" to AppSettings(remoteDns = "https://dns.google/dns-query"),
                 "$name-ipv6" to AppSettings(enableIpv6 = true),
                 "$name-global" to AppSettings(routingMode = RoutingMode.Global, blockAds = true, blockQuic = true),
             ).forEach { (variant, s) ->

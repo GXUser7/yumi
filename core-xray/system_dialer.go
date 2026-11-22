@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -149,11 +150,17 @@ func protectControl(network, address string, c syscall.RawConn) error {
 	protectorMu.RLock()
 	p := protector
 	protectorMu.RUnlock()
-	if p != nil {
+	isTCP := strings.HasPrefix(network, "tcp")
+	if p != nil || isTCP {
 		refused := false
 		// The fd is only valid inside Control; calling Protect later would target a recycled fd.
 		if err := c.Control(func(fd uintptr) {
-			refused = !p.Protect(int(fd))
+			if p != nil {
+				refused = !p.Protect(int(fd))
+			}
+			if !refused && isTCP {
+				setTcpSynRetries(fd)
+			}
 		}); err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package com.mydrop.vpn.data
 
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.FragmentMode
 import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.SplitTunnelRules
@@ -65,7 +66,10 @@ class TunnelSettingsApplier(
         val remoteDns: String,
         val directDns: String,
         val hijackDns: Boolean,
+        val resolveServerAddress: Boolean,
+        val resolveDohUrl: String,
         val providerRouting: Boolean,
+        val customRules: CustomRules,
         val tlsFingerprint: TlsFingerprintOverride,
         val fragmentMode: FragmentMode,
         val fragmentScope: FragmentScope,
@@ -85,7 +89,10 @@ class TunnelSettingsApplier(
         remoteDns = remoteDns,
         directDns = directDns,
         hijackDns = hijackDns,
+        resolveServerAddress = resolveServerAddress,
+        resolveDohUrl = resolveDohUrl,
         providerRouting = providerRouting,
+        customRules = customRules,
         tlsFingerprint = tlsFingerprint,
         fragmentMode = fragmentMode,
         fragmentScope = fragmentScope,

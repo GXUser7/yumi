@@ -141,20 +141,51 @@ class XrayProviderRoutingTest {
     }
 
     @Test
-    fun `the provider's resolvers replace the user's and ride the proxy`() {
+    fun `the provider's resolvers race alongside the user's remote dns with enableParallelQuery`() {
         val built = document()
         val dns = built.root()["dns"]!!.jsonObject
 
         assertTrue(built.providerDns)
-        assertEquals(listOf("8.8.8.8", "1.1.1.1"), dns.listOf("servers"))
+        assertEquals(
+            listOf("8.8.8.8", "1.1.1.1", AppSettings().remoteDns),
+            dns.listOf("servers"),
+        )
+        assertEquals("true", dns["enableParallelQuery"]!!.jsonPrimitive.content)
         // IPv6 is off by default, and the provider's UseIP must not hand out addresses the tunnel
         // has decided it cannot carry.
         assertEquals("UseIPv4", dns["queryStrategy"]!!.jsonPrimitive.content)
 
         val dnsRules = built.root().rules().filter { XrayConfigFactory.DNS_IN_TAG in it.listOf("inboundTag") }
-        // Not the user's direct-resolver rule: 8.8.8.8 is the provider's and goes through the server.
+        // Numeric 1.1.1.1 and 8.8.8.8 need no bootstrap rule, so all DNS queries ride the balancer.
         assertTrue(dnsRules.none { it["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.DIRECT_TAG })
         assertEquals(XrayConfigFactory.BALANCER_TAG, dnsRules.single()["balancerTag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `provider dns deduplicates matching user remote dns and bootstraps domain-named user DoH directly`() {
+        val sameDohProfile = profile(
+            """
+            {"remarks": "D", "outbounds": [{"tag": "proxy", "protocol": "vless"}],
+             "dns": {"servers": ["https://1.1.1.1/dns-query"]}}
+            """.trimIndent(),
+        )
+        val deduped = document(
+            provider = sameDohProfile,
+            settings = AppSettings(remoteDns = "https://1.1.1.1/dns-query"),
+        )
+        val dedupServers = deduped.root()["dns"]!!.jsonObject.listOf("servers")
+        assertEquals(listOf("https://1.1.1.1/dns-query"), dedupServers)
+
+        val namedUserDoh = document(
+            provider = sameDohProfile,
+            settings = AppSettings(remoteDns = "https://dns.user.example/dns-query"),
+        )
+        val namedServers = namedUserDoh.root()["dns"]!!.jsonObject.listOf("servers")
+        assertEquals(listOf("https://1.1.1.1/dns-query", "https://dns.user.example/dns-query"), namedServers)
+        val dnsRules = namedUserDoh.root().rules().filter { XrayConfigFactory.DNS_IN_TAG in it.listOf("inboundTag") }
+        assertEquals(listOf("full:dns.user.example"), dnsRules.first().listOf("domain"))
+        assertEquals(XrayConfigFactory.DIRECT_TAG, dnsRules.first()["outboundTag"]!!.jsonPrimitive.content)
+        assertEquals(XrayConfigFactory.BALANCER_TAG, dnsRules.last()["balancerTag"]!!.jsonPrimitive.content)
     }
 
     @Test

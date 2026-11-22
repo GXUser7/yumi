@@ -1084,3 +1084,55 @@ func TestMeasureOutbounds_CancelsOnTimeoutAndStop(t *testing.T) {
 		t.Fatalf("expected proxy-a=-1 after Stop(), got %q", raw)
 	}
 }
+
+func TestYumiSystemDialer_TcpDialSucceedsWithAndWithoutProtector(t *testing.T) {
+	_ = Stop()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	dest, err := v2net.ParseDestination("tcp:" + ln.Addr().String())
+	if err != nil {
+		t.Fatalf("ParseDestination failed: %v", err)
+	}
+
+	// 1. Without an active Protector (p == nil, isTCP == true still enters Control and sets SYN retries).
+	protectorMu.Lock()
+	protector = nil
+	protectorMu.Unlock()
+
+	conn1, err := (&yumiSystemDialer{}).Dial(context.Background(), v2net.AnyIP, dest, nil)
+	if err != nil {
+		t.Fatalf("TCP dial without protector failed: %v", err)
+	}
+	_ = conn1.Close()
+
+	// 2. With an active allowing Protector.
+	protectorMu.Lock()
+	protector = testProtector{}
+	protectorMu.Unlock()
+	t.Cleanup(func() {
+		protectorMu.Lock()
+		protector = nil
+		protectorMu.Unlock()
+	})
+
+	conn2, err := (&yumiSystemDialer{}).Dial(context.Background(), v2net.AnyIP, dest, nil)
+	if err != nil {
+		t.Fatalf("TCP dial with protector failed: %v", err)
+	}
+	_ = conn2.Close()
+}

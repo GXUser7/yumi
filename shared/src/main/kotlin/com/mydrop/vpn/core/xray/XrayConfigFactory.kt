@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.FragmentMode
 import com.mydrop.vpn.core.model.FragmentOptions
 import com.mydrop.vpn.core.model.FragmentScope
@@ -271,7 +272,7 @@ object XrayConfigFactory {
         return Document(
             json = json.encodeToString(
                 JsonObject.serializer(),
-                buildConfig(dialed, resolved, geoAvailable, carried),
+                buildConfig(dialed, resolved, geoAvailable, geoKnown, carried),
             ),
             pinnedTag = nodeTag(selected.dialed().first().id),
             // The servers, not their members: this is what the tunnel can be moved onto, and a
@@ -467,6 +468,7 @@ object XrayConfigFactory {
         nodes: List<ProxyNode>,
         settings: AppSettings,
         geoAvailable: Boolean,
+        geoKnown: (String) -> Boolean,
         provider: CarriedProvider?,
     ): JsonObject = buildJsonObject {
         putJsonObject("log") { put("loglevel", settings.logLevel.toXrayLevel()) }
@@ -581,7 +583,7 @@ object XrayConfigFactory {
             }
         }
 
-        put("routing", buildRouting(settings, geoAvailable, provider))
+        put("routing", buildRouting(settings, geoAvailable, geoKnown, provider))
     }
 
     // ------------------------------------------------------------------ Inbounds
@@ -1408,9 +1410,10 @@ object XrayConfigFactory {
         val providers = provider?.dnsServers.orEmpty()
 
         if (providers.isNotEmpty()) {
-            // The provider's resolvers instead of the user's, not beside them: Xray asks its
-            // servers in order and falls through on failure, so a list of both would put whichever
-            // came first in charge and leave the other answering only when it was down.
+            // Race the provider's resolvers in parallel against the user's remote DoH so a silent
+            // resolver in a provider template does not stall DNS lookups for full timeouts.
+            val includeUserRemote = remote != null &&
+                providers.none { resolverAddress(it).equals(remote, ignoreCase = true) }
             putJsonArray("servers") {
                 providers.forEach { element ->
                     if (element is JsonPrimitive && element.isString) {
@@ -1419,7 +1422,11 @@ object XrayConfigFactory {
                         add(element)
                     }
                 }
+                if (includeUserRemote) {
+                    addDnsServer(remote)
+                }
             }
+            put("enableParallelQuery", true)
             // Narrowed, never widened. The tunnel may have switched IPv6 off for servers that were
             // not seen to carry it — see `Ipv6Policy` — and a provider's `UseIP` written for its own
             // client cannot know that. Handing applications AAAA answers a server cannot reach is
@@ -1625,6 +1632,7 @@ object XrayConfigFactory {
     private fun buildRouting(
         settings: AppSettings,
         geoAvailable: Boolean,
+        geoKnown: (String) -> Boolean,
         provider: CarriedProvider?,
     ): JsonObject =
         buildJsonObject {
@@ -1642,7 +1650,7 @@ object XrayConfigFactory {
 
             putJsonArray("rules") {
                 val providerDns = provider?.dnsServers.orEmpty()
-                if (providerDns.isNotEmpty()) providerDnsRules(providerDns) else dnsRules(settings)
+                if (providerDns.isNotEmpty()) providerDnsRules(providerDns, settings) else dnsRules(settings)
 
                 // Unconditional, and that is the difference between a setting and a trapdoor.
                 //
@@ -1748,6 +1756,8 @@ object XrayConfigFactory {
                     }
                 }
 
+                addCustomRules(settings.customRules, geoAvailable, geoKnown)
+
                 // The provider's rules, ahead of everything the user chose below and behind
                 // everything above, and both halves of that are the design rather than an accident.
                 //
@@ -1813,6 +1823,38 @@ object XrayConfigFactory {
                 }
             }
         }
+
+    private fun JsonArrayBuilder.addCustomRules(
+        rules: CustomRules,
+        geoAvailable: Boolean,
+        geoKnown: (String) -> Boolean,
+    ) {
+        if (rules.isEmpty) return
+        val buckets = listOf(
+            rules.block to ("outboundTag" to BLOCK_TAG),
+            rules.proxy to ("balancerTag" to BALANCER_TAG),
+            rules.direct to ("outboundTag" to DIRECT_TAG),
+        )
+        for ((entries, target) in buckets) {
+            val kept = entries.filter { keepsEntry(it, geoAvailable, geoKnown) }
+            if (kept.isEmpty()) continue
+            val (ips, domains) = kept.partition(CustomRules::isAddress)
+            if (domains.isNotEmpty()) {
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("domain") { domains.forEach { add(it) } }
+                    put(target.first, target.second)
+                }
+            }
+            if (ips.isNotEmpty()) {
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("ip") { ips.forEach { add(it) } }
+                    put(target.first, target.second)
+                }
+            }
+        }
+    }
 
     /**
      * Where the core's own DNS traffic goes, split three ways rather than sent one way.
@@ -1890,18 +1932,24 @@ object XrayConfigFactory {
      * The one exception is the same as there: a resolver named by domain has its own name looked
      * up directly, because there is no tunnel to resolve it through yet.
      */
-    private fun JsonArrayBuilder.providerDnsRules(servers: List<JsonElement>) {
-        servers
-            .mapNotNull { server -> resolverAddress(server)?.let(::hostOf)?.takeUnless(::isNumericAddress) }
-            .distinct()
-            .forEach { host ->
-                addJsonObject {
-                    put("type", "field")
-                    putJsonArray("inboundTag") { add(DNS_IN_TAG) }
-                    putJsonArray("domain") { add("full:$host") }
-                    put("outboundTag", DIRECT_TAG)
-                }
+    private fun JsonArrayBuilder.providerDnsRules(servers: List<JsonElement>, settings: AppSettings) {
+        val bootstrapHosts = buildList {
+            servers
+                .mapNotNull { server -> resolverAddress(server)?.let(::hostOf)?.takeUnless(::isNumericAddress) }
+                .forEach(::add)
+            xrayResolver(settings.remoteDns)
+                ?.let(::hostOf)
+                ?.takeUnless(::isNumericAddress)
+                ?.let(::add)
+        }.distinct()
+        bootstrapHosts.forEach { host ->
+            addJsonObject {
+                put("type", "field")
+                putJsonArray("inboundTag") { add(DNS_IN_TAG) }
+                putJsonArray("domain") { add("full:$host") }
+                put("outboundTag", DIRECT_TAG)
             }
+        }
         addJsonObject {
             put("type", "field")
             putJsonArray("inboundTag") { add(DNS_IN_TAG) }

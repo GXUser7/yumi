@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: shared/libs/libyumi.aar
-          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
+          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/**/*.go') }}-ndk${{ env.NDK_VERSION }}
 
       # Unconditional: the configuration check below builds the Xray CLI whether or not the core
       # came out of the cache, and it needs a toolchain to do that with.
@@ -103,7 +103,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: shared/libs/libyumi.aar
-          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/yumi.go') }}-ndk${{ env.NDK_VERSION }}
+          key: libyumi-${{ hashFiles('core-xray/go.sum', 'core-xray/**/*.go') }}-ndk${{ env.NDK_VERSION }}
 
       - uses: actions/setup-java@v4
         with:

@@ -1,6 +1,7 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.FragmentMode
 import com.mydrop.vpn.core.model.FragmentOptions
 import com.mydrop.vpn.core.model.FragmentScope
@@ -1414,5 +1415,88 @@ class XrayConfigFactoryTest {
         val dlReality = stream["xhttpSettings"]!!.jsonObject["extra"]!!
             .jsonObject["downloadSettings"]!!.jsonObject["realitySettings"]!!.jsonObject
         assertEquals("/bad", dlReality["spiderX"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `custom rules respect priority Block then Proxy then Direct, split domain and ip, filter unknown geo, and work in Direct mode`() {
+        val rules = CustomRules(
+            proxy = listOf("domain:youtube.com", "203.0.113.0/24", "geosite:unknown-cat"),
+            direct = listOf("domain:corp.local", "198.51.100.1", "geoip:ru"),
+            block = listOf("domain:tracker.example", "192.0.2.5"),
+        )
+        val built = XrayConfigFactory.build(
+            nodes = listOf(node()),
+            selected = node(),
+            settings = AppSettings(routingMode = RoutingMode.Rules, customRules = rules),
+            geoAvailable = true,
+            geoKnown = { ref -> ref != "geosite:unknown-cat" },
+        )
+        val routingRules = Json.parseToJsonElement(built.json).jsonObject["routing"]!!
+            .jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+
+        val loopbackBlockIdx = routingRules.indexOfFirst { r ->
+            r["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "127.0.0.0/8" } == true
+        }
+        val lanBypassIdx = routingRules.indexOfFirst { r ->
+            r["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "10.0.0.0/8" } == true
+        }
+        val blockDomainIdx = routingRules.indexOfFirst { r ->
+            r["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:tracker.example" } == true
+        }
+        val blockIpIdx = routingRules.indexOfFirst { r ->
+            r["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "192.0.2.5" } == true
+        }
+        val proxyDomainIdx = routingRules.indexOfFirst { r ->
+            r["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:youtube.com" } == true
+        }
+        val proxyIpIdx = routingRules.indexOfFirst { r ->
+            r["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "203.0.113.0/24" } == true
+        }
+        val directDomainIdx = routingRules.indexOfFirst { r ->
+            r["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:corp.local" } == true
+        }
+        val directIpIdx = routingRules.indexOfFirst { r ->
+            r["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "198.51.100.1" } == true
+        }
+        val ruDefaultIdx = routingRules.indexOfFirst { r ->
+            r["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "geosite:category-ru" } == true
+        }
+
+        assertTrue(loopbackBlockIdx in 0 until lanBypassIdx)
+        assertTrue(lanBypassIdx < blockDomainIdx)
+        assertTrue(blockDomainIdx < blockIpIdx)
+        assertTrue(blockIpIdx < proxyDomainIdx)
+        assertTrue(proxyDomainIdx < proxyIpIdx)
+        assertTrue(proxyIpIdx < directDomainIdx)
+        assertTrue(directDomainIdx < directIpIdx)
+        assertTrue(directIpIdx < ruDefaultIdx)
+
+        // Separate rules for domain and ip (never ANDed together in one rule object).
+        assertNull(routingRules[blockDomainIdx]["ip"])
+        assertNull(routingRules[blockIpIdx]["domain"])
+        assertEquals(XrayConfigFactory.BLOCK_TAG, routingRules[blockDomainIdx]["outboundTag"]!!.jsonPrimitive.content)
+        assertEquals(XrayConfigFactory.BALANCER_TAG, routingRules[proxyDomainIdx]["balancerTag"]!!.jsonPrimitive.content)
+        assertEquals(XrayConfigFactory.DIRECT_TAG, routingRules[directIpIdx]["outboundTag"]!!.jsonPrimitive.content)
+        assertFalse(built.json.contains("geosite:unknown-cat"))
+
+        // When geoAvailable is false, geoip:/geosite: entries are stripped while plain domains/IPs remain.
+        val noGeo = XrayConfigFactory.build(
+            nodes = listOf(node()),
+            selected = node(),
+            settings = AppSettings(routingMode = RoutingMode.Direct, customRules = rules),
+            geoAvailable = false,
+        )
+        assertFalse(noGeo.json.contains("geoip:ru"))
+        assertTrue(noGeo.json.contains("domain:youtube.com"))
+        val noGeoRules = Json.parseToJsonElement(noGeo.json).jsonObject["routing"]!!
+            .jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        val directCatchAll = noGeoRules.indexOfLast {
+            it["network"]?.jsonPrimitive?.content == "tcp,udp" &&
+                it["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.DIRECT_TAG
+        }
+        val directModeProxyIdx = noGeoRules.indexOfFirst { r ->
+            r["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:youtube.com" } == true
+        }
+        assertTrue(directModeProxyIdx in 0 until directCatchAll)
     }
 }

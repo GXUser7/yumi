@@ -65,6 +65,10 @@
         <item quantity="one">%1$d line</item>
         <item quantity="other">%1$d lines</item>
     </plurals>
+    <plurals name="rules">
+        <item quantity="one">%1$d rule</item>
+        <item quantity="other">%1$d rules</item>
+    </plurals>
 
     <!-- ========================================================= Navigation -->
 
@@ -140,6 +144,9 @@
     <string name="connect_tunnel_primary">Tunnel</string>
     <string name="connect_tunnel_secondary">is off</string>
     <string name="connect_pull_to_return">Pull down to go back to the flow</string>
+    <string name="connect_swipe_modes_traffic">Modes &amp; traffic</string>
+    <string name="connect_open_stats">Open modes and traffic</string>
+    <string name="connect_close_stats">Return to flow</string>
     <string name="connect_connecting_with">%1$s with %2$s</string>
     <string name="connect_the_server">the server</string>
     <string name="connect_tunnel_active">Tunnel active</string>
@@ -331,6 +338,9 @@
     <string name="settings_split_tunnel_off">Every app through the VPN</string>
     <string name="settings_split_tunnel_allow">Selected only: %1$d</string>
     <string name="settings_split_tunnel_block">Apps excluded: %1$d</string>
+    <string name="settings_custom_rules">Custom rules</string>
+    <string name="settings_custom_rules_off">No custom exceptions — using routing mode</string>
+    <string name="settings_custom_rules_count">%1$s configured</string>
 
     <string name="settings_tunnel">Tunnel</string>
     <string name="settings_ipv6_subtitle">Apps get IPv4 addresses only</string>
@@ -395,6 +405,11 @@
     <string name="settings_dns_provider_note">Provider routing is on: on servers whose provider sent its own DNS, that DNS is used. The settings below apply to every other server</string>
     <string name="settings_dns_fallback">Fallback resolver</string>
     <string name="settings_dns_fallback_subtitle">If a resolver you chose stops answering, switch to 1.1.1.1 until the next reconnection. The built-in default is left alone</string>
+    <string name="settings_resolve_server_doh">Resolve server address via DoH</string>
+    <string name="settings_resolve_server_doh_subtitle">Looks up the server domain over HTTPS so operator DNS filtering cannot point the tunnel elsewhere</string>
+    <string name="settings_resolve_doh_url">DoH server for lookup</string>
+    <string name="settings_resolve_doh_url_hint">https:// endpoint in RFC 8484 wire format</string>
+    <string name="settings_resolve_doh_url_error">Enter a valid external https:// DoH URL</string>
     <string name="settings_dns_from_settings">From settings</string>
 
     <string name="settings_latency">Latency probe</string>
@@ -851,4 +866,35 @@ Send it here: %2$s</string>
     <string name="zones_legend_approach">Approach</string>
     <string name="zones_legend_dead">Blackout</string>
     <string name="zones_legend_healthy">Healthy</string>
+
+    <!-- ================================================ Custom rules & connections -->
+
+    <string name="custom_rules_title">Custom rules</string>
+    <string name="custom_rules_subtitle">Priority above the routing mode and provider rules</string>
+    <string name="custom_rules_tab_rules">Rules</string>
+    <string name="custom_rules_tab_connections">Connections</string>
+    <string name="custom_rules_action_proxy">Via VPN</string>
+    <string name="custom_rules_action_direct">Direct</string>
+    <string name="custom_rules_action_block">Block</string>
+    <string name="custom_rules_input_label">Site, URL, IP or subnet</string>
+    <string name="custom_rules_input_hint">youtube.com, geosite:category-ru, 1.2.3.0/24, geoip:ru</string>
+    <string name="custom_rules_input_error">Invalid format — enter a domain, URL, IP, CIDR, or geosite:/geoip:</string>
+    <string name="custom_rules_priority_note">Order: Block → Via VPN → Direct</string>
+    <string name="custom_rules_empty">No entries in this list</string>
+    <string name="custom_rules_prefix_domain">domain</string>
+    <string name="custom_rules_connections_filter_all">All</string>
+    <string name="custom_rules_connections_filter_proxy">VPN</string>
+    <string name="custom_rules_connections_filter_direct">Direct</string>
+    <string name="custom_rules_connections_filter_block">Block</string>
+    <string name="custom_rules_connections_empty">No connections recorded yet — connect the tunnel and open any site</string>
+    <string name="custom_rules_route_direct">Direct</string>
+    <string name="custom_rules_route_block">Blocked</string>
+    <string name="custom_rules_route_rejected">Rejected</string>
+    <string name="custom_rules_menu_always_proxy">Always via VPN</string>
+    <string name="custom_rules_menu_always_direct">Always direct</string>
+    <string name="custom_rules_menu_block">Block</string>
+    <string name="custom_rules_menu_copy">Copy address</string>
+    <string name="custom_rules_copied">Address copied</string>
+    <string name="message_custom_rule_added">Added to “%1$s”: %2$s</string>
+    <string name="message_custom_rule_invalid">Could not recognize site or address</string>
 </resources>

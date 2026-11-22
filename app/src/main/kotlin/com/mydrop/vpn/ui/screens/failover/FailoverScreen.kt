@@ -123,22 +123,23 @@ fun NodePickerScreen(
             )
         }
 
-        if (chosen.isNotEmpty()) {
-            item(key = "reset") {
-                TextButton(
-                    onClick = { onUpdate(withChosen(emptySet())) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                ) {
-                    Text(
-                        stringResource(
-                            if (mobile) {
-                                R.string.mobile_nodes_clear
-                            } else {
-                                R.string.failover_clear_selection
-                            },
-                        ),
-                    )
-                }
+        item(key = "reset") {
+            TextButton(
+                onClick = { onUpdate(withChosen(emptySet())) },
+                enabled = chosen.isNotEmpty(),
+                modifier = Modifier.padding(horizontal = 12.dp),
+            ) {
+                Text(
+                    text = stringResource(
+                        if (mobile) {
+                            R.string.mobile_nodes_clear
+                        } else {
+                            R.string.failover_clear_selection
+                        },
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
 

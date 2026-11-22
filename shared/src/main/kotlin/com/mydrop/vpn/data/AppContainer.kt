@@ -106,6 +106,7 @@ class AppContainer(context: Context) {
     })
 
     val logs = LogRepository(strings, diagnostics)
+    val connectionLog = ConnectionLog()
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
     val latencyTester = LatencyTester(timeoutProvider = { settings.value.probeTimeoutMillis })
     val tunnelHealth = TunnelHealthCheck(

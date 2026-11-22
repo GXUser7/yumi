@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.FragmentMode
 import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.SplitTunnelMode
@@ -15,6 +16,9 @@ class TunnelSettingsApplierTest {
     private fun baked(
         autoFailover: Boolean = false,
         fragmentMode: FragmentMode = FragmentMode.Off,
+        customRules: CustomRules = CustomRules(),
+        resolveServerAddress: Boolean = false,
+        resolveDohUrl: String = AppSettings().resolveDohUrl,
     ): TunnelSettingsApplier.Baked {
         val defaults = AppSettings()
         return TunnelSettingsApplier.Baked(
@@ -27,7 +31,10 @@ class TunnelSettingsApplierTest {
             remoteDns = defaults.remoteDns,
             directDns = defaults.directDns,
             hijackDns = defaults.hijackDns,
+            resolveServerAddress = resolveServerAddress,
+            resolveDohUrl = resolveDohUrl,
             providerRouting = defaults.providerRouting,
+            customRules = customRules,
             tlsFingerprint = TlsFingerprintOverride.Auto,
             fragmentMode = fragmentMode,
             fragmentScope = FragmentScope.TlsAndReality,
@@ -63,5 +70,28 @@ class TunnelSettingsApplierTest {
     fun `identical baked snapshots never reload`() {
         val snap = baked(autoFailover = false)
         assertFalse(TunnelSettingsApplier.shouldReload(snap, snap))
+    }
+
+    @Test
+    fun `changing customRules or DoH server resolution settings reloads tunnel`() {
+        val base = baked()
+        assertTrue(
+            TunnelSettingsApplier.shouldReload(
+                base,
+                baked(customRules = CustomRules(proxy = listOf("domain:example.com"))),
+            ),
+        )
+        assertTrue(
+            TunnelSettingsApplier.shouldReload(
+                base,
+                baked(resolveServerAddress = true),
+            ),
+        )
+        assertTrue(
+            TunnelSettingsApplier.shouldReload(
+                base,
+                baked(resolveDohUrl = "https://8.8.8.8/dns-query"),
+            ),
+        )
     }
 }

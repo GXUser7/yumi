@@ -14,6 +14,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Science
@@ -65,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.shared.R
@@ -243,12 +246,14 @@ fun ConnectScreen(
                         downloadSeries = downloadHistory.values,
                         uploadSeries = uploadHistory.values,
                         onRoutingModeChange = onRoutingModeChange,
+                        onCollapseStats = { statsExpanded = false },
                     )
                 } else {
                     FlowFigure(
                         state = state,
                         latency = state.selectedNode?.let { state.latencies[it.id] },
                         onPickServer = onPickServer,
+                        onOpenStats = { statsExpanded = true },
                     )
                 }
             }
@@ -399,6 +404,7 @@ private fun FlowFigure(
     state: MainUiState,
     latency: LatencyResult?,
     onPickServer: () -> Unit,
+    onOpenStats: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val semantic = LocalSemanticColors.current
@@ -478,31 +484,80 @@ private fun FlowFigure(
             modifier = Modifier.align(Alignment.TopStart).padding(16.dp),
         )
 
-        if (running) {
-            Column(
-                modifier = Modifier.align(Alignment.BottomStart).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
+        StatsHintPill(
+            routingMode = state.settings.routingMode,
+            running = running,
+            totalBytes = state.traffic.downloadBytes + state.traffic.uploadBytes,
+            onClick = onOpenStats,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        )
+    }
+}
+
+/**
+ * Compact tonal pill hinting that the figure expands into routing modes and session traffic,
+ * while surfacing the active routing mode and session byte counter right on the main screen.
+ */
+@Composable
+private fun StatsHintPill(
+    routingMode: RoutingMode,
+    running: Boolean,
+    totalBytes: Long,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier,
+        shape = CircleShape,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowUp,
+                contentDescription = stringResource(R.string.connect_open_stats),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = stringResource(routingMode.labelRes),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Text(
+                text = "·",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            )
+            if (running) {
                 Text(
-                    text = monoAnnotated("↓ ${formatRate(state.traffic.downloadBytesPerSecond)}"),
-                    style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
-                    color = semantic.download,
+                    text = formatBytes(totalBytes).toString(),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+            } else {
                 Text(
-                    text = monoAnnotated("↑ ${formatRate(state.traffic.uploadBytesPerSecond)}"),
-                    style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
-                    color = semantic.upload,
+                    text = stringResource(R.string.connect_swipe_modes_traffic),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
-        } else {
-            Text(
-                text = stringResource(
-                    if (warming) R.string.connect_stream_warming else R.string.connect_stream_empty,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.align(Alignment.BottomStart).padding(22.dp),
-            )
         }
     }
 }
@@ -525,7 +580,7 @@ private fun LatencyBadge(
         modifier = modifier.size(56.dp),
         shape = RoundedCornerShape(19.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
     ) {
         Column(
@@ -560,6 +615,7 @@ private fun StatsPanel(
     downloadSeries: List<Long>,
     uploadSeries: List<Long>,
     onRoutingModeChange: (RoutingMode) -> Unit,
+    onCollapseStats: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val semantic = LocalSemanticColors.current
@@ -576,10 +632,21 @@ private fun StatsPanel(
         Box(
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
-                .size(width = 34.dp, height = 4.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)),
-        )
+                .clickable(
+                    onClickLabel = stringResource(R.string.connect_close_stats),
+                    onClick = onCollapseStats,
+                )
+                .padding(horizontal = 24.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 34.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)),
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RateTile(

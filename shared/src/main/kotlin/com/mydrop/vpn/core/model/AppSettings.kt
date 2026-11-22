@@ -170,6 +170,7 @@ data class AppSettings(
      * in [RoutingMode.Direct], which means no proxy at all.
      */
     val providerRouting: Boolean = false,
+    val customRules: CustomRules = CustomRules(),
     val bypassLan: Boolean = true,
     val blockAds: Boolean = false,
     /**
@@ -217,6 +218,8 @@ data class AppSettings(
      * prefer the outage.
      */
     val dnsFallback: Boolean = true,
+    val resolveServerAddress: Boolean = false,
+    val resolveDohUrl: String = "https://1.1.1.1/dns-query",
 
     /**
      * Identifier some subscription panels require before they hand over the server list, sent as

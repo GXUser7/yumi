@@ -63,6 +63,7 @@ import com.mydrop.vpn.ui.screens.failover.NodePickerKind
 import com.mydrop.vpn.ui.screens.failover.NodePickerScreen
 import com.mydrop.vpn.ui.screens.logs.LogsScreen
 import com.mydrop.vpn.ui.screens.remote.RemoteScreen
+import com.mydrop.vpn.ui.screens.rules.CustomRulesScreen
 import com.mydrop.vpn.ui.screens.scan.ScanScreen
 import com.mydrop.vpn.ui.screens.servers.PingAllButtonContent
 import com.mydrop.vpn.ui.screens.servers.ServersScreen
@@ -80,6 +81,7 @@ object Routes {
     const val LOGS = "logs"
     const val SPEED = "speed"
     const val SPLIT_TUNNEL = "split_tunnel"
+    const val CUSTOM_RULES = "custom_rules"
     const val SCAN = "scan"
     const val FAILOVER = "failover"
     const val MOBILE_NODES = "mobile-nodes"
@@ -103,6 +105,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val connections by viewModel.connections.collectAsStateWithLifecycle()
     val speedTest by viewModel.speedTest.collectAsStateWithLifecycle()
     val updates by viewModel.updates.collectAsStateWithLifecycle()
     val geoAssets by viewModel.geoAssets.collectAsStateWithLifecycle()
@@ -338,6 +341,7 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onUpdate = viewModel::updateSettings,
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenSplitTunnel = { navController.navigate(Routes.SPLIT_TUNNEL) },
+                    onOpenCustomRules = { navController.navigate(Routes.CUSTOM_RULES) },
                     onOpenFailover = { navController.navigate(Routes.FAILOVER) },
                     onOpenMobileNodes = { navController.navigate(Routes.MOBILE_NODES) },
                     geoZonesCount = geoClusters.size,
@@ -411,6 +415,19 @@ fun MyDropApp(viewModel: MainViewModel) {
                     settings = state.settings,
                     appsRevision = appsRevision,
                     onUpdate = viewModel::updateSettings,
+                    onBack = { navController.popBackStack() },
+                    contentPadding = contentPadding,
+                )
+            }
+
+            composable(Routes.CUSTOM_RULES) {
+                CustomRulesScreen(
+                    settings = state.settings,
+                    connections = connections,
+                    nodes = state.nodes,
+                    onAddRule = viewModel::addCustomRule,
+                    onRemoveRule = viewModel::removeCustomRule,
+                    onClearConnections = viewModel::clearConnections,
                     onBack = { navController.popBackStack() },
                     contentPadding = contentPadding,
                 )

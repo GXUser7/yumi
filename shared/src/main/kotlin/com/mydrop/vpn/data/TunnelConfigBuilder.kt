@@ -56,6 +56,10 @@ class TunnelConfigBuilder(
     private val providerProfile: (ProxyNode) -> ProviderProfile? = { null },
     /** Whether the databases on disk hold a `geosite:`/`geoip:` category; see `GeoAssetStore.knows`. */
     private val geoKnown: (String) -> Boolean = { false },
+    /** Optional server-address DoH resolver hook (overridden in unit tests). */
+    private val resolveNode: (ProxyNode, String) -> ProxyNode = { node, doh ->
+        ServerAddressResolver.resolveNode(node, doh)
+    },
 ) {
 
     /** What the running document decided about IPv6, and the members it decided it for. */
@@ -217,11 +221,21 @@ class TunnelConfigBuilder(
         // Read once, so the record below describes the document this call built even if the
         // watchdog changes the flag while the build is running.
         val dnsFallback = _dnsFallback.value
+        val selectedForBuild = if (effective.resolveServerAddress) {
+            resolveNode(node, effective.resolveDohUrl)
+        } else {
+            node
+        }
+        val groupForBuild = if (effective.resolveServerAddress) {
+            group.map { resolveNode(it, effective.resolveDohUrl) }
+        } else {
+            group
+        }
 
         return runCatching {
             XrayConfigFactory.build(
-                nodes = group,
-                selected = node,
+                nodes = groupForBuild,
+                selected = selectedForBuild,
                 settings = effective,
                 dnsOverride = selectedDns(),
                 geoAvailable = geoAvailable,

@@ -12,6 +12,7 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.CountryFilterMode
+import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.DnsProfile
 import com.mydrop.vpn.core.model.GeoSample
 import com.mydrop.vpn.core.model.GeoZoneCluster
@@ -34,6 +35,7 @@ import com.mydrop.vpn.core.parse.DeepLinkPayload
 import com.mydrop.vpn.core.parse.DnsUriParser
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
+import com.mydrop.vpn.data.ConnectionLog
 import com.mydrop.vpn.data.FilteredPingCoordinator
 import com.mydrop.vpn.data.GeoAssetStore
 import com.mydrop.vpn.data.Ipv6Guard
@@ -209,6 +211,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val strings = container.strings
 
     val logs: StateFlow<List<LogEntry>> = container.logs.entries
+    val connections: StateFlow<List<ConnectionLog.Entry>> = container.connectionLog.entries
 
     val updates: StateFlow<com.mydrop.vpn.core.model.UpdateState> = container.updates.state
 
@@ -1148,6 +1151,28 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun clearLogs() = container.logs.clear()
+
+    fun clearConnections() = container.connectionLog.clear()
+
+    fun addCustomRule(action: CustomRules.Action, raw: String): Boolean {
+        val entry = CustomRules.normalize(raw)
+        if (entry == null) {
+            emit(R.string.message_custom_rule_invalid)
+            return false
+        }
+        updateSettings { it.copy(customRules = it.customRules.adding(action, entry)) }
+        val bucketRes = when (action) {
+            CustomRules.Action.Proxy -> R.string.custom_rules_action_proxy
+            CustomRules.Action.Direct -> R.string.custom_rules_action_direct
+            CustomRules.Action.Block -> R.string.custom_rules_action_block
+        }
+        emit(R.string.message_custom_rule_added, strings.get(bucketRes), entry.removePrefix("domain:"))
+        return true
+    }
+
+    fun removeCustomRule(action: CustomRules.Action, entry: String) {
+        updateSettings { it.copy(customRules = it.customRules.removing(action, entry)) }
+    }
 
     // ----------------------------------------------------------- Helpers
 

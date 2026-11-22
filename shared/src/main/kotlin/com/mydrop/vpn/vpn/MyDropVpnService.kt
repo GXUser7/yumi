@@ -462,6 +462,7 @@ class MyDropVpnService : VpnService() {
     private var lastReportedInterfaceName: String? = null
 
     private val logs by lazy { (application as MyDropApplication).container.logs }
+    private val connectionLog by lazy { (application as MyDropApplication).container.connectionLog }
 
     /** Where the lines of cores that should not exist go. Empty on a healthy phone. */
     private val coreLeakLog by lazy { (application as MyDropApplication).container.coreLeakLog }
@@ -1628,6 +1629,7 @@ class MyDropVpnService : VpnService() {
      * what reaches the journal.
      */
     private fun writeCoreLine(level: LogEntry.Level, message: String) {
+        connectionLog.offer(message)
         noteCoreGeneration(message, level)
         val verdict = coreChatter.admit(SystemClock.elapsedRealtime())
         if (verdict.suppressed > 0) {
