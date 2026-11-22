@@ -736,4 +736,12 @@ class GeoZonesTest {
         }
         assertNotNull("file ${file.absolutePath} never persisted $snippet", null)
     }
+
+    @Test
+    fun `geoZonesActive requires both autoFailover and geoZonesEnabled`() {
+        assertFalse(AppSettings(autoFailover = false, geoZonesEnabled = false).geoZonesActive)
+        assertFalse(AppSettings(autoFailover = false, geoZonesEnabled = true).geoZonesActive)
+        assertFalse(AppSettings(autoFailover = true, geoZonesEnabled = false).geoZonesActive)
+        assertTrue(AppSettings(autoFailover = true, geoZonesEnabled = true).geoZonesActive)
+    }
 }

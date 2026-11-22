@@ -139,6 +139,7 @@ class GeoLocationMonitor(
     private var lastTowerOneShotMillis: Long = 0L
     private var activeOneShotCancel: CancellationSignal? = null
     private var telephonyCallbackApi31: Any? = null
+    private var cellListenerBlocked: Boolean = false
     @Suppress("DEPRECATION")
     private var phoneStateListenerLegacy: PhoneStateListener? = null
 
@@ -166,7 +167,7 @@ class GeoLocationMonitor(
     fun start() {
         scope.launch {
             settings.settings
-                .map { it.geoZonesEnabled }
+                .map { it.geoZonesActive }
                 .distinctUntilChanged()
                 .collect { MyDropVpnService.refreshForegroundType() }
         }
@@ -189,7 +190,7 @@ class GeoLocationMonitor(
             }.distinctUntilChanged()
 
             val configFlags = combine(
-                settings.settings.map { it.geoZonesEnabled to it.geoPreemptiveSwitch }.distinctUntilChanged(),
+                settings.settings.map { it.geoZonesActive to it.geoPreemptiveSwitch }.distinctUntilChanged(),
                 _hasPermission,
                 mapActive,
                 burstActive,
@@ -240,7 +241,7 @@ class GeoLocationMonitor(
                 _currentSample,
                 _lastValidLatLon,
                 geoZones.clusters,
-                settings.settings.map { it.geoZonesEnabled }.distinctUntilChanged(),
+                settings.settings.map { it.geoZonesActive }.distinctUntilChanged(),
             ) { sample, lastValid, clusters, enabled ->
                 if (!enabled) {
                     ZoneProximity.Outside
@@ -271,13 +272,14 @@ class GeoLocationMonitor(
         _hasPermission.value = now
         _hasBackgroundPermission.value = nowBg
         if (prev != now || prevBg != nowBg) {
+            cellListenerBlocked = false
             logs.trace(
                 TAG,
                 "permission changed: perm=$prev->$now fine=${checkFineLocationPermission()} bg=$prevBg->$nowBg",
             )
         }
         MyDropVpnService.refreshForegroundType()
-        if (now && settings.value.geoZonesEnabled && _lastValidLatLon.value == null) {
+        if (now && settings.value.geoZonesActive && _lastValidLatLon.value == null) {
             scope.launch(Dispatchers.Main.immediate) {
                 seedLastKnownLocation(allowStaleForMap = mapActive.value)
             }
@@ -296,7 +298,7 @@ class GeoLocationMonitor(
         durationMillis: Long = DEFAULT_BURST_MILLIS,
         force: Boolean = false,
     ) {
-        if (!_hasPermission.value || !settings.value.geoZonesEnabled) return
+        if (!_hasPermission.value || !settings.value.geoZonesActive) return
         val now = SystemClock.elapsedRealtime()
         synchronized(burstLock) {
             if (!force && lastBurstStartedMillis != 0L && (now - lastBurstStartedMillis) < BURST_COOLDOWN_MS) {
@@ -322,7 +324,7 @@ class GeoLocationMonitor(
     }
 
     suspend fun resolveFreshSample(timeoutMillis: Long = DEFAULT_ONESHOT_TIMEOUT_MILLIS): GeoSample? {
-        if (!settings.value.geoZonesEnabled || !_hasPermission.value) return null
+        if (!settings.value.geoZonesActive || !_hasPermission.value) return null
         freshSampleOrNull()?.let { return it }
 
         val manager = locationManager
@@ -360,7 +362,7 @@ class GeoLocationMonitor(
                 "tier=$prev->$tier force=$force perm=${_hasPermission.value} " +
                     "fine=${checkFineLocationPermission()} bg=${_hasBackgroundPermission.value} " +
                     "fgsLoc=${MyDropVpnService.locationFgsActive.value} " +
-                    "enabled=${settings.value.geoZonesEnabled} vpn=${tunnel.state.value::class.simpleName} " +
+                    "enabled=${settings.value.geoZonesActive} vpn=${tunnel.state.value::class.simpleName} " +
                     "transport=${tunnel.transport.value} map=${mapActive.value} " +
                     "burst=${burstActive.value} moved=${recentlyMoved.value}",
             )
@@ -453,21 +455,31 @@ class GeoLocationMonitor(
 
     @SuppressLint("MissingPermission")
     private fun registerCellListener() {
-        if (!checkFineLocationPermission()) return
+        if (cellListenerBlocked || !checkFineLocationPermission()) return
         val manager = telephonyManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (telephonyCallbackApi31 != null) return
             runCatching {
                 registerTelephonyCallbackApi31(manager)
             }.onFailure { error ->
-                logs.trace(TAG, "registerTelephonyCallback failed: ${error.message}")
+                if (error is SecurityException) {
+                    cellListenerBlocked = true
+                    logs.trace(TAG, "registerTelephonyCallback unavailable (missing permission), using cell polling: ${error.message}")
+                } else {
+                    logs.trace(TAG, "registerTelephonyCallback failed: ${error.message}")
+                }
             }
         } else {
             if (phoneStateListenerLegacy != null) return
             runCatching {
                 registerLegacyPhoneStateListener(manager)
             }.onFailure { error ->
-                logs.trace(TAG, "PhoneStateListener.listen failed: ${error.message}")
+                if (error is SecurityException) {
+                    cellListenerBlocked = true
+                    logs.trace(TAG, "PhoneStateListener unavailable (missing permission), using cell polling: ${error.message}")
+                } else {
+                    logs.trace(TAG, "PhoneStateListener.listen failed: ${error.message}")
+                }
             }
         }
     }
@@ -514,7 +526,7 @@ class GeoLocationMonitor(
     }
 
     private fun handleCellInfoList(infos: List<CellInfo>) {
-        if (registeredTier == GeoTrackingTier.Off || !settings.value.geoZonesEnabled || !_hasPermission.value) return
+        if (registeredTier == GeoTrackingTier.Off || !settings.value.geoZonesActive || !_hasPermission.value) return
         val observedTowers = extractObservedTowers(infos)
         val towerId = observedTowers.firstOrNull { it.registered }?.towerId ?: return
         if (towerId == lastSeenTowerId) return
@@ -551,7 +563,7 @@ class GeoLocationMonitor(
     }
 
     private fun requestOneShotLocation(preferGps: Boolean, reason: String) {
-        if (!_hasPermission.value || !settings.value.geoZonesEnabled) return
+        if (!_hasPermission.value || !settings.value.geoZonesActive) return
         scope.launch(Dispatchers.Main.immediate) {
             val manager = locationManager ?: return@launch
             val provider = pickOneShotProvider(manager, preferGps) ?: return@launch
@@ -991,7 +1003,7 @@ class GeoLocationMonitor(
 
     private fun onTransportChanged(transport: NetworkTransport) {
         if (transport == NetworkTransport.Wifi) {
-            if (!settings.value.geoZonesEnabled) return
+            if (!settings.value.geoZonesActive) return
             wifiSessionStartedElapsedMillis = SystemClock.elapsedRealtime()
             val identity = readCurrentWifiIdentity(fallbackCoord = null)
             if (identity != null) {
@@ -1018,7 +1030,7 @@ class GeoLocationMonitor(
                 }
             }
             if ((!currentWifiSessionRecorded || _lastValidLatLon.value == null) &&
-                settings.value.geoZonesEnabled &&
+                settings.value.geoZonesActive &&
                 checkAnyLocationPermission()
             ) {
                 scope.launch(Dispatchers.Main.immediate) {

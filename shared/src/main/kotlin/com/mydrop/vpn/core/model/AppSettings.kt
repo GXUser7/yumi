@@ -388,12 +388,19 @@ data class AppSettings(
      */
     val batteryPromptShown: Boolean = false,
 ) {
+    /**
+     * Geo-zones belong under [autoFailover]: turning failover off silences preemptive switching,
+     * background location tracking, and location FGS attachment without erasing [geoZonesEnabled].
+     */
+    val geoZonesActive: Boolean
+        get() = autoFailover && geoZonesEnabled
+
     companion object {
         const val MIN_PROBE_TIMEOUT_MILLIS = 500
         const val MAX_PROBE_TIMEOUT_MILLIS = 30_000
 
-        const val DEFAULT_FRAGMENT_LENGTH = "10-20"
-        const val DEFAULT_FRAGMENT_INTERVAL = "10-20"
+        const val DEFAULT_FRAGMENT_LENGTH = "20-50"
+        const val DEFAULT_FRAGMENT_INTERVAL = "2-5"
         const val MIN_FRAGMENT_LENGTH = 1
         const val MAX_FRAGMENT_LENGTH = 1500
         const val MIN_FRAGMENT_INTERVAL = 0

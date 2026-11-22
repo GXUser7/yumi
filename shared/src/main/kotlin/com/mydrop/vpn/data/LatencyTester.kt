@@ -106,7 +106,7 @@ class LatencyTester(
         val start = System.nanoTime()
         val ok = when {
             node.protocol.isQuicBased -> quicProbe(node, timeout)
-            mode == PingMode.Tls -> tlsHandshake(node, timeout)
+            mode == PingMode.Tls && node.tls?.enabled == true -> tlsHandshake(node, timeout)
             else -> tcpHandshake(node, timeout)
         }
         return if (ok) ((System.nanoTime() - start) / 1_000_000).toInt() else null

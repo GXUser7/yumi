@@ -1,8 +1,11 @@
 package com.mydrop.vpn.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -104,3 +107,20 @@ val MonoStyle = TextStyle(
     letterSpacing = (-0.02f).em,
     platformStyle = TightPlatform,
 )
+
+private val MONO_FALLBACK_GLYPHS = charArrayOf('↑', '↓', '—', '–', '…')
+
+/**
+ * Styles punctuation/arrows absent from the subsetted `roboto_mono_medium.ttf` with the
+ * bundled [Ui] font (`roboto_flex_medium.ttf`), preventing OEM system-font fallback glyphs
+ * from rendering as garbled characters while keeping tabular mono figures.
+ */
+fun monoAnnotated(text: String): AnnotatedString = buildAnnotatedString {
+    append(text)
+    val fallback = SpanStyle(fontFamily = Ui)
+    for (i in text.indices) {
+        if (text[i] in MONO_FALLBACK_GLYPHS) {
+            addStyle(fallback, i, i + 1)
+        }
+    }
+}

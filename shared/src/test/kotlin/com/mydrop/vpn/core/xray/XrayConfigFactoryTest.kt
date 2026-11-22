@@ -1127,6 +1127,27 @@ class XrayConfigFactoryTest {
         assertNull(dialerProxyOf(allTcpDoc, "hy2"))
         assertNull(dialerProxyOf(allTcpDoc, "wg"))
         assertNull(dialerProxyOf(allTcpDoc, "dir"))
+
+        val socksNode = ProxyNode(
+            id = "socks",
+            name = "SOCKS",
+            server = "socks.example.com",
+            port = 42000,
+            settings = ProxySettings.Socks(username = "u", password = "p"),
+            tls = null,
+        )
+        val tlsHelloAllTcpDoc = XrayConfigFactory.build(
+            nodes = allNodes + socksNode,
+            selected = tlsNode,
+            settings = AppSettings(
+                fragmentMode = FragmentMode.TlsHello,
+                fragmentScope = FragmentScope.AllTcp,
+            ),
+        )
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(tlsHelloAllTcpDoc, "tls"))
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(tlsHelloAllTcpDoc, "rel"))
+        assertNull(dialerProxyOf(tlsHelloAllTcpDoc, "plain"))
+        assertNull(dialerProxyOf(tlsHelloAllTcpDoc, "socks"))
     }
 
     @Test
@@ -1373,5 +1394,25 @@ class XrayConfigFactoryTest {
         val grpcSettings = grStream["grpcSettings"]!!.jsonObject
         assertEquals(true, grpcSettings["multiMode"]!!.jsonPrimitive.content.toBooleanStrict())
         assertEquals("grpc.example.com", grpcSettings["authority"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `reality spiderX without leading slash is normalized in outbound and xhttp downloadSettings`() {
+        val extra = """{"downloadSettings":{"security":"reality","realitySettings":{"publicKey":"PUB2","serverName":"dl.example.com","spiderX":"bad"}}}"""
+        val cfg = build(
+            node(
+                tls = TlsOptions(
+                    serverName = "decoy.example.com",
+                    reality = RealityOptions(publicKey = "PUB", spiderX = "astral-edge-h1"),
+                ),
+                transport = TransportOptions.Xhttp(path = "/x", host = "cdn.example.com", extraJson = extra),
+            ),
+        )
+        val stream = cfg.outboundNamed(XrayConfigFactory.nodeTag("n1"))["streamSettings"]!!.jsonObject
+        assertEquals("/astral-edge-h1", stream["realitySettings"]!!.jsonObject["spiderX"]!!.jsonPrimitive.content)
+
+        val dlReality = stream["xhttpSettings"]!!.jsonObject["extra"]!!
+            .jsonObject["downloadSettings"]!!.jsonObject["realitySettings"]!!.jsonObject
+        assertEquals("/bad", dlReality["spiderX"]!!.jsonPrimitive.content)
     }
 }

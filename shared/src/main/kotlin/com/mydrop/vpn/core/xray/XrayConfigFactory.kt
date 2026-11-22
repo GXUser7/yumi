@@ -672,10 +672,14 @@ object XrayConfigFactory {
     private fun effectiveFragment(node: ProxyNode, settings: AppSettings): FragmentOptions? {
         if (!supportsFragment(node)) return null
         if (settings.fragmentMode != FragmentMode.Off) {
-            val eligible = when (settings.fragmentScope) {
-                FragmentScope.TlsOnly -> node.tls?.enabled == true && node.tls.reality == null
-                FragmentScope.TlsAndReality -> node.tls?.enabled == true
-                FragmentScope.AllTcp -> true
+            val eligible = when {
+                settings.fragmentScope == FragmentScope.TlsOnly ->
+                    node.tls?.enabled == true && node.tls.reality == null
+                // `tlshello` splits only TLS ClientHello (record byte 0x16); plaintext TCP/SOCKS5
+                // gets zero DPI benefit even under AllTcp while still adding dialerProxy overhead.
+                settings.fragmentMode == FragmentMode.TlsHello -> node.tls?.enabled == true
+                settings.fragmentScope == FragmentScope.TlsAndReality -> node.tls?.enabled == true
+                else -> true
             }
             if (!eligible) return null
             val packets = settings.fragmentMode.packets ?: return null
@@ -1143,11 +1147,18 @@ object XrayConfigFactory {
         put("serverName", tls.serverName?.takeIf { it.isNotBlank() } ?: node.server)
         put("publicKey", reality.publicKey)
         if (reality.shortId.isNotBlank()) put("shortId", reality.shortId)
-        if (reality.spiderX.isNotBlank()) put("spiderX", reality.spiderX)
+        val spiderX = safeSpiderX(reality.spiderX)
+        if (spiderX.isNotEmpty()) put("spiderX", spiderX)
         normalizedMldsa65Verify(reality.mldsa65Verify)?.let { put("mldsa65Verify", it) }
         // REALITY without a fingerprint presents Go's own ClientHello, which is precisely the
         // signature the whole exercise exists to avoid.
         put("fingerprint", safeFingerprint(settings.tlsFingerprint.xrayValue ?: tls.fingerprint))
+    }
+
+    internal fun safeSpiderX(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        return if (trimmed.startsWith('/')) trimmed else "/$trimmed"
     }
 
     /**
@@ -1245,6 +1256,8 @@ object XrayConfigFactory {
                     val cleaned = LinkedHashMap<String, JsonElement>(relObj)
                     val fp = (relObj["fingerprint"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                     cleaned["fingerprint"] = JsonPrimitive(safeFingerprint(fp))
+                    val spx = (relObj["spiderX"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    if (spx != null) cleaned["spiderX"] = JsonPrimitive(safeSpiderX(spx).ifEmpty { "/" })
                     out["realitySettings"] = JsonObject(cleaned)
                 }
                 "sockopt" -> (value as? JsonObject)?.let { sock ->

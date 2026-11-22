@@ -376,6 +376,9 @@ class MyDropVpnService : VpnService() {
      */
     private var tunAppRules: SplitTunnelRules? = null
 
+    /** Whether Android Always-on Lockdown was active when [tunDescriptor] was built. */
+    @Volatile private var tunLockdownEnabled: Boolean? = null
+
     /** Fail-closed UID policy matching [tunDescriptor] / [tunAppRules]. */
     private var tunUidPolicy: SplitTunnelUidPolicy? = null
 
@@ -818,6 +821,7 @@ class MyDropVpnService : VpnService() {
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
         tunAppRules = null
+        tunLockdownEnabled = null
         tunUidPolicy = null
 
         carriedUploadBytes = 0
@@ -1260,12 +1264,18 @@ class MyDropVpnService : VpnService() {
      * outgoing core needs, and after that it fails the way a failed start does: said, on screen,
      * with the reason.
      */
-    private fun resetCoreNetwork(reason: String = "handover", notifyWatchdog: Boolean = false) {
+    private fun resetCoreNetwork(
+        reason: String = "handover",
+        notifyWatchdog: Boolean = false,
+        rebuildTun: Boolean = false,
+    ) {
         scope.launch {
             tunnelLock.withLock {
                 if (!XrayCore.running) return@withLock
-                val descriptor = tunDescriptor ?: return@withLock
-                val uidPolicy = tunUidPolicy ?: return@withLock
+                if (rebuildTun && !LockdownBypassPolicy.needsTunRebuild(tunLockdownEnabled, currentLockdownEnabled())) {
+                    return@withLock
+                }
+                val existingDescriptor = tunDescriptor ?: return@withLock
                 val config = runningConfig ?: return@withLock
                 val activeTag = XrayCore.activeOutbound.ifBlank { config.pinnedTag }
 
@@ -1276,6 +1286,23 @@ class MyDropVpnService : VpnService() {
                 lastDownloadBytes = 0
 
                 runCatching { XrayCore.stop() }
+                val descriptor = if (rebuildTun) {
+                    val built = runCatching { tunnelFor() }
+                    built.exceptionOrNull()?.let { error ->
+                        val message = error.message
+                            ?: error::class.simpleName
+                            ?: strings.get(R.string.error_core_start_failed)
+                        logs.error(R.string.log_start_failed, message)
+                        android.util.Log.e("MyDropVpn", "tunnel rebuild after $reason failed", error)
+                        _state.value = VpnState.Failed(nodeId, message)
+                        stopTunnel()
+                        return@withLock
+                    }
+                    built.getOrThrow()
+                } else {
+                    existingDescriptor
+                }
+                val uidPolicy = tunUidPolicy ?: return@withLock
                 var attempt = 0
                 var failure: Throwable?
                 do {
@@ -1362,17 +1389,30 @@ class MyDropVpnService : VpnService() {
      * Rebuilding costs the blink the paragraph above is protecting, so it happens only when the
      * rules themselves changed — the one case where keeping the old interface is the wrong answer.
      */
+    private fun currentLockdownEnabled(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            runCatching { isLockdownEnabled }.getOrDefault(false)
+
     private fun tunnelFor(): ParcelFileDescriptor {
         val container = (application as MyDropApplication).container
         val wanted = container.installedApps.rules(container.settings.value)
+        val lockdownEnabled = currentLockdownEnabled()
         val existing = tunDescriptor ?: return establishTunnel()
-        if (wanted == tunAppRules && tunUidPolicy != null) return existing
+        if (wanted == tunAppRules && tunLockdownEnabled == lockdownEnabled && tunUidPolicy != null) {
+            return existing
+        }
 
-        logs.trace(NATIVE_TAG, "per-app rules changed, rebuilding the interface")
+        val reason = when {
+            wanted != tunAppRules -> "per-app rules changed"
+            tunLockdownEnabled != lockdownEnabled -> "lockdown mode changed"
+            else -> "uid policy missing"
+        }
+        logs.trace(NATIVE_TAG, "$reason, rebuilding the interface")
         // Established before the old one is closed rather than after. `establish` replaces this
         // service's interface itself, so closing first would open a window with no tunnel at all —
         // on the one path whose entire job is keeping packets off the physical network.
         val replacement = establishTunnel()
+        reportedInterface?.let(::setUnderlying)
         runCatching { existing.close() }
         return replacement
     }
@@ -1397,6 +1437,7 @@ class MyDropVpnService : VpnService() {
         val container = (application as MyDropApplication).container
         val settings = container.settings.value
         val appRules = container.installedApps.rules(settings)
+        val lockdownEnabled = currentLockdownEnabled()
         val builder = Builder()
         builder.setSession(nodeName.ifEmpty { "Yumi" })
         builder.setMtu(settings.mtu)
@@ -1415,11 +1456,13 @@ class MyDropVpnService : VpnService() {
         // the proxy path on a Pixel, that connection was reaped every 208-394 seconds even after
         // this client's idle policy was raised to thirty minutes; once the phone entered Doze, Play
         // services could not promptly replace it and notifications waited for the next wake. A
-        // bypassable VPN lets Play services bind its push channel to the underlying network, which
-        // is Android and Firebase's supported path for keeping that connection reliable. Other
-        // applications still use the VPN unless they explicitly bind elsewhere, and Android's
-        // lockdown mode continues to forbid bypass altogether.
-        builder.allowBypass()
+        // bypassable VPN lets Play services bind its push channel to the underlying network when
+        // Android Always-on Lockdown ("Block connections without VPN") is OFF. When Lockdown IS ON,
+        // Android/netd rejects or breaks bypassable VPNs on Android 10–13 if `allowBypass()` stays
+        // set, so it is omitted while Lockdown is active (see LockdownBypassPolicy).
+        if (LockdownBypassPolicy.shouldAllowBypass(lockdownEnabled)) {
+            builder.allowBypass()
+        }
 
         // Counted rather than swallowed. `addAllowedApplication` and `addDisallowedApplication`
         // both throw `NameNotFoundException` for a package that is not installed — an app the user
@@ -1477,6 +1520,7 @@ class MyDropVpnService : VpnService() {
             ?: throw IllegalStateException(strings.get(R.string.error_establish_null))
         tunDescriptor = descriptor
         tunAppRules = appRules
+        tunLockdownEnabled = lockdownEnabled
         tunUidPolicy = uidPolicy
         return descriptor
     }
@@ -1527,6 +1571,19 @@ class MyDropVpnService : VpnService() {
             while (isActive) {
                 delay(TRAFFIC_POLL_MILLIS)
                 if (!XrayCore.running) continue
+
+                val lockdownNow = currentLockdownEnabled()
+                if (LockdownBypassPolicy.needsTunRebuild(tunLockdownEnabled, lockdownNow)) {
+                    logs.trace(
+                        NATIVE_TAG,
+                        "lockdown mode changed ($tunLockdownEnabled -> $lockdownNow), rebuilding tunnel",
+                    )
+                    resetCoreNetwork(
+                        reason = if (lockdownNow) "lockdown enabled" else "lockdown disabled",
+                        rebuildTun = true,
+                    )
+                    break
+                }
 
                 val up = XrayCore.uploadBytes
                 val down = XrayCore.downloadBytes
@@ -1677,7 +1734,7 @@ class MyDropVpnService : VpnService() {
 
     private fun startForegroundNotification() {
         val container = (application as MyDropApplication).container
-        val geoEnabled = container.settings.value.geoZonesEnabled
+        val geoEnabled = container.settings.value.geoZonesActive
         val hasLocPerm = hasAnyLocationPermission()
         val canAttachLocation = geoEnabled &&
             hasLocPerm &&

@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/GXUser7/yumi/core-xray/tun"
@@ -42,7 +41,6 @@ import (
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	xtun "github.com/xtls/xray-core/proxy/tun"
-	"github.com/xtls/xray-core/transport/internet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	// Registers every protocol, transport and app with the core's factory tables. Without this
@@ -69,37 +67,11 @@ type Protector interface {
 }
 
 var (
-	// RegisterDialerController appends to a package-level slice in the core and offers no way to
-	// remove an entry again (transport/internet/system_dialer.go:206). Registering per Start would
-	// therefore stack one controller per connection the user has ever made. So the controller is
-	// installed once for the life of the process and reads whichever protector is current.
-	protectorOnce sync.Once
-	protectorMu   sync.RWMutex
-	protector     Protector
+	// yumiSystemDialer is installed once via internet.UseAlternativeSystemDialer so it can read
+	// whichever Protector is active on the current core generation.
+	protectorMu sync.RWMutex
+	protector   Protector
 )
-
-func installProtector() {
-	_ = internet.RegisterDialerController(func(network, address string, c syscall.RawConn) error {
-		protectorMu.RLock()
-		p := protector
-		protectorMu.RUnlock()
-		if p == nil {
-			return nil
-		}
-		refused := false
-		// The fd is only valid inside Control; taking it out and calling later protects a number
-		// that may by then belong to something else entirely.
-		if err := c.Control(func(fd uintptr) {
-			refused = !p.Protect(int(fd))
-		}); err != nil {
-			return err
-		}
-		if refused {
-			return errors.New("VpnService.protect refused the socket")
-		}
-		return nil
-	})
-}
 
 // Logger is implemented on the Kotlin side.
 //
@@ -237,7 +209,12 @@ func SelectOutbound(tag string) error {
 	if err != nil {
 		return err
 	}
-	return overrider.SetOverrideTarget(BalancerTag, tag)
+	if err := overrider.SetOverrideTarget(BalancerTag, tag); err != nil {
+		return err
+	}
+	setCorePinnedTag(tag)
+	evictOtherYumiGrpcConns(tag)
+	return nil
 }
 
 // ActiveOutbound reports the node the balancer is pinned to. Empty when nothing is running, or
@@ -328,10 +305,8 @@ func StatsReport() string {
 // `{"proxy-a": 143, "proxy-b": -1}`, with -1 for "asked and did not answer" — which is a different
 // fact from "not measured", and the app depends on being able to tell them apart.
 func MeasureOutbounds(tags string, probeURL string, timeoutMillis int) string {
-	mu.Lock()
-	running := instance
-	mu.Unlock()
-	if running == nil {
+	running, genCtx, err := runningInstanceWithCtx()
+	if err != nil {
 		return "{}"
 	}
 
@@ -362,7 +337,7 @@ func MeasureOutbounds(tags string, probeURL string, timeoutMillis int) string {
 	results := make(chan result, len(wanted))
 	for _, tag := range wanted {
 		go func(tag string) {
-			results <- result{tag: tag, delay: measureOne(running, tag, probeURL, timeout)}
+			results <- result{tag: tag, delay: measureOne(genCtx, running, tag, probeURL, timeout)}
 		}(tag)
 	}
 
@@ -379,14 +354,21 @@ func MeasureOutbounds(tags string, probeURL string, timeoutMillis int) string {
 }
 
 // measureOne returns the round trip in milliseconds, or -1 when the outbound did not deliver.
-func measureOne(running *core.Instance, tag string, probeURL string, timeout time.Duration) int64 {
+func measureOne(
+	genCtx context.Context,
+	running *core.Instance,
+	tag string,
+	probeURL string,
+	timeout time.Duration,
+) int64 {
+	reqCtx, cancel := context.WithTimeout(genCtx, timeout)
+	defer cancel()
+
 	// SkipDNSResolve leaves the name for the *server* to resolve, which is the whole point: the
 	// probe has to succeed on a phone whose own resolver is dead, or a broken resolver would read
 	// as every server in the subscription being broken at once.
 	content := new(session.Content)
 	content.SkipDNSResolve = true
-	ctx := session.ContextWithContent(context.Background(), content)
-	ctx = session.SetForcedOutboundTagToContext(ctx, tag)
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -396,9 +378,11 @@ func measureOne(running *core.Instance, tag string, probeURL string, timeout tim
 				if err != nil {
 					return nil, err
 				}
+				dialCtx := withMeasureProbeCtx(session.ContextWithContent(reqCtx, content))
+				dialCtx = session.SetForcedOutboundTagToContext(dialCtx, tag)
 				// core.Dial is the exported, stable entry point; it puts the instance into the
-				// context the dispatcher needs while leaving the forced tag above in place.
-				return core.Dial(ctx, running, dest)
+				// context the dispatcher needs while leaving the forced tag and reqCtx deadline intact.
+				return core.Dial(dialCtx, running, dest)
 			},
 			TLSHandshakeTimeout: timeout,
 			DisableKeepAlives:   true,
@@ -410,7 +394,7 @@ func measureOne(running *core.Instance, tag string, probeURL string, timeout tim
 	}
 	defer client.CloseIdleConnections()
 
-	request, err := http.NewRequest(http.MethodGet, probeURL, nil)
+	request, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		return -1
 	}
@@ -476,7 +460,7 @@ func startCore(
 		return errors.New("refusing to start without a tunnel descriptor")
 	}
 
-	protectorOnce.Do(installProtector)
+	systemDialerOnce.Do(installSystemDialer)
 	protectorMu.Lock()
 	protector = p
 	protectorMu.Unlock()
@@ -484,6 +468,8 @@ func startCore(
 	success := false
 	defer func() {
 		if !success {
+			cancelCoreLifecycle()
+			closeAllYumiGrpcConns()
 			protectorMu.Lock()
 			protector = nil
 			protectorMu.Unlock()
@@ -492,6 +478,9 @@ func startCore(
 
 	config, err := serial.LoadJSONConfig(strings.NewReader(configJSON))
 	if err != nil {
+		return err
+	}
+	if err := rewriteGrpcOutbounds(config); err != nil {
 		return err
 	}
 
@@ -546,10 +535,12 @@ func startCore(
 		}
 	}
 
+	genCtx, _ := beginCoreLifecycle()
 	started, err := core.New(config)
 	if err != nil {
 		return err
 	}
+	bindCoreInstance(started, genCtx, pinnedTag)
 
 	rawTun, err := core.CreateObject(started, &tun.GuardedConfig{
 		Tag:              tunInbound.GetTag(),
@@ -621,7 +612,13 @@ func Stop() error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	cancelCoreLifecycle()
+	closeAllYumiGrpcConns()
+
 	if instance == nil {
+		protectorMu.Lock()
+		protector = nil
+		protectorMu.Unlock()
 		return nil
 	}
 	err := instance.Close()
@@ -660,14 +657,20 @@ func Version() string {
 
 // --- In-process core.Dial bridge (replaces probe-in loopback SOCKS proxy) ---
 
-func runningInstance() (*core.Instance, error) {
+func runningInstanceWithCtx() (*core.Instance, context.Context, error) {
 	mu.Lock()
 	running := instance
 	mu.Unlock()
 	if running == nil {
-		return nil, errors.New("core is not running")
+		return nil, nil, errors.New("core is not running")
 	}
-	return running, nil
+	coreLifecycleMu.RLock()
+	genCtx := activeCoreCtx
+	coreLifecycleMu.RUnlock()
+	if genCtx == nil {
+		genCtx = context.Background()
+	}
+	return running, genCtx, nil
 }
 
 // activeOutboundTag returns the balancer's pinned target, falling back to the first
@@ -694,6 +697,7 @@ func activeOutboundTag(running *core.Instance) string {
 // connCtx must remain alive for the lifetime of the returned net.Conn and is cancelled on Close.
 func dialActive(
 	connCtx context.Context,
+	connCancel context.CancelFunc,
 	dialCtx context.Context,
 	running *core.Instance,
 	network string,
@@ -752,7 +756,19 @@ func dialActive(
 	if err != nil {
 		return nil, err
 	}
-	return core.Dial(ctx, running, dest)
+	stop := context.AfterFunc(dialCtx, func() {
+		connCancel()
+	})
+	raw, err := core.Dial(ctx, running, dest)
+	if !stop() {
+		if raw != nil {
+			_ = raw.Close()
+		}
+		if dErr := dialCtx.Err(); dErr != nil {
+			return nil, dErr
+		}
+	}
+	return raw, err
 }
 
 func pickResolvedIP(ips []net.IP) net.IP {
@@ -917,7 +933,7 @@ func (d *deadlineConn) Close() error {
 // ProbeHTTP performs a single-hop non-redirecting HTTP GET through the running core's active outbound
 // and returns the HTTP status code. When resolveDNS is true, hostnames are resolved through Xray's DNS client.
 func ProbeHTTP(targetURL string, timeoutMillis int, resolveDNS bool) (int, error) {
-	running, err := runningInstance()
+	running, genCtx, err := runningInstanceWithCtx()
 	if err != nil {
 		return 0, err
 	}
@@ -927,7 +943,7 @@ func ProbeHTTP(targetURL string, timeoutMillis int, resolveDNS bool) (int, error
 		timeout = 8 * time.Second
 	}
 
-	reqCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	reqCtx, cancel := context.WithTimeout(genCtx, timeout)
 	defer cancel()
 
 	var connsMu sync.Mutex
@@ -935,9 +951,9 @@ func ProbeHTTP(targetURL string, timeoutMillis int, resolveDNS bool) (int, error
 
 	tr := &http.Transport{
 		Proxy: func(*http.Request) (*url.URL, error) { return nil, nil },
-		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-			connCtx, connCancel := context.WithCancel(context.Background())
-			raw, err := dialActive(connCtx, dialCtx, running, network, addr, resolveDNS)
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			connCtx, connCancel := context.WithCancel(reqCtx)
+			raw, err := dialActive(connCtx, connCancel, reqCtx, running, network, addr, resolveDNS)
 			if err != nil {
 				connCancel()
 				return nil, err
@@ -1010,7 +1026,7 @@ func OpenHTTP(
 	readTimeoutMillis int,
 	resolveDNS bool,
 ) (*HTTPResponse, error) {
-	running, err := runningInstance()
+	running, genCtx, err := runningInstanceWithCtx()
 	if err != nil {
 		return nil, err
 	}
@@ -1036,17 +1052,17 @@ func OpenHTTP(
 		readTimeout = 30 * time.Second
 	}
 
-	connCtx, connCancel := context.WithCancel(context.Background())
+	connCtx, connCancel := context.WithCancel(genCtx)
 
 	var dcMu sync.Mutex
 	var activeDC *deadlineConn
 
 	tr := &http.Transport{
 		Proxy: func(*http.Request) (*url.URL, error) { return nil, nil },
-		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-			dCtx, dCancel := context.WithTimeout(dialCtx, connectTimeout)
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			dCtx, dCancel := context.WithTimeout(connCtx, connectTimeout)
 			defer dCancel()
-			raw, err := dialActive(connCtx, dCtx, running, network, addr, resolveDNS)
+			raw, err := dialActive(connCtx, connCancel, dCtx, running, network, addr, resolveDNS)
 			if err != nil {
 				return nil, err
 			}
@@ -1215,7 +1231,7 @@ type TunnelConn struct {
 
 // DialTunnel opens a raw TCP or UDP stream through the running core's active outbound.
 func DialTunnel(network string, addr string, timeoutMillis int) (*TunnelConn, error) {
-	running, err := runningInstance()
+	running, genCtx, err := runningInstanceWithCtx()
 	if err != nil {
 		return nil, err
 	}
@@ -1224,11 +1240,11 @@ func DialTunnel(network string, addr string, timeoutMillis int) (*TunnelConn, er
 		timeout = 6 * time.Second
 	}
 
-	connCtx, cancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(genCtx)
 	dialCtx, dialCancel := context.WithTimeout(connCtx, timeout)
 	defer dialCancel()
 
-	raw, err := dialActive(connCtx, dialCtx, running, network, addr, false)
+	raw, err := dialActive(connCtx, cancel, dialCtx, running, network, addr, false)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -1243,7 +1259,7 @@ func DialTunnel(network string, addr string, timeoutMillis int) (*TunnelConn, er
 
 // DialTunnelTLS opens a TLS-over-TCP stream through the running core's active outbound.
 func DialTunnelTLS(host string, port int, serverName string, timeoutMillis int) (*TunnelConn, error) {
-	running, err := runningInstance()
+	running, genCtx, err := runningInstanceWithCtx()
 	if err != nil {
 		return nil, err
 	}
@@ -1259,12 +1275,12 @@ func DialTunnelTLS(host string, port int, serverName string, timeoutMillis int) 
 		timeout = 6 * time.Second
 	}
 
-	connCtx, cancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(genCtx)
 	dialCtx, dialCancel := context.WithTimeout(connCtx, timeout)
 	defer dialCancel()
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	raw, err := dialActive(connCtx, dialCtx, running, "tcp", addr, false)
+	raw, err := dialActive(connCtx, cancel, dialCtx, running, "tcp", addr, false)
 	if err != nil {
 		cancel()
 		return nil, err

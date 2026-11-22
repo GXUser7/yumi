@@ -115,6 +115,7 @@ import com.mydrop.vpn.ui.screens.servers.ServerFilterState
 import com.mydrop.vpn.ui.screens.servers.ServerSort
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
+import com.mydrop.vpn.ui.theme.monoAnnotated
 import com.mydrop.vpn.ui.theme.scheme
 import com.mydrop.vpn.ui.theme.toSemanticColors
 import kotlin.math.absoluteValue
@@ -786,12 +787,12 @@ private fun TvCarouselCard(
                                     running && online -> {
                                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                             Text(
-                                                text = "↓ ${formatRate(snapshot?.downloadBytesPerSecond ?: 0L)}",
+                                                text = monoAnnotated("↓ ${formatRate(snapshot?.downloadBytesPerSecond ?: 0L)}"),
                                                 style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
                                                 color = tvSemantic.download,
                                             )
                                             Text(
-                                                text = "↑ ${formatRate(snapshot?.uploadBytesPerSecond ?: 0L)}",
+                                                text = monoAnnotated("↑ ${formatRate(snapshot?.uploadBytesPerSecond ?: 0L)}"),
                                                 style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
                                                 color = tvSemantic.upload,
                                             )
@@ -863,7 +864,7 @@ private fun RemoteLatencyChipBadge(
 ) {
     val semantic = LocalSemanticColors.current
     val text = when {
-        latencyFailed -> "✕"
+        latencyFailed -> "×"
         latencyMillis != null -> latencyMillis.toString()
         else -> "—"
     }
@@ -887,7 +888,7 @@ private fun RemoteLatencyChipBadge(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = text,
+                text = monoAnnotated(text),
                 style = MonoStyle.copy(fontWeight = FontWeight.Bold),
                 color = tint,
                 maxLines = 1,

@@ -77,6 +77,7 @@ import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.ui.components.TrafficWaves
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
+import com.mydrop.vpn.ui.theme.monoAnnotated
 
 enum class TvDestination(@StringRes val label: Int, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     Connect(R.string.tv_nav_connect, Icons.Rounded.Shield),
@@ -368,12 +369,12 @@ private fun TvFlowFigure(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text(latency?.takeUnless { it.failed }?.millis?.toString() ?: "—", style = MonoStyle)
+                Text(monoAnnotated(latency?.takeUnless { it.failed }?.millis?.toString() ?: "—"), style = MonoStyle)
                 Text("MS", style = MaterialTheme.typography.labelSmall)
             }
         }
         Text(
-            "↓ ${rateText(state.traffic.downloadBytesPerSecond)}    ↑ ${rateText(state.traffic.uploadBytesPerSecond)}",
+            monoAnnotated("↓ ${rateText(state.traffic.downloadBytesPerSecond)}    ↑ ${rateText(state.traffic.uploadBytesPerSecond)}"),
             modifier = Modifier.align(Alignment.BottomStart).padding(22.dp),
             style = MonoStyle,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

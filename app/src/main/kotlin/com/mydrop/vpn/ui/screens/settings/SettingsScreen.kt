@@ -47,7 +47,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NetworkPing
@@ -125,9 +124,9 @@ internal data class FragmentPreset(
 )
 
 internal val FRAGMENT_PRESETS = listOf(
-    FragmentPreset(R.string.fragment_preset_gentle, length = "50-100", interval = "5-10"),
-    FragmentPreset(R.string.fragment_preset_standard, length = "10-20", interval = "10-20"),
-    FragmentPreset(R.string.fragment_preset_aggressive, length = "1-5", interval = "1-5"),
+    FragmentPreset(R.string.fragment_preset_gentle, length = "50-100", interval = "2-5"),
+    FragmentPreset(R.string.fragment_preset_standard, length = "20-50", interval = "2-5"),
+    FragmentPreset(R.string.fragment_preset_aggressive, length = "10-20", interval = "1-3"),
 )
 
 @Composable
@@ -230,8 +229,7 @@ internal fun FragmentationSettings(
                         FRAGMENT_PRESETS.forEach { preset ->
                             val matchesPreset = length == preset.length &&
                                 interval == preset.interval &&
-                                maxChunks.isBlank() &&
-                                preset.maxChunks.isBlank()
+                                maxChunks.trim() == preset.maxChunks.trim()
                             ChoiceButton(
                                 label = stringResource(preset.labelRes),
                                 checked = matchesPreset,
@@ -822,6 +820,23 @@ fun SettingsScreen(
          * ним.
          */
         item("failover") {
+            val context = LocalContext.current
+            val locationPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions(),
+            ) { permissions ->
+                onGeoPermissionChanged()
+                val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                onUpdate { s -> s.copy(geoZonesEnabled = granted) }
+            }
+            var triedDirectBgRequest by remember { mutableStateOf(false) }
+            val bgPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) {
+                onGeoPermissionChanged()
+            }
             SettingsSection(
                 title = stringResource(R.string.settings_failover_section),
                 icon = Icons.Rounded.SwapHoriz,
@@ -892,160 +907,136 @@ fun SettingsScreen(
                             checked = settings.returnHome,
                             onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
                         )
-                    }
-                }
-            }
-        }
-
-        item("geozones") {
-            val context = LocalContext.current
-            val locationPermissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestMultiplePermissions(),
-            ) { permissions ->
-                onGeoPermissionChanged()
-                val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                onUpdate { s -> s.copy(geoZonesEnabled = granted) }
-            }
-            var triedDirectBgRequest by remember { mutableStateOf(false) }
-            val bgPermissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) {
-                onGeoPermissionChanged()
-            }
-            SettingsSection(
-                title = stringResource(R.string.settings_geozones),
-                icon = Icons.Rounded.Explore,
-            ) {
-                SwitchRow(
-                    title = stringResource(R.string.settings_geozones),
-                    subtitle = if (settings.geoZonesEnabled && !geoHasPermission) {
-                        stringResource(R.string.settings_geozones_permission_needed)
-                    } else {
-                        stringResource(R.string.settings_geozones_subtitle)
-                    },
-                    subtitleColor = if (settings.geoZonesEnabled && !geoHasPermission) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    checked = settings.geoZonesEnabled,
-                    onCheckedChange = { enabled ->
-                        if (!enabled) {
-                            onUpdate { s -> s.copy(geoZonesEnabled = false) }
-                        } else {
-                            val hasFine = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                            ) == PackageManager.PERMISSION_GRANTED
-                            val hasCoarse = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.ACCESS_COARSE_LOCATION,
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (hasFine || hasCoarse) {
-                                onUpdate { s -> s.copy(geoZonesEnabled = true) }
-                                onGeoPermissionChanged()
+                        GroupDivider()
+                        SwitchRow(
+                            title = stringResource(R.string.settings_geozones),
+                            subtitle = if (settings.geoZonesEnabled && !geoHasPermission) {
+                                stringResource(R.string.settings_geozones_permission_needed)
                             } else {
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
+                                stringResource(R.string.settings_geozones_subtitle)
+                            },
+                            subtitleColor = if (settings.geoZonesEnabled && !geoHasPermission) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            checked = settings.geoZonesEnabled,
+                            onCheckedChange = { enabled ->
+                                if (!enabled) {
+                                    onUpdate { s -> s.copy(geoZonesEnabled = false) }
+                                } else {
+                                    val hasFine = ContextCompat.checkSelfPermission(
+                                        context,
                                         Manifest.permission.ACCESS_FINE_LOCATION,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    val hasCoarse = ContextCompat.checkSelfPermission(
+                                        context,
                                         Manifest.permission.ACCESS_COARSE_LOCATION,
-                                    ),
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasFine || hasCoarse) {
+                                        onUpdate { s -> s.copy(geoZonesEnabled = true) }
+                                        onGeoPermissionChanged()
+                                    } else {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                        AnimatedVisibility(visible = settings.mobileNodeIds.isEmpty()) {
+                            Column {
+                                Spacer(Modifier.height(6.dp))
+                                GeoZonesMobileWarningCard(
+                                    emphasized = settings.geoZonesEnabled,
+                                    onOpenMobileNodes = onOpenMobileNodes,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                            }
+                        }
+                        AnimatedVisibility(visible = settings.geoZonesEnabled) {
+                            Column {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                                    geoHasPermission &&
+                                    !geoHasBackgroundPermission
+                                ) {
+                                    NavigationRow(
+                                        title = stringResource(R.string.settings_geozones_bg_permission),
+                                        subtitle = stringResource(R.string.settings_geozones_bg_permission_subtitle),
+                                        icon = Icons.Rounded.MyLocation,
+                                        onClick = {
+                                            if (!triedDirectBgRequest) {
+                                                triedDirectBgRequest = true
+                                                bgPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                            } else {
+                                                runCatching {
+                                                    context.startActivity(
+                                                        android.content.Intent(
+                                                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                            android.net.Uri.fromParts("package", context.packageName, null),
+                                                        ),
+                                                    )
+                                                }
+                                            }
+                                        },
+                                    )
+                                    GroupDivider()
+                                }
+                                SwitchRow(
+                                    title = stringResource(R.string.settings_geozones_preemptive),
+                                    subtitle = stringResource(R.string.settings_geozones_preemptive_subtitle),
+                                    checked = settings.geoPreemptiveSwitch,
+                                    onCheckedChange = {
+                                        onUpdate { s -> s.copy(geoPreemptiveSwitch = it) }
+                                    },
+                                )
+                                GroupDivider()
+                                SwitchRow(
+                                    title = stringResource(R.string.settings_geozones_auto_return),
+                                    subtitle = stringResource(R.string.settings_geozones_auto_return_subtitle),
+                                    checked = settings.geoAutoReturnOrdinary,
+                                    onCheckedChange = {
+                                        onUpdate { s -> s.copy(geoAutoReturnOrdinary = it) }
+                                    },
                                 )
                             }
                         }
-                    },
-                )
-                AnimatedVisibility(visible = settings.mobileNodeIds.isEmpty()) {
-                    Column {
                         Spacer(Modifier.height(10.dp))
-                        GeoZonesMobileWarningCard(
-                            emphasized = settings.geoZonesEnabled,
-                            onOpenMobileNodes = onOpenMobileNodes,
-                        )
-                    }
-                }
-                AnimatedVisibility(visible = settings.geoZonesEnabled) {
-                    DependentGroup {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                            geoHasPermission &&
-                            !geoHasBackgroundPermission
+                        Button(
+                            onClick = onOpenZonesMap,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(UpdateButtonHeight),
+                            shape = RoundedCornerShape(UpdateButtonHeight / 2),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            contentPadding = PaddingValues(0.dp),
                         ) {
-                            NavigationRow(
-                                title = stringResource(R.string.settings_geozones_bg_permission),
-                                subtitle = stringResource(R.string.settings_geozones_bg_permission_subtitle),
-                                icon = Icons.Rounded.MyLocation,
-                                onClick = {
-                                    if (!triedDirectBgRequest) {
-                                        triedDirectBgRequest = true
-                                        bgPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                                    } else {
-                                        runCatching {
-                                            context.startActivity(
-                                                android.content.Intent(
-                                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                                    android.net.Uri.fromParts("package", context.packageName, null),
-                                                ),
-                                            )
-                                        }
-                                    }
-                                },
+                            Icon(
+                                imageVector = Icons.Rounded.Map,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
                             )
-                            GroupDivider()
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = if (geoZonesCount > 0) {
+                                    stringResource(R.string.settings_geozones_open_map_button_count, geoZonesCount)
+                                } else {
+                                    stringResource(R.string.settings_geozones_open_map_button)
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                        SwitchRow(
-                            title = stringResource(R.string.settings_geozones_preemptive),
-                            subtitle = stringResource(R.string.settings_geozones_preemptive_subtitle),
-                            checked = settings.geoPreemptiveSwitch,
-                            onCheckedChange = {
-                                onUpdate { s -> s.copy(geoPreemptiveSwitch = it) }
-                            },
-                        )
-                        GroupDivider()
-                        SwitchRow(
-                            title = stringResource(R.string.settings_geozones_auto_return),
-                            subtitle = stringResource(R.string.settings_geozones_auto_return_subtitle),
-                            checked = settings.geoAutoReturnOrdinary,
-                            onCheckedChange = {
-                                onUpdate { s -> s.copy(geoAutoReturnOrdinary = it) }
-                            },
-                        )
+                        Spacer(Modifier.height(10.dp))
                     }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Button(
-                    onClick = onOpenZonesMap,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(UpdateButtonHeight),
-                    shape = RoundedCornerShape(UpdateButtonHeight / 2),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Map,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = if (geoZonesCount > 0) {
-                            stringResource(R.string.settings_geozones_open_map_button_count, geoZonesCount)
-                        } else {
-                            stringResource(R.string.settings_geozones_open_map_button)
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
                 }
             }
         }

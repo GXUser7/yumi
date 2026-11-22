@@ -197,12 +197,14 @@ class AppContainer(context: Context) {
      */
     private fun switchableGroup(selected: com.mydrop.vpn.core.model.ProxyNode):
         List<com.mydrop.vpn.core.model.ProxyNode> {
+        val currentSettings = settings.value
+        if (!currentSettings.autoFailover) return listOf(selected)
         val state = profiles.state.value
         return com.mydrop.vpn.core.model.FailoverGroup.switchable(
             nodes = state.visibleNodes,
             selected = selected,
             latencies = state.latencies,
-            settings = settings.value,
+            settings = currentSettings,
             limit = SWITCHABLE_LIMIT,
         )
     }

@@ -409,4 +409,25 @@ class ProxyUriParserTest {
         assertTrue(grpc.multiMode)
         assertEquals("grpc.example.com", grpc.authority)
     }
+
+    @Test
+    fun `xhttp path without leading slash does not leak into reality spiderX`() {
+        val uri = "vless://11111111-2222-3333-4444-555555555555@153.56.230.77:25155" +
+            "?type=xhttp&security=reality&fp=firefox&pbk=PUBLICKEY123&sid=0ebb438948cdf356" +
+            "&sni=decoy.example.com&path=astral-edge-h1#XHReality"
+
+        val node = requireNotNull(ProxyUriParser.parse(uri))
+        val transport = node.transport as TransportOptions.Xhttp
+        assertEquals("astral-edge-h1", transport.path)
+        assertEquals("/", node.tls?.reality?.spiderX)
+    }
+
+    @Test
+    fun `explicit reality spx without leading slash is prefixed with slash`() {
+        val uri = "vless://11111111-2222-3333-4444-555555555555@example.com:443" +
+            "?security=reality&pbk=PUBLICKEY123&sni=decoy.example.com&spx=custom%2Fpath#SPX"
+
+        val node = requireNotNull(ProxyUriParser.parse(uri))
+        assertEquals("/custom/path", node.tls?.reality?.spiderX)
+    }
 }

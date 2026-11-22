@@ -4,8 +4,10 @@ import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
+import com.mydrop.vpn.core.model.TlsOptions
 import java.net.InetAddress
 import java.net.ServerSocket
+import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -85,5 +87,43 @@ class LatencyTesterGroupTest {
 
         assertEquals(listOf("plain", "group"), results.map { it.nodeId })
         assertTrue(results.none { it.failed })
+    }
+
+    @Test
+    fun `tls ping mode uses tcp handshake for plaintext socks nodes`() = runBlocking {
+        val socksNode = ProxyNode(
+            id = "socks-plain",
+            name = "SOCKS5",
+            server = "127.0.0.1",
+            port = alive.localPort,
+            settings = ProxySettings.Socks(),
+            tls = null,
+        )
+
+        val result = LatencyTester().measure(socksNode, PingMode.Tls)
+
+        assertFalse(result.failed)
+    }
+
+    @Test
+    fun `tls ping mode still requires tls handshake when tls is enabled`() = runBlocking {
+        ServerSocket(0, 1, loopback).use { nonTlsServer ->
+            val acceptThread = thread(isDaemon = true) {
+                runCatching { nonTlsServer.accept().close() }
+            }
+            val tlsNode = ProxyNode(
+                id = "vless-tls",
+                name = "VLESS TLS",
+                server = "127.0.0.1",
+                port = nonTlsServer.localPort,
+                settings = ProxySettings.Vless(uuid = "11111111-2222-3333-4444-555555555555"),
+                tls = TlsOptions(enabled = true, serverName = "example.com"),
+            )
+
+            val result = LatencyTester().measure(tlsNode, PingMode.Tls)
+            acceptThread.join(1_000)
+
+            assertTrue(result.failed)
+        }
     }
 }

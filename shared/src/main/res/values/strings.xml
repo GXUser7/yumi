@@ -376,10 +376,10 @@
     <string name="fragment_scope_all_tcp">All TCP</string>
     <string name="fragment_scope_all_tcp_description">Fragments all TCP proxy nodes including unencrypted ones</string>
     <string name="settings_fragment_length">Chunk length (bytes)</string>
-    <string name="settings_fragment_length_hint">Value or min-max, e.g. 10-20 (1–1500)</string>
+    <string name="settings_fragment_length_hint">Value or min-max, e.g. 20-50 (1–1500)</string>
     <string name="settings_fragment_length_error">Enter N or A-B within 1–1500</string>
     <string name="settings_fragment_interval">Delay between chunks (ms)</string>
-    <string name="settings_fragment_interval_hint">Value or min-max, e.g. 10-20 (0–1000)</string>
+    <string name="settings_fragment_interval_hint">Value or min-max, e.g. 2-5 (0–1000)</string>
     <string name="settings_fragment_interval_error">Enter N or A-B within 0–1000</string>
     <string name="settings_fragment_max_split">Max chunks (optional)</string>
     <string name="settings_fragment_max_split_hint">Blank for unlimited, or N / A-B (1–1000)</string>

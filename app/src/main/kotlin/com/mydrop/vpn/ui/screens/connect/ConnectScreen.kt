@@ -87,6 +87,7 @@ import com.mydrop.vpn.ui.format.formatBytes
 import com.mydrop.vpn.ui.format.formatRate
 import com.mydrop.vpn.ui.theme.LocalSemanticColors
 import com.mydrop.vpn.ui.theme.MonoStyle
+import com.mydrop.vpn.ui.theme.monoAnnotated
 import kotlinx.coroutines.delay
 
 /** Corner radius of the flow figure and of the statistics panel it grows into. */
@@ -483,12 +484,12 @@ private fun FlowFigure(
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
-                    text = "↓ ${formatRate(state.traffic.downloadBytesPerSecond)}",
+                    text = monoAnnotated("↓ ${formatRate(state.traffic.downloadBytesPerSecond)}"),
                     style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
                     color = semantic.download,
                 )
                 Text(
-                    text = "↑ ${formatRate(state.traffic.uploadBytesPerSecond)}",
+                    text = monoAnnotated("↑ ${formatRate(state.traffic.uploadBytesPerSecond)}"),
                     style = MonoStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
                     color = semantic.upload,
                 )
@@ -533,7 +534,7 @@ private fun LatencyBadge(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = value?.toString() ?: "—",
+                text = monoAnnotated(value?.toString() ?: "—"),
                 style = MonoStyle.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize),
                 color = when {
                     value == null -> MaterialTheme.colorScheme.onSurfaceVariant

@@ -129,6 +129,7 @@ class FailoverWatchdog(
     private var outsideZoneSinceMillis: Long = 0L
     private var lastAutoReturnAttemptAtMillis: Long = 0L
     private var geoSwitchedFromOrdinaryId: String? = null
+    private var geoHandledInsideClusterId: String? = null
 
     /**
      * Moves the tunnel between the ordinary servers and the mobile ones as the phone changes
@@ -266,7 +267,7 @@ class FailoverWatchdog(
                 carrying.id,
                 current.preferOrdinaryOnCellular,
             ) -> {
-                val insideWhitelist = current.geoZonesEnabled &&
+                val insideWhitelist = current.geoZonesActive &&
                     (geoMonitor?.proximity?.value as? ZoneProximity.Inside)?.cluster?.kind == ZoneKind.Whitelist
                 if (transport == NetworkTransport.Cellular && insideWhitelist) {
                     return true
@@ -515,6 +516,7 @@ class FailoverWatchdog(
                         warmedClusterId = null
                         outsideZoneSinceMillis = 0L
                         geoSwitchedFromOrdinaryId = null
+                        geoHandledInsideClusterId = null
                         // The fallback resolver lasts exactly as long as the connection that
                         // needed it. A resolver that was down twenty minutes ago is the likeliest
                         // thing in the world to be up again, and one that stayed swapped until
@@ -535,7 +537,7 @@ class FailoverWatchdog(
                 tunnel.state,
                 tunnel.transport,
                 settings.settings.map {
-                    GeoZoneFlags(it.geoZonesEnabled, it.geoPreemptiveSwitch, it.geoAutoReturnOrdinary)
+                    GeoZoneFlags(it.geoZonesActive, it.geoPreemptiveSwitch, it.geoAutoReturnOrdinary)
                 }.distinctUntilChanged(),
             ) { proximity, vpnState, transport, flags ->
                 val trigger = when (proximity) {
@@ -560,6 +562,9 @@ class FailoverWatchdog(
             }
                 .distinctUntilChanged()
                 .collectLatest { watch ->
+                    if (!watch.cellular || !watch.flags.enabled) {
+                        geoHandledInsideClusterId = null
+                    }
                     if (!watch.connected || !watch.cellular || !watch.flags.enabled) {
                         outsideZoneSinceMillis = 0L
                         return@collectLatest
@@ -571,6 +576,7 @@ class FailoverWatchdog(
                     when (val trigger = watch.trigger) {
                         is GeoTrigger.Approaching -> {
                             outsideZoneSinceMillis = 0L
+                            geoHandledInsideClusterId = null
                             if (!watch.flags.preemptive || mobileIds.isEmpty()) return@collectLatest
                             if (carrying.id in mobileIds) return@collectLatest
                             monitor.requestHighAccuracyBurst(force = false)
@@ -612,7 +618,11 @@ class FailoverWatchdog(
                             outsideZoneSinceMillis = 0L
                             if (trigger.kind != ZoneKind.Whitelist) return@collectLatest
                             if (!watch.flags.preemptive || mobileIds.isEmpty()) return@collectLatest
-                            if (carrying.id in mobileIds) return@collectLatest
+                            if (geoHandledInsideClusterId == trigger.clusterId) return@collectLatest
+                            if (carrying.id in mobileIds) {
+                                geoHandledInsideClusterId = trigger.clusterId
+                                return@collectLatest
+                            }
 
                             val cached = warmedZoneNode?.takeIf { warm ->
                                 warm.node.id in mobileIds &&
@@ -644,14 +654,15 @@ class FailoverWatchdog(
                             logs.info(logRes, chosen.node.name, chosen.millis)
                             confirmedTransport = NetworkTransport.Cellular
                             noteSwitch(chosen.node)
+                            geoHandledInsideClusterId = trigger.clusterId
                             launcher.switchTo(chosen.node)
                         }
 
                         GeoTrigger.Outside -> {
+                            geoHandledInsideClusterId = null
                             if (!watch.flags.autoReturn || mobileIds.isEmpty()) return@collectLatest
                             if (carrying.id !in mobileIds) return@collectLatest
-                            val canReturnOnCellular = currentSettings.preferOrdinaryOnCellular ||
-                                (geoSwitchedFromOrdinaryId != null && !currentSettings.autoFailover)
+                            val canReturnOnCellular = currentSettings.preferOrdinaryOnCellular
                             if (!canReturnOnCellular) return@collectLatest
 
                             val now = SystemClock.elapsedRealtime()
@@ -664,7 +675,7 @@ class FailoverWatchdog(
 
                             if (tunnel.state.value !is VpnState.Connected ||
                                 tunnel.transport.value != NetworkTransport.Cellular ||
-                                !settings.value.geoZonesEnabled ||
+                                !settings.value.geoZonesActive ||
                                 !settings.value.geoAutoReturnOrdinary
                             ) {
                                 return@collectLatest
@@ -744,7 +755,7 @@ class FailoverWatchdog(
     }
 
     private fun geoTraceSummary(): String {
-        if (!settings.value.geoZonesEnabled) return ""
+        if (!settings.value.geoZonesActive) return ""
         val monitor = geoMonitor ?: return ""
         val coord = monitor.lastValidLatLon.value
         val hex = coord?.let { HexCoord.fromLatLon(it.latitude, it.longitude).key } ?: "no-fix"
@@ -982,13 +993,13 @@ class FailoverWatchdog(
                 failures = if (alive || vetoed) 0 else failures + 1
                 if (failures == 1 &&
                     tunnel.transport.value == NetworkTransport.Cellular &&
-                    settings.value.geoZonesEnabled
+                    settings.value.geoZonesActive
                 ) {
                     geoMonitor?.requestHighAccuracyBurst(force = true)
                 }
                 if (alive &&
                     tunnel.transport.value == NetworkTransport.Cellular &&
-                    settings.value.geoZonesEnabled &&
+                    settings.value.geoZonesActive &&
                     tunnel.hasNetwork.value
                 ) {
                     val sample = geoMonitor?.freshSampleOrNull()
@@ -1304,7 +1315,7 @@ class FailoverWatchdog(
         val mobileIds = settings.value.mobileNodeIds
         val currentTransport = tunnel.transport.value
         val wantGeoRecord = currentTransport == NetworkTransport.Cellular &&
-            settings.value.geoZonesEnabled &&
+            settings.value.geoZonesActive &&
             tunnel.hasNetwork.value &&
             geoZones != null &&
             geoMonitor != null

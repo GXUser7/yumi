@@ -1,6 +1,7 @@
 package yumi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	v2net "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -734,5 +736,351 @@ func TestStartWithGuard_TypedNilGuardDoesNotPanicAndAllowsTraffic(t *testing.T) 
 	}
 	if !gotICMP6 {
 		t.Fatal("expected ICMPv6 echo reply when typed-nil guard is passed to startCore")
+	}
+}
+
+type denyingProtector struct{}
+
+func (denyingProtector) Protect(int) bool { return false }
+
+func TestYumiGrpc_NoLeakOnFailedDialSwitchAndStop(t *testing.T) {
+	_ = Stop()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	var accepted atomic.Int64
+	var heldConns sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			heldConns.Lock()
+			conns = append(conns, c)
+			heldConns.Unlock()
+		}
+	}()
+	defer func() {
+		heldConns.Lock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		heldConns.Unlock()
+	}()
+
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	cfgJSON := fmt.Sprintf(`{
+		"log": {"loglevel": "warning"},
+		"inbounds": [
+			{
+				"tag": "tun-in",
+				"protocol": "tun",
+				"settings": {"name": "tun0", "mtu": 1400, "userLevel": 0}
+			}
+		],
+		"outbounds": [
+			{
+				"tag": "proxy-grpc",
+				"protocol": "vless",
+				"settings": {
+					"vnext": [{
+						"address": "127.0.0.1",
+						"port": %d,
+						"users": [{"id": "11111111-1111-1111-1111-111111111111", "encryption": "none"}]
+					}]
+				},
+				"streamSettings": {
+					"network": "grpc",
+					"security": "none",
+					"grpcSettings": {"serviceName": "testsvc", "authority": "grpc.test.local"}
+				}
+			},
+			{"tag": "proxy-b", "protocol": "freedom"},
+			{"tag": "block", "protocol": "blackhole"}
+		],
+		"routing": {
+			"balancers": [{"tag": "proxy", "selector": ["proxy-"]}],
+			"rules": []
+		}
+	}`, tcpAddr.Port)
+
+	ep := channel.New(16, 1400, "")
+	defer ep.Close()
+	if err := startCore(cfgJSON, 0, "proxy-b", testProtector{}, &testGuard{allow: true}, ep); err != nil {
+		t.Fatalf("startCore failed: %v", err)
+	}
+	defer func() { _ = Stop() }()
+
+	// 1. Failed gRPC probe must fail within timeout and leave 0 lingering ClientConns or retries.
+	start := time.Now()
+	raw := MeasureOutbounds("proxy-grpc", "http://example.com/generate_204", 350)
+	elapsed := time.Since(start)
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("failed gRPC probe took too long: %v", elapsed)
+	}
+	var delays map[string]int64
+	if err := json.Unmarshal([]byte(raw), &delays); err != nil {
+		t.Fatalf("unmarshal MeasureOutbounds result %q: %v", raw, err)
+	}
+	if delays["proxy-grpc"] != -1 {
+		t.Fatalf("expected proxy-grpc=-1, got %v", delays)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && yumiGrpcConnCount() != 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cnt := yumiGrpcConnCount(); cnt != 0 {
+		t.Fatalf("expected 0 active yumi-grpc ClientConns after failed dial, got %d", cnt)
+	}
+
+	afterProbe := accepted.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if afterWait := accepted.Load(); afterWait != afterProbe {
+		t.Fatalf("gRPC kept reconnecting after failed dial: before=%d after=%d", afterProbe, afterWait)
+	}
+
+	// 2. Switching away from pinned gRPC outbound while active evicts ClientConn immediately.
+	if err := SelectOutbound("proxy-grpc"); err != nil {
+		t.Fatalf("SelectOutbound proxy-grpc failed: %v", err)
+	}
+	probeErrCh := make(chan error, 1)
+	go func() {
+		_, err := ProbeHTTP("http://example.com/generate_204", 4000, false)
+		probeErrCh <- err
+	}()
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && yumiGrpcConnCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cnt := yumiGrpcConnCount(); cnt != 1 {
+		t.Fatalf("expected 1 active yumi-grpc ClientConn during dial, got %d", cnt)
+	}
+	if err := SelectOutbound("proxy-b"); err != nil {
+		t.Fatalf("SelectOutbound proxy-b failed: %v", err)
+	}
+	if cnt := yumiGrpcConnCount(); cnt != 0 {
+		t.Fatalf("expected 0 yumi-grpc ClientConns after SelectOutbound switch, got %d", cnt)
+	}
+	// vless/outbound wraps Dial in retry.ExponentialBackoff(5, 200), whose uncancellable sleeps
+	// total 0+200+400+600+800 = 2000ms even when dialYumiGRPC rejects stale retries in 0ms.
+	select {
+	case err := <-probeErrCh:
+		if err == nil {
+			t.Fatal("expected aborted gRPC ProbeHTTP to return error")
+		}
+	case <-time.After(2800 * time.Millisecond):
+		t.Fatal("in-flight gRPC ProbeHTTP did not abort before 4000ms timeout on outbound switch")
+	}
+
+	afterSwitch := accepted.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if afterWait := accepted.Load(); afterWait != afterSwitch {
+		t.Fatalf("gRPC reconnected after outbound switch: before=%d after=%d", afterSwitch, afterWait)
+	}
+
+	// 3. Stop() during an in-flight gRPC probe cancels and stops all reconnects immediately.
+	done := make(chan string, 1)
+	go func() {
+		done <- MeasureOutbounds("proxy-grpc", "http://example.com/generate_204", 3000)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	stopStart := time.Now()
+	if err := Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	if cnt := yumiGrpcConnCount(); cnt != 0 {
+		t.Fatalf("expected 0 yumi-grpc ClientConns after Stop(), got %d", cnt)
+	}
+	select {
+	case <-done:
+	case <-time.After(1000 * time.Millisecond):
+		t.Fatal("in-flight gRPC probe did not abort promptly on Stop()")
+	}
+	if time.Since(stopStart) > 1000*time.Millisecond {
+		t.Fatalf("Stop() teardown took too long: %v", time.Since(stopStart))
+	}
+
+	afterStop := accepted.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if afterStopWait := accepted.Load(); afterStopWait != afterStop {
+		t.Fatalf("gRPC reconnected after Stop: before=%d after=%d", afterStop, afterStopWait)
+	}
+}
+
+func TestYumiSystemDialer_EnforcesProtectAndCancelsOnStop(t *testing.T) {
+	_ = Stop()
+
+	var listenerHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		listenerHits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	// 1. Protector returning false must abort outbound dials instead of falling through.
+	ep1 := channel.New(16, 1400, "")
+	defer ep1.Close()
+	if err := startCore(testConfigJSON("", "", false), 0, "proxy-a", denyingProtector{}, &testGuard{allow: true}, ep1); err != nil {
+		t.Fatalf("startCore(denyingProtector) failed: %v", err)
+	}
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+	if _, err := ProbeHTTP(srv.URL, 1000, false); err == nil {
+		_ = Stop()
+		t.Fatal("expected ProbeHTTP to fail when VpnService.Protect returns false")
+	}
+	if tc, err := DialTunnel("tcp", hostPort, 1000); err == nil {
+		tc.SetReadTimeout(500)
+		_, _ = tc.Write([]byte("GET / HTTP/1.0\r\n\r\n"))
+		data, readErr := tc.Read(64)
+		_ = tc.Close()
+		if len(data) != 0 {
+			_ = Stop()
+			t.Fatalf("expected 0 bytes when Protect returns false, got %q (readErr=%v)", data, readErr)
+		}
+	}
+	if listenerHits.Load() != 0 {
+		_ = Stop()
+		t.Fatalf("expected 0 connections when Protect refuses socket, got %d", listenerHits.Load())
+	}
+	_ = Stop()
+
+	// 2. ContextWithoutCancel carrying yumiGenCtxKey must cancel on Stop().
+	ep2 := channel.New(16, 1400, "")
+	defer ep2.Close()
+	if err := startCore(testConfigJSON("", "", false), 0, "proxy-a", testProtector{}, &testGuard{allow: true}, ep2); err != nil {
+		t.Fatalf("startCore(testProtector) failed: %v", err)
+	}
+	genCtx := genCtxForDial(context.Background())
+	if genCtx == nil {
+		_ = Stop()
+		t.Fatal("expected active genCtx while core is running")
+	}
+	detached := context.WithoutCancel(withGenCtxValue(context.Background(), genCtx))
+
+	if err := Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	select {
+	case <-genCtx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected Stop() to cancel genCtx promptly")
+	}
+
+	dest, err := v2net.ParseDestination("tcp:" + hostPort)
+	if err != nil {
+		t.Fatalf("ParseDestination failed: %v", err)
+	}
+	dialStart := time.Now()
+	_, err = (&yumiSystemDialer{}).Dial(detached, v2net.AnyIP, dest, nil)
+	if err == nil {
+		t.Fatal("expected dial on stopped generation detached context to fail")
+	}
+	if time.Since(dialStart) > 200*time.Millisecond {
+		t.Fatalf("expected immediate cancellation on stopped genCtx, took %v", time.Since(dialStart))
+	}
+	if listenerHits.Load() != 0 {
+		t.Fatalf("expected 0 socket connections after Stop() cancelled genCtx, got %d", listenerHits.Load())
+	}
+}
+
+func TestMeasureOutbounds_CancelsOnTimeoutAndStop(t *testing.T) {
+	_ = Stop()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	var heldMu sync.Mutex
+	var heldConns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			heldConns = append(heldConns, c)
+			heldMu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		heldMu.Lock()
+		for _, c := range heldConns {
+			_ = c.Close()
+		}
+		heldMu.Unlock()
+	})
+
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	cfgJSON := fmt.Sprintf(`{
+		"log": {"loglevel": "warning"},
+		"inbounds": [
+			{
+				"tag": "tun-in",
+				"protocol": "tun",
+				"settings": {"name": "tun0", "mtu": 1400, "userLevel": 0}
+			}
+		],
+		"outbounds": [
+			{
+				"tag": "proxy-a",
+				"protocol": "socks",
+				"settings": {"servers": [{"address": "127.0.0.1", "port": %d}]}
+			},
+			{"tag": "block", "protocol": "blackhole"}
+		],
+		"routing": {
+			"balancers": [{"tag": "proxy", "selector": ["proxy-"]}],
+			"rules": []
+		}
+	}`, tcpAddr.Port)
+
+	ep := channel.New(16, 1400, "")
+	defer ep.Close()
+	if err := startCore(cfgJSON, 0, "proxy-a", testProtector{}, &testGuard{allow: true}, ep); err != nil {
+		t.Fatalf("startCore failed: %v", err)
+	}
+	defer func() { _ = Stop() }()
+
+	// 1. Short timeout cancels cleanly.
+	start := time.Now()
+	raw := MeasureOutbounds("proxy-a", "http://example.com/generate_204", 250)
+	if time.Since(start) > time.Second {
+		t.Fatalf("MeasureOutbounds timeout exceeded 1s: %v", time.Since(start))
+	}
+	var delays map[string]int64
+	if err := json.Unmarshal([]byte(raw), &delays); err != nil || delays["proxy-a"] != -1 {
+		t.Fatalf("expected proxy-a=-1 on timeout, got %q", raw)
+	}
+
+	// 2. Long timeout unblocks promptly on Stop().
+	resCh := make(chan string, 1)
+	stopStart := time.Now()
+	go func() {
+		resCh <- MeasureOutbounds("proxy-a", "http://example.com/generate_204", 5000)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if err := Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	select {
+	case raw = <-resCh:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("MeasureOutbounds did not return promptly after Stop()")
+	}
+	if time.Since(stopStart) > 1500*time.Millisecond {
+		t.Fatalf("MeasureOutbounds took too long after Stop(): %v", time.Since(stopStart))
+	}
+	if err := json.Unmarshal([]byte(raw), &delays); err != nil || delays["proxy-a"] != -1 {
+		t.Fatalf("expected proxy-a=-1 after Stop(), got %q", raw)
 	}
 }

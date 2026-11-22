@@ -54,7 +54,7 @@ class TunnelSettingsApplier(
      * and forgetting it here is a visible omission in one place, instead of a setting that quietly
      * stops working.
      */
-    private data class Baked(
+    internal data class Baked(
         // Names alone miss a reinstall: Builder retains the old UID until re-established.
         val splitTunnelRules: SplitTunnelRules,
         val bypassLan: Boolean,
@@ -72,6 +72,7 @@ class TunnelSettingsApplier(
         val fragmentLength: String,
         val fragmentInterval: String,
         val fragmentMaxChunks: String,
+        val autoFailover: Boolean,
     )
 
     private fun AppSettings.baked() = Baked(
@@ -91,6 +92,7 @@ class TunnelSettingsApplier(
         fragmentLength = fragmentLength,
         fragmentInterval = fragmentInterval,
         fragmentMaxChunks = fragmentMaxChunks,
+        autoFailover = autoFailover,
     )
 
     fun start() {
@@ -100,8 +102,13 @@ class TunnelSettingsApplier(
                 .distinctUntilChanged()
                 .flowOn(Dispatchers.IO)
                 .collectLatest { current ->
+                    val previous = known
                     // The first value is whatever the app started with, not a change to it.
-                    if (known == null) {
+                    if (previous == null) {
+                        known = current
+                        return@collectLatest
+                    }
+                    if (!shouldReload(previous, current)) {
                         known = current
                         return@collectLatest
                     }
@@ -121,11 +128,21 @@ class TunnelSettingsApplier(
         }
     }
 
-    private companion object {
+    internal companion object {
         /**
          * Long enough to cover somebody typing an MTU or ticking their way down a list of
          * applications, short enough that a single toggle feels like it took effect immediately.
          */
         const val SETTLE_MILLIS = 1_500L
+
+        internal fun shouldReload(previous: Baked, current: Baked): Boolean {
+            if (previous == current) return false
+            // Turning failover OFF stops the watchdog/geo monitor reactively without tearing down
+            // active sockets; turning it ON needs a reload so the core loads the switchable group.
+            if (previous.autoFailover && !current.autoFailover && current.copy(autoFailover = true) == previous) {
+                return false
+            }
+            return true
+        }
     }
 }

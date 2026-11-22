@@ -460,11 +460,20 @@ object ProxyUriParser {
                 RealityOptions(
                     publicKey = normalizeRealityKey(it),
                     shortId = q("sid", "short-id", "shortid", "short_id").orEmpty(),
-                    spiderX = q("spx", "spider-x", "spiderx", "spider_x", "path") ?: "/",
+                    spiderX = normalizeSpiderX(q("spx", "spider-x", "spiderx", "spider_x")),
                     mldsa65Verify = q("pqv", "mldsa65verify", "mldsa65_verify", "mldsa65-verify").orEmpty(),
                 )
             },
         )
+    }
+
+    private fun normalizeSpiderX(raw: String?): String {
+        val trimmed = raw?.trim().orEmpty()
+        return when {
+            trimmed.isEmpty() -> "/"
+            trimmed.startsWith('/') -> trimmed
+            else -> "/$trimmed"
+        }
     }
 
     private fun ParsedUri.multiplex(): MultiplexOptions? {

@@ -376,10 +376,10 @@
     <string name="fragment_scope_all_tcp">Все TCP</string>
     <string name="fragment_scope_all_tcp_description">Фрагментирует все TCP-прокси, включая без TLS</string>
     <string name="settings_fragment_length">Длина фрагмента (байт)</string>
-    <string name="settings_fragment_length_hint">Число или диапазон, например 10-20 (1–1500)</string>
+    <string name="settings_fragment_length_hint">Число или диапазон, например 20-50 (1–1500)</string>
     <string name="settings_fragment_length_error">Укажите N или A-B от 1 до 1500</string>
     <string name="settings_fragment_interval">Интервал между частями (мс)</string>
-    <string name="settings_fragment_interval_hint">Число или диапазон, например 10-20 (0–1000)</string>
+    <string name="settings_fragment_interval_hint">Число или диапазон, например 2-5 (0–1000)</string>
     <string name="settings_fragment_interval_error">Укажите N или A-B от 0 до 1000</string>
     <string name="settings_fragment_max_split">Макс. частей (необязательно)</string>
     <string name="settings_fragment_max_split_hint">Пусто — без лимита, или N / A-B (1–1000)</string>
