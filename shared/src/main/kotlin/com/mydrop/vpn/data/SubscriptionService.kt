@@ -5,6 +5,7 @@ import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.SubscriptionUpdate
+import com.mydrop.vpn.core.model.TransportOptions
 import com.mydrop.vpn.core.net.resolveSafeDirectRedirect
 import com.mydrop.vpn.core.parse.ProviderProfileParser
 import com.mydrop.vpn.core.parse.SubscriptionBody
@@ -283,7 +284,9 @@ class SubscriptionService(
             val answered = response?.takeIf { it.code in 200..299 }
             val body = answered?.let { SubscriptionParser.parse(it.body, subscription.id) }
             if (profiles == null) profiles = answered?.let { ProviderProfileParser.parse(it.body) }
-            val groups = (body as? SubscriptionBody.Nodes)?.nodes.orEmpty().filter { it.group != null }
+            val parsedNodes = (body as? SubscriptionBody.Nodes)?.nodes.orEmpty()
+            val groups = parsedNodes.filter { it.group != null }
+            val extraNodes = parsedNodes.filter { it.group == null && it.hasJsonOnlyExtras() }
             logs.trace(
                 "YumiSub",
                 "${subscription.name}: documents by $how: " + when {
@@ -293,9 +296,20 @@ class SubscriptionService(
                     else -> "${body.nodes.size} servers, ${groups.size} auto-select"
                 },
             )
-            if (groups.isNotEmpty()) return DocumentsAnswer(withGroups(links, groups), profiles)
+            if (groups.isNotEmpty() || extraNodes.isNotEmpty()) {
+                val merged = mergeJsonDetails(links, groups, extraNodes)
+                return DocumentsAnswer(merged, profiles)
+            }
         }
         return profiles?.let { DocumentsAnswer(nodes = null, profiles = it) }
+    }
+
+    private fun ProxyNode.hasJsonOnlyExtras(): Boolean {
+        val grpc = transport as? TransportOptions.Grpc
+        return fragment != null ||
+            (transport as? TransportOptions.Xhttp)?.extraJson != null ||
+            grpc?.multiMode == true ||
+            grpc?.authority?.isNotBlank() == true
     }
 
     /** What asking for documents produced; see [autoSelectVariant]. */
@@ -305,11 +319,48 @@ class SubscriptionService(
         val profiles: Map<String, ProviderProfile>?,
     )
 
-    /** [links] with each of [groups] in the place of the link named after it; see [autoSelectVariant]. */
-    private fun withGroups(links: List<ProxyNode>, groups: List<ProxyNode>): List<ProxyNode> {
-        val byName = groups.associateBy { it.name }
-        val names = links.mapTo(HashSet()) { it.name }
-        return links.map { link -> byName[link.name] ?: link } + groups.filter { it.name !in names }
+    /**
+     * [links] with each of [groups] in the place of the link named after it, plus any JSON-only
+     * anti-DPI details (`fragment`, `xhttp.extra`, `grpc.multiMode`) merged onto matching single
+     * links without altering existing node ids.
+     */
+    private fun mergeJsonDetails(
+        links: List<ProxyNode>,
+        groups: List<ProxyNode>,
+        extraNodes: List<ProxyNode>,
+    ): List<ProxyNode> {
+        val groupByName = groups.associateBy { it.name.trim() }
+        val extrasByName = extraNodes.associateBy { it.name.trim() }
+        val names = links.mapTo(HashSet()) { it.name.trim() }
+        val updated = links.map { link ->
+            val key = link.name.trim()
+            groupByName[key] ?: extrasByName[key]?.let { doc -> mergeSingleExtras(link, doc) } ?: link
+        }
+        return updated + groups.filter { it.name.trim() !in names }
+    }
+
+    private fun mergeSingleExtras(link: ProxyNode, doc: ProxyNode): ProxyNode {
+        val mergedFragment = link.fragment ?: doc.fragment
+        val mergedTransport = when {
+            link.transport is TransportOptions.Xhttp &&
+                link.transport.extraJson == null &&
+                doc.transport is TransportOptions.Xhttp &&
+                doc.transport.extraJson != null ->
+                link.transport.copy(extraJson = doc.transport.extraJson)
+            link.transport is TransportOptions.Grpc &&
+                doc.transport is TransportOptions.Grpc -> {
+                val mergedMulti = link.transport.multiMode || doc.transport.multiMode
+                val mergedAuthority = link.transport.authority.ifBlank { doc.transport.authority }
+                if (mergedMulti == link.transport.multiMode && mergedAuthority == link.transport.authority) {
+                    link.transport
+                } else {
+                    link.transport.copy(multiMode = mergedMulti, authority = mergedAuthority)
+                }
+            }
+            else -> link.transport
+        }
+        if (mergedFragment == link.fragment && mergedTransport == link.transport) return link
+        return link.copy(fragment = mergedFragment, transport = mergedTransport)
     }
 
     private data class Response(

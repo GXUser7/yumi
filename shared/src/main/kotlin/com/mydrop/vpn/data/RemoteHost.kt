@@ -322,6 +322,17 @@ class RemoteHost(
         val cleanDirectDns = patch.directDns?.trim()?.takeIf { it.isNotBlank() && it.length <= 256 }
         val validMtu = patch.mtu?.takeIf { it in 576..9000 }
         val validInterval = patch.subscriptionUpdateMinutes?.takeIf { it in 15..10080 }
+        val validFragmentLength = patch.fragmentLength
+            ?.let { AppSettings.normalizeRange(it, AppSettings.MIN_FRAGMENT_LENGTH, AppSettings.MAX_FRAGMENT_LENGTH) }
+        val validFragmentInterval = patch.fragmentInterval
+            ?.let { AppSettings.normalizeRange(it, AppSettings.MIN_FRAGMENT_INTERVAL, AppSettings.MAX_FRAGMENT_INTERVAL) }
+        val validFragmentMaxChunks = patch.fragmentMaxChunks?.let { raw ->
+            if (raw.isBlank()) "" else AppSettings.normalizeRange(
+                raw,
+                AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+            )
+        }
 
         settings.update { cur ->
             cur.copy(
@@ -344,6 +355,12 @@ class RemoteHost(
                 remoteDns = cleanRemoteDns ?: cur.remoteDns,
                 directDns = cleanDirectDns ?: cur.directDns,
                 mtu = validMtu ?: cur.mtu,
+                tlsFingerprint = patch.tlsFingerprint ?: cur.tlsFingerprint,
+                fragmentMode = patch.fragmentMode ?: cur.fragmentMode,
+                fragmentScope = patch.fragmentScope ?: cur.fragmentScope,
+                fragmentLength = validFragmentLength ?: cur.fragmentLength,
+                fragmentInterval = validFragmentInterval ?: cur.fragmentInterval,
+                fragmentMaxChunks = validFragmentMaxChunks ?: cur.fragmentMaxChunks,
             )
         }
 
@@ -395,6 +412,12 @@ private fun AppSettings.toRemoteSettings(): RemoteSettings = RemoteSettings(
     remoteDns = remoteDns,
     directDns = directDns,
     mtu = mtu,
+    tlsFingerprint = tlsFingerprint,
+    fragmentMode = fragmentMode,
+    fragmentScope = fragmentScope,
+    fragmentLength = fragmentLength,
+    fragmentInterval = fragmentInterval,
+    fragmentMaxChunks = fragmentMaxChunks,
 )
 
 private val BRACKETED_IPV6_PATTERN = Regex("""\[([0-9a-fA-F:.]+)(?:%[^\]\s]+)?\](?::\d{1,5})?""")

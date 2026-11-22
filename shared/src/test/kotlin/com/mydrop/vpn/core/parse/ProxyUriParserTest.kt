@@ -386,4 +386,27 @@ class ProxyUriParserTest {
         )
         assertEquals("decoy.com", explicitNode.tls?.serverName)
     }
+
+    @Test
+    fun `vless parses encryption, pqv, ech, grpc multi mode, and xhttp extra`() {
+        val pqKey = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 9 })
+        val pqEncryption = "mlkem768x25519plus.native.1rtt.$pqKey"
+        val extraEncoded = "%7B%22xPaddingBytes%22%3A%22100-200%22%7D"
+
+        val xhttpUri = "vless://uuid-1@xh.example.com:443?security=tls&sni=xh.example.com" +
+            "&type=xhttp&path=%2Fapi&encryption=$pqEncryption&ech=ECHKEYDATA&extra=$extraEncoded#XH"
+        val xhttpNode = requireNotNull(ProxyUriParser.parse(xhttpUri))
+        assertEquals(pqEncryption, (xhttpNode.settings as ProxySettings.Vless).encryption)
+        assertEquals("ECHKEYDATA", xhttpNode.tls?.echConfigList)
+        val xhttp = xhttpNode.transport as TransportOptions.Xhttp
+        assertEquals("""{"xPaddingBytes":"100-200"}""", xhttp.extraJson)
+
+        val grpcUri = "vless://uuid-2@gr.example.com:443?security=reality&pbk=PUBKEY&pqv=PQVKEY" +
+            "&type=grpc&serviceName=tun&mode=multi&authority=grpc.example.com#GR"
+        val grpcNode = requireNotNull(ProxyUriParser.parse(grpcUri))
+        assertEquals("PQVKEY", grpcNode.tls?.reality?.mldsa65Verify)
+        val grpc = grpcNode.transport as TransportOptions.Grpc
+        assertTrue(grpc.multiMode)
+        assertEquals("grpc.example.com", grpc.authority)
+    }
 }

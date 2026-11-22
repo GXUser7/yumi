@@ -63,8 +63,9 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 
 - **One button** brings up a tunnel on the [Xray](https://github.com/XTLS/Xray-core) core.
 - **Changing servers on a live tunnel does not break the connection:** the servers live in the configuration as a group, and moving between them is a pointer swap inside the core. The DNS cache and open connections stay put; the traffic counters and session timer do not reset.
+- **Live DPI circumvention tuning:** global browser-fingerprint override (**uTLS** — 10 profiles plus Auto from the link) and **packet fragmentation** (`TLS Hello` or all packets, built-in presets plus manual length, interval and chunk limit) apply on a running tunnel without manual reconnection.
 - **Routing:** everything through the tunnel, everything direct, or by rules — Russian sites and addresses go around the VPN.
-- **A quick settings tile**, auto-start on boot and support for "Always-on VPN".
+- **A quick settings tile and 1×1 home-screen widget**, auto-start on boot and support for "Always-on VPN".
 
 </td>
     <td width="38%" align="center"><img src="docs/screenshots/tunnel-off.png" width="260" alt="Tunnel off"></td>
@@ -79,8 +80,9 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 ### Servers and subscriptions
 
 - **You can add almost anything:** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `wireguard://`, `socks://`, `http://` — by pasting or by QR code; everything except `http://` is also caught when you tap such a link in another app.
-- **Subscriptions in any format panels use:** a list of links (base64 or plain text), **Clash YAML**, **Xray/v2ray JSON**, **SIP008**. Say what you are pasting, or leave the detection to the app.
-- **Transports:** TCP/RAW, WebSocket, gRPC, HTTPUpgrade, **XHTTP** (splithttp), mKCP, QUIC — with TLS, REALITY, Vision and browser-fingerprint mimicry (uTLS).
+- **Subscriptions in any format panels use:** a list of links (base64 or plain text), **Clash YAML**, **Xray/v2ray JSON**, **SIP008**. Say what you are pasting, or leave the detection to the app — including panels that deliver fragmentation and transport extras for Happ.
+- **Transports and options:** TCP/RAW, WebSocket, gRPC (`multiMode` and `authority`), HTTPUpgrade, **XHTTP** (splithttp, `extra` and `downloadSettings`), mKCP, QUIC — with TLS, post-quantum VLESS `encryption`, REALITY (`mldsa65Verify`), ECH, Vision, browser-fingerprint mimicry (uTLS) and provider-supplied fragmentation.
+- **Filters and persisted selection:** include or exclude countries and protocols; latency checks, fastest-server auto-pick and automatic failover all respect active filters, while collapsed subscriptions are skipped during bulk probes.
 - **Honest about what the core cannot do:** TUIC, AnyTLS, ShadowTLS, Hysteria v1, SSH and sing-box JSON subscriptions are filtered out when added and written to the journal, rather than sitting in the list quietly not working.
 
 </td>
@@ -94,8 +96,9 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 ### It fixes itself
 
 - **A check through the tunnel:** every twenty seconds the app pulls a page through it — a server can answer on its port while carrying nothing at all. Two failures in a row, the second three seconds after the first, and the tunnel moves to a working server from a replacement list you pick by hand.
-- **It does not blame a server for somebody else's fault:** with no internet (a lift, a tube station) the checks pause, a change of network closes the old connections at once, and when nothing answers at all the app stays put.
+- **It does not blame a server for somebody else's fault:** with no internet (a lift, a tube station) the checks pause, a change of network closes the old connections at once, stalled sockets reset after sleep or Doze, and when nothing answers at all the app stays put.
 - **Your own servers for mobile data:** on a cellular network the tunnel moves onto these and stays within them; back on Wi-Fi it returns to the ordinary list.
+- **Whitelist geo-zones and city map:** maps cellular drop areas locally on the device (with optional background location and cell-tower anchors under GPS jamming), switches early onto the **mobile server list**, and returns to an ordinary server outside zones. **Important:** geo-zone switching will not work without a mobile server list configured.
 - **A fallback resolver:** if your DNS — or, with provider routing on, the provider's — stops answering, the app moves to `1.1.1.1` until the next reconnection, and says so.
 - **Notices about what it repaired by itself** — a replaced server, a replaced resolver, an emptied list, a new version; four separate switches.
 
@@ -152,7 +155,7 @@ happens — which is exactly why nobody learns that it did.
 - **"Direct" plus your own DNS** — no VPN, but the resolver you want: traffic leaves from your ordinary address while names are resolved by the service you picked.
 - **Provider routing** (a switch in settings): when a subscription sends its own rules and DNS — the way panels send them to Happ — those go first and your own settings after them. A rule the core could not read is left out on its own instead of taking the tunnel down.
 - **Routing databases** (`geoip.dat` and `geosite.dat`, some 24 MB) are fetched on their own after the first connection; settings show whether they are on disk, with a button to refresh. Until they are there, the country rules are left out of the configuration — and that is shown rather than hidden.
-- **Also:** local network bypass, ad-domain blocking and per-app split tunnelling.
+- **Also:** local network bypass, ad-domain blocking and per-app split tunnelling with IP-leak protection.
 
 ### And also
 
@@ -183,9 +186,9 @@ refresh as soon as the app opens.
 ### The phone as a remote
 
 Once, scan the code from Settings → Phone remote on the television through Subscriptions → Add →
-Scan on the phone. From then on the phone finds the television on the network by itself, and a
-remote button appears on the tunnel screen: switch the tunnel on and off and change the server
-without getting up from the sofa.
+Scan on the phone. You can pair multiple televisions: the phone finds them on the local network on
+its own, and the remote gives you connection controls, servers, subscriptions and TV settings
+(including uTLS fingerprint and fragmentation) without getting up from the sofa.
 
 <p align="center">
   <img src="docs/screenshots/tv-remote-pairing.png" width="420" alt="Pairing code on the television">
@@ -202,6 +205,10 @@ without getting up from the sofa.
 **The app collects no statistics and sends no data about you anywhere.** Servers, subscriptions and
 keys live only on the phone: Android backup is turned off for them, so they reach neither Google's
 cloud nor a new handset during a device-to-device transfer.
+
+Geo-zones, coordinates and cell-tower anchors — if you turn on the city zones map — are also
+processed and stored strictly on the device; they never leave the phone and are used solely to switch
+servers on cellular networks.
 
 The connections it makes on its own: refreshing your subscriptions, measuring latency to your
 servers and — if you start it — measuring speed through `speed.cloudflare.com`. All of them go
@@ -238,9 +245,10 @@ There is also a Windows version — [yumi-desktop](https://github.com/GXUser7/yu
 
 ```bash
 export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2
-./gradlew :app:assembleDebug          # phone
-./gradlew :tv:assembleDebug           # television
-./gradlew :shared:testDebugUnitTest   # the tests live here; :app and :tv hold none
+./gradlew :app:assembleDebug                                              # phone
+./gradlew :tv:assembleDebug                                               # television
+./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest :tv:testDebugUnitTest
+cd core-xray && go test ./...                                             # end-to-end core tests
 ```
 
 **The core is not in the repository.** Xray publishes no mobile binding, so this one lives here:
@@ -257,6 +265,7 @@ failures are caught, where the geo rules come from, and how all of it is checked
 The core is [Xray-core](https://github.com/XTLS/Xray-core) by XTLS. The routing databases come
 from [v2fly/geoip](https://github.com/v2fly/geoip) and
 [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community).
+Special thanks to the contributors and testers listed on the in-app Gratitude Board in Settings.
 
 ## License
 

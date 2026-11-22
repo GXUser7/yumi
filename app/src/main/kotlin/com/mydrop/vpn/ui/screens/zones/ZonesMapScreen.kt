@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -140,11 +141,13 @@ fun ZonesMapScreen(
     locationSample: GeoSample?,
     lastValidCoord: LatLon?,
     hasLocationPermission: Boolean,
+    hasMobileNodes: Boolean,
     spoofDetected: Boolean,
     mapTiles: MapTileStore,
     nodes: List<ProxyNode>,
     onSetMapActive: (Boolean) -> Unit,
     onPermissionUpdated: () -> Unit,
+    onOpenMobileNodes: () -> Unit,
     onAddManualZone: (latitude: Double, longitude: Double) -> Unit,
     onTogglePinCluster: (String) -> Unit,
     onRemoveCluster: (String) -> Unit,
@@ -240,6 +243,13 @@ fun ZonesMapScreen(
                         ),
                     )
                 },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        AnimatedVisibility(visible = !hasMobileNodes) {
+            MobileNodesMissingBanner(
+                onOpenMobileNodes = onOpenMobileNodes,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
         }
@@ -922,6 +932,54 @@ private fun PermissionBanner(onGrant: () -> Unit, modifier: Modifier = Modifier)
             }
             Button(onClick = onGrant) {
                 Text(stringResource(R.string.zones_permission_grant))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileNodesMissingBanner(
+    onOpenMobileNodes: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_geozones_mobile_missing_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.settings_geozones_mobile_missing_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.88f),
+                )
+            }
+            Button(
+                onClick = onOpenMobileNodes,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Text(stringResource(R.string.zones_mobile_missing_action))
             }
         }
     }

@@ -1,11 +1,14 @@
 package com.mydrop.vpn.remote
 
 import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.Visualizer
 import javax.crypto.AEADBadTagException
 import kotlinx.serialization.encodeToString
@@ -277,5 +280,43 @@ class RemoteProtocolTest {
         assertNull(decoded.subscriptions)
         assertEquals(1, decoded.nodes?.size)
         assertEquals(Protocol.VLESS, decoded.nodes?.single()?.protocol)
+    }
+
+    @Test
+    fun `remote settings and patch round-trip uTLS and fragment fields with legacy backward compat`() {
+        val settings = RemoteSettings(
+            tlsFingerprint = TlsFingerprintOverride.Firefox,
+            fragmentMode = FragmentMode.TcpSegments,
+            fragmentScope = FragmentScope.AllTcp,
+            fragmentLength = "1-5",
+            fragmentInterval = "2-8",
+            fragmentMaxChunks = "12",
+        )
+        val encoded = RemoteCrypto.json.encodeToString(settings)
+        val decoded = RemoteCrypto.json.decodeFromString(RemoteSettings.serializer(), encoded)
+        assertEquals(settings, decoded)
+
+        val patch = RemoteSettingsPatch(
+            tlsFingerprint = TlsFingerprintOverride.Randomized,
+            fragmentMode = FragmentMode.TlsHello,
+            fragmentScope = FragmentScope.TlsOnly,
+            fragmentLength = "10-20",
+            fragmentInterval = "5-10",
+            fragmentMaxChunks = "",
+        )
+        val encodedPatch = RemoteCrypto.json.encodeToString(patch)
+        val decodedPatch = RemoteCrypto.json.decodeFromString(RemoteSettingsPatch.serializer(), encodedPatch)
+        assertEquals(patch, decodedPatch)
+
+        val legacy = RemoteCrypto.json.decodeFromString(
+            RemoteSettings.serializer(),
+            """{"routingMode":"Rules","mtu":1500}""",
+        )
+        assertEquals(TlsFingerprintOverride.Auto, legacy.tlsFingerprint)
+        assertEquals(FragmentMode.Off, legacy.fragmentMode)
+        assertEquals(FragmentScope.TlsAndReality, legacy.fragmentScope)
+        assertEquals("10-20", legacy.fragmentLength)
+        assertEquals("10-20", legacy.fragmentInterval)
+        assertEquals("", legacy.fragmentMaxChunks)
     }
 }

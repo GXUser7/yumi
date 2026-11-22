@@ -38,8 +38,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -52,9 +57,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.data.RemoteConsoleState
 import com.mydrop.vpn.data.RemoteLinkState
@@ -64,10 +72,13 @@ import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.TonalIconButton
 import com.mydrop.vpn.ui.screens.settings.ChoiceButton
 import com.mydrop.vpn.ui.screens.settings.DependentGroup
+import com.mydrop.vpn.ui.screens.settings.FragmentPreset
+import com.mydrop.vpn.ui.screens.settings.FragmentationSettings
 import com.mydrop.vpn.ui.screens.settings.GroupDivider
 import com.mydrop.vpn.ui.screens.settings.NavigationRow
 import com.mydrop.vpn.ui.screens.settings.SettingsSection
 import com.mydrop.vpn.ui.screens.settings.SwitchRow
+import com.mydrop.vpn.ui.screens.settings.TlsFingerprintSetting
 import com.mydrop.vpn.ui.screens.settings.ValidatedField
 import com.mydrop.vpn.ui.theme.scheme
 
@@ -395,6 +406,87 @@ internal fun RemoteSettingsTab(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             )
                         }
+                        Spacer(Modifier.height(16.dp))
+                        TlsFingerprintSetting(
+                            selected = tvSettings.tlsFingerprint,
+                            onSelect = { fp ->
+                                if (online && tvSettings.tlsFingerprint != fp) {
+                                    onPatchSettings(RemoteSettingsPatch(tlsFingerprint = fp))
+                                }
+                            },
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        var presetEpoch by remember(bond.hostId) { mutableIntStateOf(0) }
+                        var pendingPreset by remember(bond.hostId) { mutableStateOf<FragmentPreset?>(null) }
+                        LaunchedEffect(
+                            tvSettings.fragmentLength,
+                            tvSettings.fragmentInterval,
+                            tvSettings.fragmentMaxChunks,
+                        ) {
+                            val activePreset = pendingPreset
+                            if (activePreset != null &&
+                                tvSettings.fragmentLength == activePreset.length &&
+                                tvSettings.fragmentInterval == activePreset.interval &&
+                                tvSettings.fragmentMaxChunks == activePreset.maxChunks
+                            ) {
+                                pendingPreset = null
+                            }
+                        }
+                        FragmentationSettings(
+                            mode = tvSettings.fragmentMode,
+                            scope = tvSettings.fragmentScope,
+                            length = pendingPreset?.length ?: tvSettings.fragmentLength,
+                            interval = pendingPreset?.interval ?: tvSettings.fragmentInterval,
+                            maxChunks = pendingPreset?.maxChunks ?: tvSettings.fragmentMaxChunks,
+                            resetKey = Pair(bond.hostId, presetEpoch),
+                            onModeChange = { mode ->
+                                if (online && tvSettings.fragmentMode != mode) {
+                                    onPatchSettings(RemoteSettingsPatch(fragmentMode = mode))
+                                }
+                            },
+                            onScopeChange = { scope ->
+                                if (online && tvSettings.fragmentScope != scope) {
+                                    onPatchSettings(RemoteSettingsPatch(fragmentScope = scope))
+                                }
+                            },
+                            onPresetSelect = { preset ->
+                                if (online) {
+                                    pendingPreset = preset
+                                    presetEpoch++
+                                    onPatchSettings(
+                                        RemoteSettingsPatch(
+                                            fragmentLength = preset.length,
+                                            fragmentInterval = preset.interval,
+                                            fragmentMaxChunks = preset.maxChunks,
+                                        ),
+                                    )
+                                }
+                            },
+                            onLengthCommit = { value ->
+                                if (online) {
+                                    pendingPreset = null
+                                    if (value != tvSettings.fragmentLength) {
+                                        onPatchSettings(RemoteSettingsPatch(fragmentLength = value))
+                                    }
+                                }
+                            },
+                            onIntervalCommit = { value ->
+                                if (online) {
+                                    pendingPreset = null
+                                    if (value != tvSettings.fragmentInterval) {
+                                        onPatchSettings(RemoteSettingsPatch(fragmentInterval = value))
+                                    }
+                                }
+                            },
+                            onMaxChunksCommit = { value ->
+                                if (online) {
+                                    pendingPreset = null
+                                    if (value != tvSettings.fragmentMaxChunks) {
+                                        onPatchSettings(RemoteSettingsPatch(fragmentMaxChunks = value))
+                                    }
+                                }
+                            },
+                        )
                     }
                 }
             }

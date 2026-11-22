@@ -16,6 +16,7 @@ sealed interface ProxySettings {
         /** "xtls-rprx-vision" or empty. Vision only makes sense over raw TCP + TLS/REALITY. */
         val flow: String = "",
         val packetEncoding: String = "xudp",
+        val encryption: String = "none",
     ) : ProxySettings {
         override val protocol: Protocol get() = Protocol.VLESS
     }

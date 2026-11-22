@@ -27,6 +27,7 @@ data class ProxyNode(
      * the fields above are then its first member's. See [NodeGroup].
      */
     val group: NodeGroup? = null,
+    val fragment: FragmentOptions? = null,
 ) {
     val protocol: Protocol get() = settings.protocol
 
@@ -56,6 +57,7 @@ data class ProxyNode(
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { add(if (it.contains("vision")) "Vision" else it) }
             tls?.fingerprint?.takeIf { it.isNotEmpty() }?.let { add("uTLS:$it") }
+            if (fragment != null) add("Fragment")
             if (multiplex?.enabled == true) add("Mux")
         }
 

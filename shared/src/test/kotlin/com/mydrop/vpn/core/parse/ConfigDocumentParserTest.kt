@@ -2,6 +2,7 @@ package com.mydrop.vpn.core.parse
 
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProxySettings
+import com.mydrop.vpn.core.model.TransportOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -243,5 +244,154 @@ class ConfigDocumentParserTest {
         val group = node.group
         assertTrue("expected a group", group != null)
         return group!!
+    }
+
+    @Test
+    fun `parses Happ style xray array with freedom fragment, hysteria2 finalmask, and vless extra fields`() {
+        val docArray = """
+            [
+              {
+                "remarks": "MergedSub",
+                "outbounds": [
+                  {
+                    "tag": "fragment",
+                    "protocol": "freedom",
+                    "settings": {
+                      "domainStrategy": "AsIs",
+                      "fragment": {
+                        "packets": "tlshello",
+                        "length": "10-20",
+                        "interval": "10-20",
+                        "maxSplit": "8"
+                      }
+                    }
+                  },
+                  {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                      "vnext": [{
+                        "address": "xh.example.com",
+                        "port": 443,
+                        "users": [{
+                          "id": "11111111-1111-1111-1111-111111111111",
+                          "encryption": "mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                        }]
+                      }]
+                    },
+                    "streamSettings": {
+                      "network": "xhttp",
+                      "security": "reality",
+                      "realitySettings": {
+                        "serverName": "decoy.example.com",
+                        "publicKey": "PUB",
+                        "shortId": "ab",
+                        "mldsa65Verify": "PQVVALUE",
+                        "fingerprint": "edge"
+                      },
+                      "xhttpSettings": {
+                        "host": "cdn.example.com",
+                        "path": "/up",
+                        "mode": "auto",
+                        "extra": {
+                          "xPaddingBytes": "100-300"
+                        }
+                      },
+                      "sockopt": {
+                        "dialerProxy": "fragment"
+                      }
+                    }
+                  },
+                  {
+                    "tag": "proxy-hy2",
+                    "protocol": "hysteria",
+                    "settings": {
+                      "version": 2,
+                      "address": "hy2.example.com",
+                      "port": 443
+                    },
+                    "streamSettings": {
+                      "network": "hysteria",
+                      "security": "tls",
+                      "tlsSettings": {
+                        "serverName": "hy2.example.com",
+                        "alpn": ["h3"],
+                        "fingerprint": "chrome",
+                        "echConfigList": "ECHVALUE"
+                      },
+                      "hysteriaSettings": {
+                        "version": 2,
+                        "auth": "hy2-secret"
+                      },
+                      "finalmask": {
+                        "udp": [
+                          {
+                            "type": "salamander",
+                            "settings": {"password": "mask-pass"}
+                          }
+                        ],
+                        "quicParams": {
+                          "congestion": "brutal",
+                          "brutalUp": "50mbps",
+                          "brutalDown": "200mbps"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "tag": "proxy-grpc",
+                    "protocol": "vless",
+                    "settings": {
+                      "vnext": [{
+                        "address": "gr.example.com",
+                        "port": 443,
+                        "users": [{"id": "22222222-2222-2222-2222-222222222222"}]
+                      }]
+                    },
+                    "streamSettings": {
+                      "network": "grpc",
+                      "security": "tls",
+                      "tlsSettings": {"serverName": "gr.example.com"},
+                      "grpcSettings": {
+                        "serviceName": "tun",
+                        "authority": "grpc.example.com",
+                        "multiMode": true
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+        """.trimIndent()
+
+        val nodes = ConfigDocumentParser.parse(docArray, "sub-happ")
+        assertEquals(3, nodes.size)
+
+        val xh = nodes[0]
+        assertEquals(
+            "mlkem768x25519plus.native.1rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            (xh.settings as ProxySettings.Vless).encryption,
+        )
+        assertEquals("PQVVALUE", xh.tls?.reality?.mldsa65Verify)
+        assertEquals("tlshello", xh.fragment?.packets)
+        assertEquals("10-20", xh.fragment?.length)
+        assertEquals("8", xh.fragment?.maxSplit)
+        assertTrue("Expected Fragment badge in ${xh.badges}", "Fragment" in xh.badges)
+        assertTrue((xh.transport as TransportOptions.Xhttp).extraJson?.contains("xPaddingBytes") == true)
+
+        val hy2 = nodes[1]
+        val hySettings = hy2.settings as ProxySettings.Hysteria2
+        assertEquals("hy2.example.com", hy2.server)
+        assertEquals("hy2-secret", hySettings.password)
+        assertEquals("salamander", hySettings.obfsType)
+        assertEquals("mask-pass", hySettings.obfsPassword)
+        assertEquals(50, hySettings.upMbps)
+        assertEquals(200, hySettings.downMbps)
+        assertEquals("ECHVALUE", hy2.tls?.echConfigList)
+
+        val gr = nodes[2]
+        val grTransport = gr.transport as TransportOptions.Grpc
+        assertTrue(grTransport.multiMode)
+        assertEquals("grpc.example.com", grTransport.authority)
     }
 }

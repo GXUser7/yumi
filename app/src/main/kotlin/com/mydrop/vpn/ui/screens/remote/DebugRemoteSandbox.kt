@@ -1,5 +1,6 @@
 package com.mydrop.vpn.ui.screens.remote
 
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.RoutingMode
@@ -323,6 +324,22 @@ internal class DebugRemoteSandbox(
                 remoteDns = patch.remoteDns ?: currentSettings.remoteDns,
                 directDns = patch.directDns ?: currentSettings.directDns,
                 mtu = patch.mtu ?: currentSettings.mtu,
+                tlsFingerprint = patch.tlsFingerprint ?: currentSettings.tlsFingerprint,
+                fragmentMode = patch.fragmentMode ?: currentSettings.fragmentMode,
+                fragmentScope = patch.fragmentScope ?: currentSettings.fragmentScope,
+                fragmentLength = patch.fragmentLength
+                    ?.let { AppSettings.normalizeRange(it, AppSettings.MIN_FRAGMENT_LENGTH, AppSettings.MAX_FRAGMENT_LENGTH) }
+                    ?: currentSettings.fragmentLength,
+                fragmentInterval = patch.fragmentInterval
+                    ?.let { AppSettings.normalizeRange(it, AppSettings.MIN_FRAGMENT_INTERVAL, AppSettings.MAX_FRAGMENT_INTERVAL) }
+                    ?: currentSettings.fragmentInterval,
+                fragmentMaxChunks = patch.fragmentMaxChunks?.let { raw ->
+                    if (raw.isBlank()) "" else AppSettings.normalizeRange(
+                        raw,
+                        AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                        AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+                    )
+                } ?: currentSettings.fragmentMaxChunks,
             )
             val updatedSnap = snap.copy(settings = updatedSettings)
             val updatedBonds = cur.bonds.map { b ->

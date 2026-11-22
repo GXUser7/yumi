@@ -81,12 +81,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.Subscription
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.pairing.PairingReceiverState
@@ -688,6 +691,50 @@ fun TvSettingsScreen(
                     editing = EditableSetting.Mtu; editedValue = state.settings.mtu.toString()
                 }
             }
+            item {
+                CycleSetting(
+                    stringResource(R.string.tv_tls_fingerprint),
+                    stringResource(state.settings.tlsFingerprint.labelRes),
+                ) {
+                    onUpdateSettings { it.copy(tlsFingerprint = it.tlsFingerprint.next()) }
+                }
+            }
+            item {
+                CycleSetting(
+                    stringResource(R.string.tv_fragment_mode),
+                    stringResource(state.settings.fragmentMode.labelRes),
+                ) {
+                    onUpdateSettings { it.copy(fragmentMode = it.fragmentMode.next()) }
+                }
+            }
+            if (state.settings.fragmentMode != FragmentMode.Off) {
+                item {
+                    CycleSetting(
+                        stringResource(R.string.tv_fragment_scope),
+                        stringResource(state.settings.fragmentScope.labelRes),
+                    ) {
+                        onUpdateSettings { it.copy(fragmentScope = it.fragmentScope.next()) }
+                    }
+                }
+                item {
+                    ValueSetting(stringResource(R.string.tv_fragment_length), state.settings.fragmentLength) {
+                        editing = EditableSetting.FragmentLength; editedValue = state.settings.fragmentLength
+                    }
+                }
+                item {
+                    ValueSetting(stringResource(R.string.tv_fragment_interval), state.settings.fragmentInterval) {
+                        editing = EditableSetting.FragmentInterval; editedValue = state.settings.fragmentInterval
+                    }
+                }
+                item {
+                    ValueSetting(
+                        stringResource(R.string.tv_fragment_max_split),
+                        state.settings.fragmentMaxChunks.ifBlank { stringResource(R.string.tv_fragment_max_split_unlimited) },
+                    ) {
+                        editing = EditableSetting.FragmentMaxChunks; editedValue = state.settings.fragmentMaxChunks
+                    }
+                }
+            }
 
             sectionHeader(R.string.tv_section_updates)
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -720,6 +767,9 @@ fun TvSettingsScreen(
                             EditableSetting.RemoteDns -> R.string.tv_remote_dns
                             EditableSetting.DirectDns -> R.string.tv_direct_dns
                             EditableSetting.Mtu -> R.string.tv_mtu
+                            EditableSetting.FragmentLength -> R.string.tv_fragment_length
+                            EditableSetting.FragmentInterval -> R.string.tv_fragment_interval
+                            EditableSetting.FragmentMaxChunks -> R.string.tv_fragment_max_split
                         },
                     ),
                 )
@@ -744,6 +794,34 @@ fun TvSettingsScreen(
                             }
                             EditableSetting.Mtu -> editedValue.toIntOrNull()?.takeIf { it in 576..9_000 }?.let { mtu ->
                                 onUpdateSettings { it.copy(mtu = mtu) }
+                            }
+                            EditableSetting.FragmentLength -> AppSettings.normalizeRange(
+                                editedValue,
+                                AppSettings.MIN_FRAGMENT_LENGTH,
+                                AppSettings.MAX_FRAGMENT_LENGTH,
+                            )?.let { length ->
+                                onUpdateSettings { it.copy(fragmentLength = length) }
+                            }
+                            EditableSetting.FragmentInterval -> AppSettings.normalizeRange(
+                                editedValue,
+                                AppSettings.MIN_FRAGMENT_INTERVAL,
+                                AppSettings.MAX_FRAGMENT_INTERVAL,
+                            )?.let { interval ->
+                                onUpdateSettings { it.copy(fragmentInterval = interval) }
+                            }
+                            EditableSetting.FragmentMaxChunks -> {
+                                val normalized = if (editedValue.isBlank()) {
+                                    ""
+                                } else {
+                                    AppSettings.normalizeRange(
+                                        editedValue,
+                                        AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                                        AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+                                    )
+                                }
+                                normalized?.let { maxChunks ->
+                                    onUpdateSettings { it.copy(fragmentMaxChunks = maxChunks) }
+                                }
                             }
                         }
                         editing = null
@@ -1193,5 +1271,16 @@ private fun visualizerName(value: Visualizer): String = stringResource(
 private fun ThemeMode.next(): ThemeMode = ThemeMode.entries[(ordinal + 1) % ThemeMode.entries.size]
 private fun AppLanguage.next(): AppLanguage = AppLanguage.entries[(ordinal + 1) % AppLanguage.entries.size]
 private fun RoutingMode.next(): RoutingMode = RoutingMode.entries[(ordinal + 1) % RoutingMode.entries.size]
+private fun TlsFingerprintOverride.next(): TlsFingerprintOverride =
+    TlsFingerprintOverride.entries[(ordinal + 1) % TlsFingerprintOverride.entries.size]
+private fun FragmentMode.next(): FragmentMode = FragmentMode.entries[(ordinal + 1) % FragmentMode.entries.size]
+private fun FragmentScope.next(): FragmentScope = FragmentScope.entries[(ordinal + 1) % FragmentScope.entries.size]
 
-private enum class EditableSetting { RemoteDns, DirectDns, Mtu }
+private enum class EditableSetting {
+    RemoteDns,
+    DirectDns,
+    Mtu,
+    FragmentLength,
+    FragmentInterval,
+    FragmentMaxChunks,
+}

@@ -1,6 +1,9 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentOptions
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.LogLevel
 import com.mydrop.vpn.core.model.ProbeEndpoint
 import com.mydrop.vpn.core.model.ProviderProfile
@@ -15,6 +18,7 @@ import com.mydrop.vpn.core.model.TlsOptions
 import com.mydrop.vpn.core.model.TransportOptions
 import com.mydrop.vpn.core.net.isNumericAddress
 import java.net.InetAddress
+import java.util.Base64
 import com.mydrop.vpn.core.net.splitHostPort
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -26,6 +30,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -82,6 +87,7 @@ object XrayConfigFactory {
     const val DNS_TAG = "dns-out"
     const val DNS_IN_TAG = "dns-in"
     const val TUN_TAG = "tun-in"
+    const val FRAGMENT_TAG = "fragment"
 
     /** The outbound tag for a node. Stable, because the node id is. */
     fun nodeTag(nodeId: String): String = NODE_TAG_PREFIX + nodeId
@@ -542,8 +548,21 @@ object XrayConfigFactory {
             add(buildTunInbound(settings))
         }
 
+        val resolvedFragments = nodes.map { effectiveFragment(it, settings) }
+        val fragmentTags = LinkedHashMap<FragmentOptions, String>()
+        resolvedFragments.filterNotNull().forEach { opts ->
+            if (opts !in fragmentTags) {
+                val tag = if (fragmentTags.isEmpty()) FRAGMENT_TAG else "$FRAGMENT_TAG-${fragmentTags.size + 1}"
+                fragmentTags[opts] = tag
+            }
+        }
+        val allowedDialerProxyTags = fragmentTags.values.toSet() + DIRECT_TAG
+
         putJsonArray("outbounds") {
-            nodes.forEach { add(buildOutbound(it)) }
+            nodes.forEachIndexed { index, node ->
+                val dialerProxyTag = resolvedFragments[index]?.let(fragmentTags::get)
+                add(buildOutbound(node, settings, dialerProxyTag, allowedDialerProxyTags))
+            }
             addJsonObject {
                 put("tag", DIRECT_TAG)
                 put("protocol", "freedom")
@@ -556,6 +575,9 @@ object XrayConfigFactory {
             addJsonObject {
                 put("tag", DNS_TAG)
                 put("protocol", "dns")
+            }
+            fragmentTags.forEach { (opts, tag) ->
+                add(buildFragmentOutbound(tag, opts))
             }
         }
 
@@ -615,11 +637,107 @@ object XrayConfigFactory {
      * the core loads without complaint and then cannot resolve: the outbound exists, the tunnel
      * comes up, and nothing crosses it. The check for this is in `XrayConfigFactoryTest`.
      */
-    private fun buildOutbound(node: ProxyNode): JsonObject = buildJsonObject {
+    private fun buildOutbound(
+        node: ProxyNode,
+        settings: AppSettings,
+        dialerProxyTag: String?,
+        allowedDialerProxyTags: Set<String>,
+    ): JsonObject = buildJsonObject {
         put("tag", nodeTag(node.id))
         put("protocol", node.settings.xrayProtocol())
         put("settings", node.settings.xraySettings(node))
-        buildStream(node)?.let { put("streamSettings", it) }
+        buildStream(node, settings, dialerProxyTag, allowedDialerProxyTags)?.let { put("streamSettings", it) }
+    }
+
+    /**
+     * Emits a `freedom` outbound with TCP/TLS fragmentation for `dialerProxy`.
+     *
+     * `domainStrategy` MUST stay `"AsIs"`: using `"UseIP"` routes domain-addressed proxy server
+     * lookups through Xray's own DNS (`dns-in -> balancerTag: "proxy"`), deadlocking the tunnel.
+     */
+    private fun buildFragmentOutbound(tag: String, options: FragmentOptions): JsonObject = buildJsonObject {
+        put("tag", tag)
+        put("protocol", "freedom")
+        putJsonObject("settings") {
+            put("domainStrategy", "AsIs")
+            putJsonObject("fragment") {
+                put("packets", options.packets)
+                put("length", options.length)
+                put("interval", options.interval)
+                if (options.maxSplit.isNotBlank()) put("maxSplit", options.maxSplit)
+            }
+        }
+    }
+
+    private fun effectiveFragment(node: ProxyNode, settings: AppSettings): FragmentOptions? {
+        if (!supportsFragment(node)) return null
+        if (settings.fragmentMode != FragmentMode.Off) {
+            val eligible = when (settings.fragmentScope) {
+                FragmentScope.TlsOnly -> node.tls?.enabled == true && node.tls.reality == null
+                FragmentScope.TlsAndReality -> node.tls?.enabled == true
+                FragmentScope.AllTcp -> true
+            }
+            if (!eligible) return null
+            val packets = settings.fragmentMode.packets ?: return null
+            val length = AppSettings.normalizeRange(
+                settings.fragmentLength,
+                AppSettings.MIN_FRAGMENT_LENGTH,
+                AppSettings.MAX_FRAGMENT_LENGTH,
+            ) ?: AppSettings.DEFAULT_FRAGMENT_LENGTH
+            val interval = AppSettings.normalizeRange(
+                settings.fragmentInterval,
+                AppSettings.MIN_FRAGMENT_INTERVAL,
+                AppSettings.MAX_FRAGMENT_INTERVAL,
+            ) ?: AppSettings.DEFAULT_FRAGMENT_INTERVAL
+            val maxSplit = AppSettings.normalizeRange(
+                settings.fragmentMaxChunks,
+                AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+            ).orEmpty()
+            return FragmentOptions(
+                packets = packets,
+                length = length,
+                interval = interval,
+                maxSplit = maxSplit,
+            )
+        }
+        return sanitizeProviderFragment(node.fragment)
+    }
+
+    private fun supportsFragment(node: ProxyNode): Boolean {
+        if (node.settings is ProxySettings.WireGuard) return false
+        if (node.settings is ProxySettings.Hysteria2) return false
+        if (node.settings is ProxySettings.Direct) return false
+        val isHttp3Xhttp = node.transport is TransportOptions.Xhttp &&
+            node.tls?.alpn?.singleOrNull()?.equals("h3", ignoreCase = true) == true
+        return !isHttp3Xhttp
+    }
+
+    private fun sanitizeProviderFragment(raw: FragmentOptions?): FragmentOptions? {
+        raw ?: return null
+        val packetsRaw = raw.packets.trim()
+        if (!AppSettings.isValidFragmentPackets(packetsRaw)) return null
+        val packets = if (packetsRaw.equals("tlshello", ignoreCase = true)) "tlshello" else packetsRaw
+        val length = AppSettings.normalizeRange(
+            raw.length,
+            AppSettings.MIN_FRAGMENT_LENGTH,
+            AppSettings.MAX_FRAGMENT_LENGTH,
+        ) ?: return null
+        val interval = AppSettings.normalizeRange(
+            raw.interval,
+            AppSettings.MIN_FRAGMENT_INTERVAL,
+            AppSettings.MAX_FRAGMENT_INTERVAL,
+        ) ?: return null
+        val maxSplit = if (raw.maxSplit.isBlank()) {
+            ""
+        } else {
+            AppSettings.normalizeRange(
+                raw.maxSplit,
+                AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+            ).orEmpty()
+        }
+        return FragmentOptions(packets = packets, length = length, interval = interval, maxSplit = maxSplit)
     }
 
     private fun ProxySettings.xrayProtocol(): String = when (this) {
@@ -650,7 +768,7 @@ object XrayConfigFactory {
                             put("id", uuid)
                             if (flow.isNotBlank()) put("flow", flow)
                             // Mandatory, and the one field with no sing-box counterpart at all.
-                            put("encryption", "none")
+                            put("encryption", safeVlessEncryption(encryption))
                         }
                     }
                 }
@@ -791,7 +909,12 @@ object XrayConfigFactory {
 
     // ------------------------------------------------------------------ Stream
 
-    private fun buildStream(node: ProxyNode): JsonObject? {
+    private fun buildStream(
+        node: ProxyNode,
+        settings: AppSettings,
+        dialerProxyTag: String?,
+        allowedDialerProxyTags: Set<String>,
+    ): JsonObject? {
         // WireGuard carries its own crypto and has no stream layer at all; giving it one is exactly
         // the unknown-field mistake the class comment is about.
         if (node.settings is ProxySettings.WireGuard) return null
@@ -800,7 +923,7 @@ object XrayConfigFactory {
         val tls = node.tls
         val hysteria = node.settings as? ProxySettings.Hysteria2
         val secured = tls != null && tls.enabled
-        if (network == null && !secured && hysteria == null) return null
+        if (network == null && !secured && hysteria == null && dialerProxyTag == null) return null
 
         return buildJsonObject {
             network?.let { put("network", it) }
@@ -812,20 +935,22 @@ object XrayConfigFactory {
                 // anyway rather than producing a node that cannot dial.
                 hysteria != null -> {
                     put("security", "tls")
-                    put("tlsSettings", buildTls(tls, node))
+                    put("tlsSettings", buildTls(tls, node, settings, isHysteria = true))
                 }
                 tls == null || !tls.enabled -> put("security", "none")
                 tls.reality != null -> {
                     put("security", "reality")
-                    put("realitySettings", buildReality(tls, node))
+                    put("realitySettings", buildReality(tls, node, settings))
                 }
                 else -> {
                     put("security", "tls")
-                    put("tlsSettings", buildTls(tls, node))
+                    put("tlsSettings", buildTls(tls, node, settings, isHysteria = false))
                 }
             }
             node.transport?.let { transport ->
-                transportSettings(transport)?.let { put(transport.xraySettingsKey(), it) }
+                transportSettings(transport, allowedDialerProxyTags)?.let {
+                    put(transport.xraySettingsKey(), it)
+                }
             }
             if (hysteria != null) {
                 putJsonObject("hysteriaSettings") {
@@ -834,6 +959,11 @@ object XrayConfigFactory {
                     put("auth", hysteria.password)
                 }
                 buildFinalMask(hysteria)?.let { put("finalmask", it) }
+            }
+            if (dialerProxyTag != null) {
+                putJsonObject("sockopt") {
+                    put("dialerProxy", dialerProxyTag)
+                }
             }
         }
     }
@@ -912,7 +1042,10 @@ object XrayConfigFactory {
         else -> throw IllegalArgumentException("no transport settings for " + label)
     }
 
-    private fun transportSettings(transport: TransportOptions): JsonObject? = when (transport) {
+    private fun transportSettings(
+        transport: TransportOptions,
+        allowedDialerProxyTags: Set<String> = setOf(DIRECT_TAG),
+    ): JsonObject? = when (transport) {
         is TransportOptions.WebSocket -> buildJsonObject {
             put("path", transport.path)
             transport.headers["Host"]?.let { put("host", it) }
@@ -930,6 +1063,8 @@ object XrayConfigFactory {
             // accepted silently and then ignored.
             put("serviceName", transport.serviceName)
             if (transport.permitWithoutStream) put("permit_without_stream", true)
+            if (transport.multiMode) put("multiMode", true)
+            if (transport.authority.isNotBlank()) put("authority", transport.authority)
         }
 
         is TransportOptions.HttpUpgrade -> buildJsonObject {
@@ -943,15 +1078,28 @@ object XrayConfigFactory {
         }
 
         is TransportOptions.Xhttp -> buildJsonObject {
+            val headerHost = transport.headers.entries
+                .firstOrNull { it.key.equals("host", ignoreCase = true) }
+                ?.value
+                ?.takeIf { it.isNotBlank() }
+            val effectiveHost = transport.host.takeIf { it.isNotBlank() } ?: headerHost
+            val nonHostHeaders = transport.headers.filterKeys { !it.equals("host", ignoreCase = true) }
+
             put("path", transport.path)
-            if (transport.host.isNotBlank()) put("host", transport.host)
+            if (effectiveHost != null) put("host", effectiveHost)
             // Left out when the link did not name one: the core picks between packet-up, stream-up
             // and stream-one itself, and guessing here would override a server that knows better.
             if (transport.mode.isNotBlank() && transport.mode != "auto") put("mode", transport.mode)
-            if (transport.headers.isNotEmpty()) {
+            if (nonHostHeaders.isNotEmpty()) {
                 putJsonObject("headers") {
-                    transport.headers.forEach { (name, value) -> put(name, value) }
+                    nonHostHeaders.forEach { (name, value) -> put(name, value) }
                 }
+            }
+            val parsedExtra = transport.extraJson?.takeIf { it.isNotBlank() }?.let { raw ->
+                runCatching { json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
+            }?.let { sanitizeXhttpExtra(it, nonHostHeaders, allowedDialerProxyTags) }
+            if (parsedExtra != null && parsedExtra.isNotEmpty()) {
+                put("extra", parsedExtra)
             }
         }
 
@@ -966,29 +1114,188 @@ object XrayConfigFactory {
      * one node stops the core from starting for all of them. See [Document.verificationForced] for
      * what happens to a node that asked for it.
      */
-    private fun buildTls(tls: TlsOptions?, node: ProxyNode): JsonObject = buildJsonObject {
+    private fun buildTls(
+        tls: TlsOptions?,
+        node: ProxyNode,
+        settings: AppSettings,
+        isHysteria: Boolean,
+    ): JsonObject = buildJsonObject {
         put("serverName", tls?.serverName?.takeIf { it.isNotBlank() } ?: node.server)
         if (tls != null && tls.alpn.isNotEmpty()) {
             putJsonArray("alpn") { tls.alpn.forEach { add(it) } }
         }
-        tls?.fingerprint?.takeIf { it.isNotBlank() }?.let { put("fingerprint", safeFingerprint(it)) }
+        val overrideFp = if (!isHysteria) settings.tlsFingerprint.xrayValue else null
+        val fp = overrideFp ?: tls?.fingerprint?.takeIf { it.isNotBlank() }
+        fp?.let { put("fingerprint", safeFingerprint(it)) }
         // The pin, which is what makes a self-signed certificate usable at all now that
         // `allowInsecure` is gone. Emitted verbatim: the core accepts the OpenSSL spelling with
         // colons and checks the length itself, so normalising here could only break a value it
         // would have accepted.
         tls?.pinnedCertSha256?.takeIf { it.isNotBlank() }?.let { put("pinnedPeerCertSha256", it) }
         tls?.verifyPeerCertByName?.takeIf { it.isNotBlank() }?.let { put("verifyPeerCertByName", it) }
+        val ech = tls?.echConfigList?.takeIf { it.isNotBlank() }
+            ?: tls?.ech?.takeIf { it.enabled }?.config?.firstOrNull()?.takeIf { it.isNotBlank() }
+        ech?.let { put("echConfigList", it) }
     }
 
-    private fun buildReality(tls: TlsOptions, node: ProxyNode): JsonObject = buildJsonObject {
+    private fun buildReality(tls: TlsOptions, node: ProxyNode, settings: AppSettings): JsonObject = buildJsonObject {
         val reality = requireNotNull(tls.reality)
         put("serverName", tls.serverName?.takeIf { it.isNotBlank() } ?: node.server)
         put("publicKey", reality.publicKey)
         if (reality.shortId.isNotBlank()) put("shortId", reality.shortId)
         if (reality.spiderX.isNotBlank()) put("spiderX", reality.spiderX)
+        normalizedMldsa65Verify(reality.mldsa65Verify)?.let { put("mldsa65Verify", it) }
         // REALITY without a fingerprint presents Go's own ClientHello, which is precisely the
         // signature the whole exercise exists to avoid.
-        put("fingerprint", safeFingerprint(tls.fingerprint))
+        put("fingerprint", safeFingerprint(settings.tlsFingerprint.xrayValue ?: tls.fingerprint))
+    }
+
+    /**
+     * Validates VLESS `encryption` (`"none"` or `mlkem768x25519plus.*` per `infra/conf/vless.go`),
+     * falling back to `"none"` so one invalid share link cannot sink the whole configuration.
+     */
+    internal fun safeVlessEncryption(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || trimmed.equals("none", ignoreCase = true)) return "none"
+        val parts = trimmed.split('.')
+        if (parts.size < 4 || parts[0] != "mlkem768x25519plus") return "none"
+        if (parts[1] !in setOf("native", "xorpub", "random")) return "none"
+        if (parts[2] !in setOf("1rtt", "0rtt")) return "none"
+        var hasKey = false
+        for (segment in parts.drop(3)) {
+            if (segment.length < 20) continue
+            if ('=' in segment || '+' in segment || '/' in segment) return "none"
+            val decoded = runCatching { Base64.getUrlDecoder().decode(segment) }.getOrNull() ?: return "none"
+            if (decoded.size != 32 && decoded.size != 1184) return "none"
+            hasKey = true
+        }
+        return if (hasKey) trimmed else "none"
+    }
+
+    private fun normalizedMldsa65Verify(raw: String): String? {
+        val trimmed = raw.trim().trimEnd('=')
+        if (trimmed.isEmpty()) return null
+        if (!trimmed.all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '-' || it == '_' }) {
+            return null
+        }
+        val urlSafe = trimmed.replace('+', '-').replace('/', '_')
+        val decoded = runCatching { Base64.getUrlDecoder().decode(urlSafe) }.getOrNull() ?: return null
+        return if (decoded.size == 1952) urlSafe else null
+    }
+
+    /**
+     * Cleans an `xhttpSettings.extra` object before handing it to Xray.
+     *
+     * `SplitHTTPConfig.Build()` replaces its outer receiver with `extra` while copying only `host`,
+     * `path`, and `mode`, so non-Host headers must also live inside `extra`, `"host"` inside
+     * `headers` is rejected outright, and `downloadSettings` must obey the same `allowInsecure` and
+     * `dialerProxy` rules as any other stream.
+     */
+    private fun sanitizeXhttpExtra(
+        extra: JsonObject,
+        outerHeaders: Map<String, String>,
+        allowedDialerProxyTags: Set<String>,
+        depth: Int = 0,
+    ): JsonObject {
+        if (depth > 2) return buildJsonObject {}
+        val out = LinkedHashMap<String, JsonElement>()
+        for ((key, value) in extra) {
+            if (key == "host" || key == "path" || key == "mode") continue
+            when (key) {
+                "headers" -> (value as? JsonObject)?.let { hdrs ->
+                    val filtered = JsonObject(hdrs.filterKeys { !it.equals("host", ignoreCase = true) })
+                    if (filtered.isNotEmpty()) out["headers"] = filtered
+                }
+                "downloadSettings" -> (value as? JsonObject)?.let { ds ->
+                    val cleaned = sanitizeXhttpDownloadSettings(ds, allowedDialerProxyTags, depth + 1)
+                    if (cleaned.isNotEmpty()) out["downloadSettings"] = cleaned
+                }
+                else -> out[key] = value
+            }
+        }
+        if ("headers" !in out && outerHeaders.isNotEmpty()) {
+            out["headers"] = buildJsonObject { outerHeaders.forEach { (k, v) -> put(k, v) } }
+        }
+        return JsonObject(out)
+    }
+
+    private fun sanitizeXhttpDownloadSettings(
+        stream: JsonObject,
+        allowedDialerProxyTags: Set<String>,
+        depth: Int = 0,
+    ): JsonObject {
+        if (depth > 2) return buildJsonObject {}
+        val out = LinkedHashMap<String, JsonElement>()
+        for ((key, value) in stream) {
+            when (key) {
+                "tlsSettings" -> (value as? JsonObject)?.let { tlsObj ->
+                    val cleaned = LinkedHashMap<String, JsonElement>()
+                    for ((tk, tv) in tlsObj) {
+                        if (tk == "allowInsecure") continue
+                        if (tk == "fingerprint") {
+                            val fp = (tv as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+                            if (fp != null) cleaned["fingerprint"] = JsonPrimitive(safeFingerprint(fp))
+                        } else {
+                            cleaned[tk] = tv
+                        }
+                    }
+                    out["tlsSettings"] = JsonObject(cleaned)
+                }
+                "realitySettings" -> (value as? JsonObject)?.let { relObj ->
+                    val cleaned = LinkedHashMap<String, JsonElement>(relObj)
+                    val fp = (relObj["fingerprint"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    cleaned["fingerprint"] = JsonPrimitive(safeFingerprint(fp))
+                    out["realitySettings"] = JsonObject(cleaned)
+                }
+                "sockopt" -> (value as? JsonObject)?.let { sock ->
+                    val dialer = (sock["dialerProxy"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    val cleaned = if (dialer != null && dialer !in allowedDialerProxyTags) {
+                        JsonObject(sock.filterKeys { it != "dialerProxy" })
+                    } else {
+                        sock
+                    }
+                    if (cleaned.isNotEmpty()) out["sockopt"] = cleaned
+                }
+                "xhttpSettings", "splithttpSettings" -> (value as? JsonObject)?.let { xh ->
+                    out[key] = sanitizeNestedXhttpSettings(xh, allowedDialerProxyTags, depth + 1)
+                }
+                else -> out[key] = value
+            }
+        }
+        return JsonObject(out)
+    }
+
+    private fun sanitizeNestedXhttpSettings(
+        xh: JsonObject,
+        allowedDialerProxyTags: Set<String>,
+        depth: Int,
+    ): JsonObject {
+        if (depth > 2) return buildJsonObject {}
+        val nestedNonHostHeaders = LinkedHashMap<String, String>()
+        (xh["headers"] as? JsonObject)?.forEach { (k, v) ->
+            if (!k.equals("host", ignoreCase = true)) {
+                (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { nestedNonHostHeaders[k] = it }
+            }
+        }
+        val out = LinkedHashMap<String, JsonElement>()
+        for ((key, value) in xh) {
+            when (key) {
+                "headers" -> (value as? JsonObject)?.let { hdrs ->
+                    val filtered = JsonObject(hdrs.filterKeys { !it.equals("host", ignoreCase = true) })
+                    if (filtered.isNotEmpty()) out["headers"] = filtered
+                }
+                "extra" -> (value as? JsonObject)?.let { extraObj ->
+                    val cleaned = sanitizeXhttpExtra(extraObj, nestedNonHostHeaders, allowedDialerProxyTags, depth + 1)
+                    if (cleaned.isNotEmpty()) out["extra"] = cleaned
+                }
+                "downloadSettings" -> (value as? JsonObject)?.let { ds ->
+                    val cleaned = sanitizeXhttpDownloadSettings(ds, allowedDialerProxyTags, depth + 1)
+                    if (cleaned.isNotEmpty()) out["downloadSettings"] = cleaned
+                }
+                else -> out[key] = value
+            }
+        }
+        return JsonObject(out)
     }
 
     /**
@@ -1022,7 +1329,15 @@ object XrayConfigFactory {
         "hellochrome_133", "helloios_13", "helloios_14", "helloedge_106", "hellosafari_26_3",
         "hello360_11_0", "helloqq_11_1", "hellorandomized", "hellorandomizedalpn",
         "hellorandomizednoalpn", "hellofirefox_auto", "hellofirefox_55", "hellofirefox_56",
-        "hellofirefox_63",
+        "hellofirefox_63", "hellofirefox_65", "hellofirefox_99", "hellofirefox_102",
+        "hellofirefox_105", "hellochrome_auto", "hellochrome_58", "hellochrome_62",
+        "hellochrome_70", "hellochrome_72", "hellochrome_83", "hellochrome_87",
+        "hellochrome_96", "hellochrome_100", "hellochrome_102", "hellochrome_106_shuffle",
+        "helloios_auto", "helloios_11_1", "helloios_12_1", "helloandroid_11_okhttp",
+        "helloedge_85", "helloedge_auto", "hellosafari_16_0", "hellosafari_auto",
+        "hello360_auto", "hello360_7_5", "helloqq_auto", "hellochrome_100_psk",
+        "hellochrome_112_psk_shuf", "hellochrome_114_padding_psk_shuf", "hellochrome_115_pq",
+        "hellochrome_115_pq_psk", "hellochrome_120_pq",
     )
 
     // ------------------------------------------------------------------ DNS

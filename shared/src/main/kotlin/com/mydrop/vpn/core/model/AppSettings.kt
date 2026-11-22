@@ -93,6 +93,48 @@ enum class CountryFilterMode {
     Exclude,
 }
 
+/**
+ * Global uTLS ClientHello fingerprint override applied to TLS/REALITY TCP outbounds.
+ */
+@Serializable
+enum class TlsFingerprintOverride(@StringRes val labelRes: Int, val xrayValue: String?) {
+    Auto(R.string.tls_fp_auto, null),
+    Chrome(R.string.tls_fp_chrome, "chrome"),
+    Firefox(R.string.tls_fp_firefox, "firefox"),
+    Safari(R.string.tls_fp_safari, "safari"),
+    Ios(R.string.tls_fp_ios, "ios"),
+    Android(R.string.tls_fp_android, "android"),
+    Edge(R.string.tls_fp_edge, "edge"),
+    Qq(R.string.tls_fp_qq, "qq"),
+    Browser360(R.string.tls_fp_360, "360"),
+    Random(R.string.tls_fp_random, "random"),
+    Randomized(R.string.tls_fp_randomized, "randomized"),
+}
+
+/**
+ * Freedom outbound TCP/TLS packet fragmentation mode for DPI circumvention.
+ */
+@Serializable
+enum class FragmentMode(
+    @StringRes val labelRes: Int,
+    @StringRes val descriptionRes: Int,
+    val packets: String?,
+) {
+    Off(R.string.fragment_mode_off, R.string.fragment_mode_off_description, null),
+    TlsHello(R.string.fragment_mode_tlshello, R.string.fragment_mode_tlshello_description, "tlshello"),
+    TcpSegments(R.string.fragment_mode_tcp, R.string.fragment_mode_tcp_description, "1-3"),
+}
+
+/**
+ * Which outbound proxy configurations receive the global [FragmentMode] dialer proxy.
+ */
+@Serializable
+enum class FragmentScope(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
+    TlsOnly(R.string.fragment_scope_tls_only, R.string.fragment_scope_tls_only_description),
+    TlsAndReality(R.string.fragment_scope_tls_reality, R.string.fragment_scope_tls_reality_description),
+    AllTcp(R.string.fragment_scope_all_tcp, R.string.fragment_scope_all_tcp_description),
+}
+
 @Serializable
 data class AppSettings(
     // Appearance
@@ -145,6 +187,12 @@ data class AppSettings(
     // Tunnel
     val enableIpv6: Boolean = false,
     val mtu: Int = 9000,
+    val tlsFingerprint: TlsFingerprintOverride = TlsFingerprintOverride.Auto,
+    val fragmentMode: FragmentMode = FragmentMode.Off,
+    val fragmentScope: FragmentScope = FragmentScope.TlsAndReality,
+    val fragmentLength: String = DEFAULT_FRAGMENT_LENGTH,
+    val fragmentInterval: String = DEFAULT_FRAGMENT_INTERVAL,
+    val fragmentMaxChunks: String = "",
     val splitTunnelMode: SplitTunnelMode = SplitTunnelMode.Off,
     val splitTunnelPackages: Set<String> = emptySet(),
 
@@ -343,5 +391,53 @@ data class AppSettings(
     companion object {
         const val MIN_PROBE_TIMEOUT_MILLIS = 500
         const val MAX_PROBE_TIMEOUT_MILLIS = 30_000
+
+        const val DEFAULT_FRAGMENT_LENGTH = "10-20"
+        const val DEFAULT_FRAGMENT_INTERVAL = "10-20"
+        const val MIN_FRAGMENT_LENGTH = 1
+        const val MAX_FRAGMENT_LENGTH = 1500
+        const val MIN_FRAGMENT_INTERVAL = 0
+        const val MAX_FRAGMENT_INTERVAL = 1000
+        const val MIN_FRAGMENT_MAX_CHUNKS = 1
+        const val MAX_FRAGMENT_MAX_CHUNKS = 1000
+
+        /**
+         * Validates and normalizes a numeric value (`"10"`) or inclusive range (`"10-20"`) against
+         * `[minAllowed, maxAllowed]`. Rejects negative values, spaces, or inverted ranges.
+         */
+        fun normalizeRange(raw: String, minAllowed: Int, maxAllowed: Int): String? {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return null
+            val dash = trimmed.indexOf('-')
+            if (dash < 0) {
+                if (!trimmed.all { it in '0'..'9' }) return null
+                val n = trimmed.toIntOrNull()?.takeIf { it in minAllowed..maxAllowed } ?: return null
+                return n.toString()
+            }
+            val left = trimmed.substring(0, dash)
+            val right = trimmed.substring(dash + 1)
+            if (left.isEmpty() || right.isEmpty() || !left.all { it in '0'..'9' } || !right.all { it in '0'..'9' }) {
+                return null
+            }
+            val from = left.toIntOrNull() ?: return null
+            val to = right.toIntOrNull() ?: return null
+            if (from !in minAllowed..maxAllowed || to !in minAllowed..maxAllowed || from > to) return null
+            return "$from-$to"
+        }
+
+        fun isValidFragmentLength(raw: String): Boolean =
+            normalizeRange(raw, MIN_FRAGMENT_LENGTH, MAX_FRAGMENT_LENGTH) != null
+
+        fun isValidFragmentInterval(raw: String): Boolean =
+            normalizeRange(raw, MIN_FRAGMENT_INTERVAL, MAX_FRAGMENT_INTERVAL) != null
+
+        fun isValidFragmentMaxChunks(raw: String): Boolean =
+            raw.isBlank() || normalizeRange(raw, MIN_FRAGMENT_MAX_CHUNKS, MAX_FRAGMENT_MAX_CHUNKS) != null
+
+        fun isValidFragmentPackets(raw: String): Boolean {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty() || trimmed.equals("tlshello", ignoreCase = true)) return true
+            return normalizeRange(trimmed, 1, 1000) != null
+        }
     }
 }

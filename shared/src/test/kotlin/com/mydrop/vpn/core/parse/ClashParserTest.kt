@@ -94,4 +94,35 @@ class ClashParserTest {
         assertTrue(ClashParser.parse("mode: rule\nrules:\n  - MATCH,DIRECT", null).isEmpty())
         assertTrue(ClashParser.parse("", null).isEmpty())
     }
+
+    @Test
+    fun `parses vless encryption, reality mldsa65-verify, ech-opts, and grpc multi-mode`() {
+        val yaml = """
+            proxies:
+              - name: "PQ"
+                type: vless
+                server: pq.example.com
+                port: 443
+                uuid: 11111111-2222-3333-4444-555555555555
+                encryption: mlkem768x25519plus.native.1rtt.KEYDATA
+                tls: true
+                network: grpc
+                ech-opts:
+                  enable: true
+                  config: ECHCONF
+                reality-opts:
+                  public-key: PUBKEY
+                  mldsa65-verify: PQVCONF
+                grpc-opts:
+                  grpc-service-name: tun
+                  multi-mode: true
+        """.trimIndent()
+
+        val node = ClashParser.parse(yaml, "sub-1").single()
+        assertEquals("mlkem768x25519plus.native.1rtt.KEYDATA", (node.settings as ProxySettings.Vless).encryption)
+        assertEquals("PQVCONF", node.tls?.reality?.mldsa65Verify)
+        assertEquals("ECHCONF", node.tls?.echConfigList)
+        val grpc = node.transport as TransportOptions.Grpc
+        assertTrue(grpc.multiMode)
+    }
 }

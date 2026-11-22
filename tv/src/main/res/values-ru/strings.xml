@@ -57,6 +57,13 @@
     <string name="tv_remote_dns">Удалённый DNS</string>
     <string name="tv_direct_dns">Прямой DNS</string>
     <string name="tv_mtu">MTU</string>
+    <string name="tv_tls_fingerprint">Отпечаток uTLS</string>
+    <string name="tv_fragment_mode">Фрагментация пакетов</string>
+    <string name="tv_fragment_scope">Область фрагментации</string>
+    <string name="tv_fragment_length">Длина фрагмента (байт)</string>
+    <string name="tv_fragment_interval">Интервал фрагментации (мс)</string>
+    <string name="tv_fragment_max_split">Макс. частей</string>
+    <string name="tv_fragment_max_split_unlimited">Без лимита</string>
     <string name="tv_updates">Обновления приложения</string>
     <string name="tv_check_update">Проверить обновление</string>
     <string name="tv_update_available">Доступна версия %1$s</string>

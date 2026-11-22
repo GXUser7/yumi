@@ -1,5 +1,7 @@
 package com.mydrop.vpn.core.parse
 
+import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FragmentOptions
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.identified
@@ -75,14 +77,57 @@ object ConfigDocumentParser {
 
         val outbounds = document["outbounds"] as? JsonArray ?: return emptyList()
         val label = document.str("remarks")
+        val fragmentByTag = extractFragments(outbounds)
 
         val tagged = outbounds.mapNotNull { element ->
             val outbound = element as? JsonObject ?: return@mapNotNull null
-            val node = fromOutbound(outbound, label, subscriptionId) ?: return@mapNotNull null
+            val node = fromOutbound(outbound, label, subscriptionId, fragmentByTag) ?: return@mapNotNull null
             outbound.str("tag").orEmpty() to node
         }
         autoSelect(document, tagged, label)?.let { return listOf(it) }
         return tagged.map { it.second }
+    }
+
+    private fun extractFragments(outbounds: JsonArray): Map<String, FragmentOptions> {
+        val out = HashMap<String, FragmentOptions>()
+        for (element in outbounds) {
+            val outbound = element as? JsonObject ?: continue
+            if (!outbound.str("protocol").equals("freedom", ignoreCase = true)) continue
+            val tag = outbound.str("tag") ?: continue
+            val fragObj = (outbound["settings"] as? JsonObject)?.get("fragment") as? JsonObject ?: continue
+            val packetsRaw = fragObj.str("packets").orEmpty()
+            if (!AppSettings.isValidFragmentPackets(packetsRaw)) continue
+            val lengthRaw = fragObj.str("length") ?: continue
+            val intervalRaw = fragObj.str("interval") ?: continue
+            val length = AppSettings.normalizeRange(
+                lengthRaw,
+                AppSettings.MIN_FRAGMENT_LENGTH,
+                AppSettings.MAX_FRAGMENT_LENGTH,
+            ) ?: continue
+            val interval = AppSettings.normalizeRange(
+                intervalRaw,
+                AppSettings.MIN_FRAGMENT_INTERVAL,
+                AppSettings.MAX_FRAGMENT_INTERVAL,
+            ) ?: continue
+            val maxSplitRaw = fragObj.str("maxSplit", "max_split").orEmpty()
+            val maxSplit = if (maxSplitRaw.isBlank()) {
+                ""
+            } else {
+                AppSettings.normalizeRange(
+                    maxSplitRaw,
+                    AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                    AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+                ).orEmpty()
+            }
+            val packets = if (packetsRaw.equals("tlshello", ignoreCase = true)) "tlshello" else packetsRaw
+            out[tag] = FragmentOptions(
+                packets = packets,
+                length = length,
+                interval = interval,
+                maxSplit = maxSplit,
+            )
+        }
+        return out
     }
 
     /**
@@ -183,11 +228,12 @@ object ConfigDocumentParser {
         outbound: JsonObject,
         label: String?,
         subscriptionId: String?,
+        fragmentByTag: Map<String, FragmentOptions> = emptyMap(),
     ): ProxyNode? = runCatching {
         // Xray calls it "protocol", sing-box calls it "type".
         val xray = outbound["protocol"] != null && outbound["settings"] != null
         if (xray) {
-            fromXray(outbound, label, subscriptionId)
+            fromXray(outbound, label, subscriptionId, fragmentByTag)
         } else {
             fromSingBox(outbound, subscriptionId)
         }
@@ -229,31 +275,39 @@ object ConfigDocumentParser {
      * reject `vnext`, `streamSettings` and the rest outright, so the choice is to translate or to
      * refuse the subscription.
      */
-    private fun fromXray(outbound: JsonObject, label: String?, subscriptionId: String?): ProxyNode? {
+    private fun fromXray(
+        outbound: JsonObject,
+        label: String?,
+        subscriptionId: String?,
+        fragmentByTag: Map<String, FragmentOptions>,
+    ): ProxyNode? {
         val protocol = outbound.str("protocol")?.lowercase() ?: return null
         if (protocol in plumbingTypes) return null
 
-        val settingsObject = outbound["settings"]?.jsonObject ?: return null
-        val vnext = (settingsObject["vnext"] as? JsonArray)?.firstOrNull()?.jsonObject
-        val servers = (settingsObject["servers"] as? JsonArray)?.firstOrNull()?.jsonObject
-        val endpoint = vnext ?: servers ?: return null
+        val settingsObject = outbound["settings"] as? JsonObject ?: return null
+        val isHysteria2 = protocol == "hysteria" || protocol == "hysteria2"
+        val vnext = (settingsObject["vnext"] as? JsonArray)?.firstOrNull() as? JsonObject
+        val servers = (settingsObject["servers"] as? JsonArray)?.firstOrNull() as? JsonObject
+        val endpoint = vnext ?: servers ?: if (isHysteria2) settingsObject else return null
 
         val server = endpoint.str("address") ?: return null
         val port = endpoint.port("port") ?: return null
-        val user = (endpoint["users"] as? JsonArray)?.firstOrNull()?.jsonObject
+        val user = (endpoint["users"] as? JsonArray)?.firstOrNull() as? JsonObject
+        val stream = (outbound["streamSettings"] ?: outbound["stream_settings"]) as? JsonObject
 
         val proxySettings = when (protocol) {
             "vless" -> ProxySettings.Vless(
                 uuid = user?.str("id", "uuid") ?: return null,
                 flow = user.str("flow").orEmpty(),
                 packetEncoding = user.str("packetEncoding", "packet_encoding", "packetencoding") ?: "xudp",
+                encryption = user.str("encryption") ?: "none",
             )
 
             "vmess" -> ProxySettings.Vmess(
                 uuid = user?.str("id", "uuid") ?: return null,
-                alterId = user["alterId"]?.jsonPrimitive?.intOrNull
-                    ?: user["alter_id"]?.jsonPrimitive?.intOrNull
-                    ?: user["aid"]?.jsonPrimitive?.intOrNull
+                alterId = (user["alterId"] as? JsonPrimitive)?.intOrNull
+                    ?: (user["alter_id"] as? JsonPrimitive)?.intOrNull
+                    ?: (user["aid"] as? JsonPrimitive)?.intOrNull
                     ?: 0,
                 security = user.str("security", "scy", "encryption") ?: "auto",
             )
@@ -265,18 +319,20 @@ object ConfigDocumentParser {
                 password = endpoint.str("password") ?: return null,
             )
 
+            "hysteria", "hysteria2" -> parseXrayHysteria2(settingsObject, stream) ?: return null
+
             // Anything else Xray can express and this model cannot. Reported by absence rather
             // than by a node that would fail to dial.
             else -> return null
         }
 
-        val stream = outbound["streamSettings"]?.jsonObject ?: outbound["stream_settings"]?.jsonObject
         // An Xray document can name a transport sing-box has no implementation of — xhttp and
         // splithttp are the common ones. Translating everything but the transport would produce a
         // server that dials and carries nothing.
         stream?.str("network", "net")?.lowercase()?.let { declared ->
             if (declared !in KNOWN_NETWORKS && declared !in PLAIN_NETWORKS) return null
         }
+        val dialerProxy = (stream?.get("sockopt") as? JsonObject)?.str("dialerProxy", "dialer_proxy")
         return ProxyNode(
             id = "",
             name = label?.takeIf { it.isNotBlank() } ?: outbound.str("tag") ?: "$server:$port",
@@ -286,23 +342,68 @@ object ConfigDocumentParser {
             tls = stream?.let(::xrayTls),
             transport = stream?.let(::xrayTransport),
             subscriptionId = subscriptionId,
+            fragment = dialerProxy?.let { fragmentByTag[it] },
         ).identified()
     }
 
-    /** What sing-box can carry; see [ProxyUriParser] for what happens when it cannot. */
-    private val KNOWN_NETWORKS = setOf("ws", "grpc", "httpupgrade", "xhttp", "splithttp")
+    private fun parseXrayHysteria2(settings: JsonObject, stream: JsonObject?): ProxySettings.Hysteria2? {
+        val version = (settings["version"] as? JsonPrimitive)?.intOrNull ?: 2
+        if (version != 2) return null
+        val hysteriaStream = (stream?.get("hysteriaSettings") ?: stream?.get("hysteria_settings")) as? JsonObject
+        val password = hysteriaStream?.str("auth", "password")
+            ?: settings.str("auth", "password")
+            ?: return null
+
+        val finalMask = (stream?.get("finalmask") ?: stream?.get("finalMask")) as? JsonObject
+        val udpMasks = (finalMask?.get("udp") as? JsonArray).orEmpty()
+        var obfsType = ""
+        var obfsPassword = ""
+        for (item in udpMasks) {
+            val maskObj = item as? JsonObject ?: continue
+            if (maskObj.str("type").equals("salamander", ignoreCase = true)) {
+                val pwd = (maskObj["settings"] as? JsonObject)?.str("password").orEmpty()
+                if (pwd.isNotEmpty()) {
+                    obfsType = "salamander"
+                    obfsPassword = pwd
+                    break
+                }
+            }
+        }
+        val quicParams = finalMask?.get("quicParams") as? JsonObject
+        val upMbps = parseMbps(quicParams?.str("brutalUp"))
+        val downMbps = parseMbps(quicParams?.str("brutalDown"))
+        return ProxySettings.Hysteria2(
+            password = password,
+            obfsType = obfsType,
+            obfsPassword = obfsPassword,
+            upMbps = upMbps,
+            downMbps = downMbps,
+        )
+    }
+
+    private fun parseMbps(raw: String?): Int {
+        val trimmed = raw?.trim()?.lowercase() ?: return 0
+        if (trimmed.isEmpty()) return 0
+        val digits = trimmed.takeWhile { it.isDigit() }
+        val num = digits.toIntOrNull() ?: return 0
+        return when (trimmed.removePrefix(digits).trim()) {
+            "", "mbps" -> num
+            "gbps" -> num * 1000
+            "kbps" -> num / 1000
+            else -> 0
+        }
+    }
+
+    /** What Xray can carry; see [ProxyUriParser] for what happens when it cannot. */
+    private val KNOWN_NETWORKS = setOf("ws", "grpc", "httpupgrade", "xhttp", "splithttp", "hysteria")
     private val PLAIN_NETWORKS = setOf("tcp", "raw", "none", "original")
 
     private fun xrayTls(stream: JsonObject): TlsOptions? {
         val security = stream.str("security")?.lowercase()
         if (security.isNullOrEmpty() || security == "none") return null
 
-        val tlsSettings = stream["tlsSettings"]?.jsonObject
-            ?: stream["tls_settings"]?.jsonObject
-            ?: stream["tls-settings"]?.jsonObject
-        val realitySettings = stream["realitySettings"]?.jsonObject
-            ?: stream["reality_settings"]?.jsonObject
-            ?: stream["reality-settings"]?.jsonObject
+        val tlsSettings = (stream["tlsSettings"] ?: stream["tls_settings"] ?: stream["tls-settings"]) as? JsonObject
+        val realitySettings = (stream["realitySettings"] ?: stream["reality_settings"] ?: stream["reality-settings"]) as? JsonObject
         val active = realitySettings ?: tlsSettings
 
         return TlsOptions(
@@ -318,11 +419,15 @@ object ConfigDocumentParser {
             verifyPeerCertByName = tlsSettings
                 ?.str("verifyPeerCertByName", "verify_peer_cert_by_name", "vcn")
                 .orEmpty(),
+            echConfigList = tlsSettings
+                ?.str("echConfigList", "ech_config_list", "ech")
+                .orEmpty(),
             reality = (realitySettings?.str("publicKey", "public_key", "public-key", "pbk", "publickey", "pubkey", "key"))?.let { key ->
                 RealityOptions(
                     publicKey = normalizeRealityKey(key),
                     shortId = realitySettings.str("shortId", "short_id", "short-id", "shortid", "sid").orEmpty(),
                     spiderX = realitySettings.str("spiderX", "spider_x", "spider-x", "spiderx", "spx", "path") ?: "/",
+                    mldsa65Verify = realitySettings.str("mldsa65Verify", "mldsa65_verify", "pqv").orEmpty(),
                 )
             },
         )
@@ -331,10 +436,9 @@ object ConfigDocumentParser {
     private fun xrayTransport(stream: JsonObject): TransportOptions? =
         when (stream.str("network", "net")?.lowercase()) {
             "ws" -> {
-                val ws = stream["wsSettings"]?.jsonObject
-                    ?: stream["ws_settings"]?.jsonObject
-                    ?: stream["ws-settings"]?.jsonObject
-                val host = ws?.get("headers")?.jsonObject?.str("Host", "host")
+                val ws = (stream["wsSettings"] ?: stream["ws_settings"] ?: stream["ws-settings"]) as? JsonObject
+                val headersObj = ws?.get("headers") as? JsonObject
+                val host = ws?.str("host") ?: headersObj?.str("Host", "host")
                 TransportOptions.WebSocket(
                     path = ws?.str("path") ?: "/",
                     headers = host?.let { mapOf("Host" to it) }.orEmpty(),
@@ -342,18 +446,18 @@ object ConfigDocumentParser {
             }
 
             "grpc" -> {
-                val grpc = stream["grpcSettings"]?.jsonObject
-                    ?: stream["grpc_settings"]?.jsonObject
-                    ?: stream["grpc-settings"]?.jsonObject
+                val grpc = (stream["grpcSettings"] ?: stream["grpc_settings"] ?: stream["grpc-settings"]) as? JsonObject
                 TransportOptions.Grpc(
                     serviceName = grpc?.str("serviceName", "service_name", "service-name").orEmpty(),
+                    permitWithoutStream = grpc?.bool("permit_without_stream", "permitWithoutStream") == true,
+                    multiMode = grpc?.bool("multiMode", "multi_mode") == true ||
+                        grpc?.str("mode")?.equals("multi", ignoreCase = true) == true,
+                    authority = grpc?.str("authority").orEmpty(),
                 )
             }
 
             "httpupgrade" -> {
-                val upgrade = stream["httpupgradeSettings"]?.jsonObject
-                    ?: stream["httpupgrade_settings"]?.jsonObject
-                    ?: stream["httpupgrade-settings"]?.jsonObject
+                val upgrade = (stream["httpupgradeSettings"] ?: stream["httpupgrade_settings"] ?: stream["httpupgrade-settings"]) as? JsonObject
                 TransportOptions.HttpUpgrade(
                     host = upgrade?.str("host").orEmpty(),
                     path = upgrade?.str("path") ?: "/",
@@ -361,14 +465,28 @@ object ConfigDocumentParser {
             }
 
             "xhttp", "splithttp" -> {
-                val xhttp = stream["xhttpSettings"]?.jsonObject
-                    ?: stream["splithttpSettings"]?.jsonObject
-                    ?: stream["xhttp_settings"]?.jsonObject
-                    ?: stream["splithttp_settings"]?.jsonObject
+                val xhttp = (stream["xhttpSettings"] ?: stream["splithttpSettings"] ?: stream["xhttp_settings"] ?: stream["splithttp_settings"]) as? JsonObject
+                val rawHeaders = (xhttp?.get("headers") as? JsonObject)?.entries
+                    ?.mapNotNull { (k, v) ->
+                        (v as? JsonPrimitive)?.contentOrNullSafe()?.let { k to it }
+                    }
+                    ?.toMap()
+                    .orEmpty()
+                val explicitExtra = xhttp?.get("extra") as? JsonObject
+                val topLevelExtraKeys = xhttp?.filterKeys {
+                    it !in setOf("path", "host", "mode", "headers", "extra")
+                }.orEmpty()
+                val extraObj = when {
+                    explicitExtra != null && explicitExtra.isNotEmpty() -> explicitExtra
+                    topLevelExtraKeys.isNotEmpty() -> JsonObject(topLevelExtraKeys)
+                    else -> null
+                }
                 TransportOptions.Xhttp(
                     path = xhttp?.str("path") ?: "/",
                     host = xhttp?.str("host").orEmpty(),
                     mode = xhttp?.str("mode") ?: "auto",
+                    headers = rawHeaders,
+                    extraJson = extraObj?.takeIf { it.isNotEmpty() }?.toString(),
                 )
             }
 

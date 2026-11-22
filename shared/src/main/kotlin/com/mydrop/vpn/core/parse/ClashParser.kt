@@ -89,6 +89,7 @@ object ClashParser {
                 uuid = fields.getAny("uuid") ?: return null,
                 flow = fields.getAny("flow").orEmpty(),
                 packetEncoding = fields.getAny("packet-encoding", "packet_encoding", "packetencoding") ?: "xudp",
+                encryption = fields.getAny("encryption") ?: "none",
             )
 
             "vmess" -> ProxySettings.Vmess(
@@ -177,11 +178,17 @@ object ClashParser {
             verifyPeerCertByName = fields
                 .getAny("verify-peer-cert-by-name", "verifyPeerCertByName", "vcn")
                 .orEmpty(),
+            echConfigList = (
+                fields.getAny("ech-config-list", "echConfigList", "ech")
+                    ?: fields.getAny("config")
+                        ?.takeUnless { fields["enable"]?.equals("false", ignoreCase = true) == true }
+                ).orEmpty(),
             reality = realityKey?.let {
                 RealityOptions(
                     publicKey = it,
                     shortId = fields.getAny("short-id", "short_id", "shortId", "sid").orEmpty(),
                     spiderX = fields.getAny("spider-x", "spider_x", "spiderX", "spx", "path") ?: "/",
+                    mldsa65Verify = fields.getAny("mldsa65-verify", "mldsa65Verify", "pqv").orEmpty(),
                 )
             },
         )
@@ -203,6 +210,9 @@ object ClashParser {
 
             "grpc" -> TransportOptions.Grpc(
                 serviceName = fields.getAny("grpc-service-name", "grpc_service_name", "serviceName", "service_name", "path").orEmpty(),
+                multiMode = fields.getAnyBool("multi-mode", "multiMode") ||
+                    fields.getAny("mode")?.equals("multi", ignoreCase = true) == true,
+                authority = fields.getAny("authority", "grpc-authority").orEmpty(),
             )
 
             "httpupgrade" -> TransportOptions.HttpUpgrade(

@@ -2,7 +2,9 @@ package yumi_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
 	routing_session "github.com/xtls/xray-core/features/routing/session"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
@@ -1202,4 +1205,308 @@ func TestE2E_T2_A8_05_SelectOutboundRejectsUnknownTag(t *testing.T) {
 	if errors.Is(context.Canceled, context.DeadlineExceeded) {
 		t.Fatal("unexpected error identity")
 	}
+}
+
+func TestE2E_FragmentDialerProxyAndStatsAndDomainNoDeadlock(t *testing.T) {
+	targetAddr, _ := startLocalHTTP204Server(t)
+	_, socksPort, _ := startLocalSOCKS5Server(t)
+
+	// Dual-stack wildcard listener filtered strictly to loopback so addressing the proxy as
+	// "localhost" works whether Windows/Linux resolves "localhost" to 127.0.0.1 or ::1 first.
+	proxyLn, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("listen fragment counting proxy: %v", err)
+	}
+	t.Cleanup(func() { _ = proxyLn.Close() })
+	proxyPort := proxyLn.Addr().(*net.TCPAddr).Port
+
+	var totalClientReads atomic.Int64
+	var smallClientReads atomic.Int64
+	go func() {
+		for {
+			client, err := proxyLn.Accept()
+			if err != nil {
+				return
+			}
+			if addr, ok := client.RemoteAddr().(*net.TCPAddr); !ok || !addr.IP.IsLoopback() {
+				_ = client.Close()
+				continue
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				upstream, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort))
+				if err != nil {
+					return
+				}
+				defer upstream.Close()
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, _ = io.Copy(c, upstream)
+				}()
+				buf := make([]byte, 4096)
+				for {
+					n, readErr := c.Read(buf)
+					if n > 0 {
+						totalClientReads.Add(1)
+						if n <= 3 {
+							smallClientReads.Add(1)
+						}
+						if _, writeErr := upstream.Write(buf[:n]); writeErr != nil {
+							break
+						}
+					}
+					if readErr != nil {
+						break
+					}
+				}
+				_ = upstream.Close()
+				wg.Wait()
+			}(client)
+		}
+	}()
+
+	cfgJSON, err := buildProductionShapedConfig(false, []map[string]any{
+		{
+			"tag":      yumi.NodeTagPrefix + "frag",
+			"protocol": "socks",
+			"settings": map[string]any{
+				"servers": []map[string]any{
+					{"address": "localhost", "port": proxyPort},
+				},
+			},
+			"streamSettings": map[string]any{
+				"sockopt": map[string]any{
+					"dialerProxy": "fragment",
+				},
+			},
+		},
+		{
+			"tag":      "fragment",
+			"protocol": "freedom",
+			"settings": map[string]any{
+				"domainStrategy": "AsIs",
+				"fragment": map[string]any{
+					"packets":  "1-3",
+					"length":   "1-3",
+					"interval": "1-2",
+				},
+			},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildProductionShapedConfig: %v", err)
+	}
+
+	inst := startXrayCoreFromJSON(t, cfgJSON)
+	resp, err := dialViaCoreHTTP(
+		context.Background(),
+		inst,
+		yumi.NodeTagPrefix+"frag",
+		"http://"+targetAddr+"/generate_204",
+		5*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("dialViaCoreHTTP through fragmented domain proxy failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content, got %d", resp.StatusCode)
+	}
+
+	if smallClientReads.Load() < 2 {
+		t.Fatalf(
+			"expected fragmented <=3B wire reads on SOCKS5 hop, got small=%d total=%d",
+			smallClientReads.Load(),
+			totalClientReads.Load(),
+		)
+	}
+
+	sm, ok := inst.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok || sm == nil {
+		t.Fatal("expected stats.Manager feature")
+	}
+	up := sm.GetCounter("outbound>>>" + yumi.NodeTagPrefix + "frag>>>traffic>>>uplink")
+	down := sm.GetCounter("outbound>>>" + yumi.NodeTagPrefix + "frag>>>traffic>>>downlink")
+	if up == nil || up.Value() <= 0 {
+		t.Fatalf("expected positive uplink counter on proxy-frag, got %v", up)
+	}
+	if down == nil || down.Value() <= 0 {
+		t.Fatalf("expected positive downlink counter on proxy-frag, got %v", down)
+	}
+}
+
+func TestE2E_AllTlsFingerprintsAndTlsHelloFragmentAndXhttpExtraParseInRealXray(t *testing.T) {
+	fingerprints := []string{
+		"chrome",
+		"firefox",
+		"safari",
+		"ios",
+		"android",
+		"edge",
+		"qq",
+		"360",
+		"random",
+		"randomized",
+		"hellochrome_106_shuffle",
+	}
+
+	realityPubKey := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32))
+	for _, fp := range fingerprints {
+		fp := fp
+		t.Run("fp_"+fp, func(t *testing.T) {
+			cfgJSON, err := buildProductionShapedConfig(false, []map[string]any{
+				{
+					"tag":      yumi.NodeTagPrefix + "tls",
+					"protocol": "vless",
+					"settings": map[string]any{
+						"vnext": []map[string]any{{
+							"address": "203.0.113.10",
+							"port":    443,
+							"users":   []map[string]any{{"id": "11111111-1111-1111-1111-111111111111", "encryption": "none"}},
+						}},
+					},
+					"streamSettings": map[string]any{
+						"network":  "tcp",
+						"security": "tls",
+						"tlsSettings": map[string]any{
+							"serverName":  "example.com",
+							"fingerprint": fp,
+						},
+					},
+				},
+				{
+					"tag":      yumi.NodeTagPrefix + "rel",
+					"protocol": "vless",
+					"settings": map[string]any{
+						"vnext": []map[string]any{{
+							"address": "203.0.113.11",
+							"port":    443,
+							"users":   []map[string]any{{"id": "22222222-2222-2222-2222-222222222222", "encryption": "none"}},
+						}},
+					},
+					"streamSettings": map[string]any{
+						"network":  "tcp",
+						"security": "reality",
+						"realitySettings": map[string]any{
+							"serverName":  "www.cloudflare.com",
+							"publicKey":   realityPubKey,
+							"shortId":     "abcd1234",
+							"fingerprint": fp,
+						},
+					},
+				},
+			}, false)
+			if err != nil {
+				t.Fatalf("buildProductionShapedConfig(%s): %v", fp, err)
+			}
+			cfg, err := serial.LoadJSONConfig(strings.NewReader(cfgJSON))
+			if err != nil {
+				t.Fatalf("serial.LoadJSONConfig(%s): %v", fp, err)
+			}
+			inst, err := core.New(cfg)
+			if err != nil {
+				t.Fatalf("core.New(%s): %v", fp, err)
+			}
+			_ = inst.Close()
+		})
+	}
+
+	pqEnc := "mlkem768x25519plus.native.1rtt." + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	cfgJSON, err := buildProductionShapedConfig(false, []map[string]any{
+		{
+			"tag":      "fragment",
+			"protocol": "freedom",
+			"settings": map[string]any{
+				"domainStrategy": "AsIs",
+				"fragment": map[string]any{
+					"packets":  "tlshello",
+					"length":   "10-20",
+					"interval": "5-10",
+					"maxSplit": "8",
+				},
+			},
+		},
+		{
+			"tag":      yumi.NodeTagPrefix + "xhttp",
+			"protocol": "vless",
+			"settings": map[string]any{
+				"vnext": []map[string]any{{
+					"address": "203.0.113.20",
+					"port":    443,
+					"users":   []map[string]any{{"id": "33333333-3333-3333-3333-333333333333", "encryption": pqEnc}},
+				}},
+			},
+			"streamSettings": map[string]any{
+				"network":  "xhttp",
+				"security": "tls",
+				"tlsSettings": map[string]any{
+					"serverName":  "xh.example.com",
+					"fingerprint": "firefox",
+				},
+				"xhttpSettings": map[string]any{
+					"host": "xh.example.com",
+					"path": "/up",
+					"extra": map[string]any{
+						"xPaddingBytes": "100-200",
+						"downloadSettings": map[string]any{
+							"address":  "dl.example.com",
+							"port":     443,
+							"network":  "xhttp",
+							"security": "tls",
+							"tlsSettings": map[string]any{
+								"serverName":  "dl.example.com",
+								"fingerprint": "chrome",
+							},
+							"xhttpSettings": map[string]any{
+								"host": "dl.example.com",
+								"path": "/dl",
+								"mode": "stream-one",
+							},
+						},
+					},
+				},
+				"sockopt": map[string]any{
+					"dialerProxy": "fragment",
+				},
+			},
+		},
+		{
+			"tag":      yumi.NodeTagPrefix + "grpc",
+			"protocol": "vless",
+			"settings": map[string]any{
+				"vnext": []map[string]any{{
+					"address": "203.0.113.21",
+					"port":    443,
+					"users":   []map[string]any{{"id": "44444444-4444-4444-4444-444444444444", "encryption": "none"}},
+				}},
+			},
+			"streamSettings": map[string]any{
+				"network":  "grpc",
+				"security": "tls",
+				"tlsSettings": map[string]any{
+					"serverName":  "gr.example.com",
+					"fingerprint": "edge",
+				},
+				"grpcSettings": map[string]any{
+					"serviceName": "tun",
+					"authority":   "grpc.example.com",
+					"multiMode":   true,
+				},
+			},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildProductionShapedConfig(anti-dpi matrix): %v", err)
+	}
+	cfg, err := serial.LoadJSONConfig(strings.NewReader(cfgJSON))
+	if err != nil {
+		t.Fatalf("serial.LoadJSONConfig(anti-dpi matrix): %v", err)
+	}
+	inst, err := core.New(cfg)
+	if err != nil {
+		t.Fatalf("core.New(anti-dpi matrix): %v", err)
+	}
+	_ = inst.Close()
 }

@@ -217,6 +217,23 @@
     <string name="settings_debug_remote_demo_subtitle">Fake TVs, servers, subscriptions and live traffic without a real television</string>
     <string name="settings_debug_remote_open">Open remote preview</string>
 
+    <string name="settings_gratitude_title">Gratitude board</string>
+    <plurals name="settings_gratitude_subtitle">
+        <item quantity="one">%1$d contributor helped make Yumi better</item>
+        <item quantity="other">%1$d contributors helped make Yumi better</item>
+    </plurals>
+    <string name="settings_gratitude_sheet_subtitle">People whose ideas, logs, and bug reports made Yumi better</string>
+    <string name="settings_gratitude_footer_prompt">Have an idea or found a bug?</string>
+    <string name="settings_gratitude_footer_action">GitHub Issues</string>
+    <string name="gratitude_badge_telegram">Telegram</string>
+    <string name="gratitude_badge_tester">Tester</string>
+    <string name="gratitude_sha_li">Shared logs and pointed out uTLS, packet fragmentation, and gRPC issues — led to uTLS override, fragmentation presets, and full gRPC support.</string>
+    <string name="gratitude_eternal_blue">Found the VPN IP leak in RKNHardering — led to per-UID filtering on tun0 and dropping local proxy ports.</string>
+    <string name="gratitude_lesak">Proposed country/protocol filters, Exclude mode, saved filters, 1×1 widget, auto-update, custom probe URL, and caught auto-select/failover filter bugs.</string>
+    <string name="gratitude_obsida">Caught the split-tunneling bug where uninstalled apps lingered in selection and stopped routing after reinstall.</string>
+    <string name="gratitude_thetimick">Pointed out provider client routing and DNS — led to full provider routing &amp; DNS support from subscriptions.</string>
+    <string name="gratitude_aror">One of the first Yumi testers — helped test early builds and catch bugs from the very beginning.</string>
+
     <!-- ================================================ Subscriptions screen -->
 
     <string name="subscriptions_title">Subscriptions</string>
@@ -327,6 +344,46 @@
     <string name="settings_hijack_dns_subtitle">Route queries to port 53 into our own resolver</string>
     <string name="settings_mtu_hint">From 1280 to 9000</string>
     <string name="settings_mtu_error">Allowed range is 1280 to 9000</string>
+    <string name="settings_tls_fingerprint">uTLS fingerprint</string>
+    <string name="settings_tls_fingerprint_subtitle">Which browser TLS handshake Xray mimics. Auto uses the link’s own setting or Chrome; Firefox, Edge, QQ, or Randomized can bypass stricter DPI</string>
+    <string name="tls_fp_auto">Auto</string>
+    <string name="tls_fp_chrome">Chrome</string>
+    <string name="tls_fp_firefox">Firefox</string>
+    <string name="tls_fp_safari">Safari</string>
+    <string name="tls_fp_ios">iOS</string>
+    <string name="tls_fp_android">Android</string>
+    <string name="tls_fp_edge">Edge</string>
+    <string name="tls_fp_qq">QQ</string>
+    <string name="tls_fp_360">360</string>
+    <string name="tls_fp_random">Random</string>
+    <string name="tls_fp_randomized">Randomized</string>
+    <string name="settings_fragment">Packet fragmentation</string>
+    <string name="fragment_mode_off">Off</string>
+    <string name="fragment_mode_off_description">Sends handshakes intact (uses provider’s fragment settings if the subscription sent any)</string>
+    <string name="fragment_mode_tlshello">TLS Hello</string>
+    <string name="fragment_mode_tlshello_description">Splits the TLS ClientHello record so DPI misses the SNI. Best for TLS, WS, gRPC, and XHTTP</string>
+    <string name="fragment_mode_tcp">TCP 1–3</string>
+    <string name="fragment_mode_tcp_description">Splits the first 1–3 TCP writes into small chunks. Works with both TLS and REALITY</string>
+    <string name="settings_fragment_presets">Presets</string>
+    <string name="fragment_preset_gentle">Gentle</string>
+    <string name="fragment_preset_standard">Standard</string>
+    <string name="fragment_preset_aggressive">Aggressive</string>
+    <string name="settings_fragment_scope">Apply to</string>
+    <string name="fragment_scope_tls_only">TLS only</string>
+    <string name="fragment_scope_tls_only_description">Fragments ordinary TLS nodes; leaves REALITY untouched</string>
+    <string name="fragment_scope_tls_reality">TLS &amp; REALITY</string>
+    <string name="fragment_scope_tls_reality_description">Fragments encrypted TCP nodes; skips QUIC/Hysteria2 and WireGuard</string>
+    <string name="fragment_scope_all_tcp">All TCP</string>
+    <string name="fragment_scope_all_tcp_description">Fragments all TCP proxy nodes including unencrypted ones</string>
+    <string name="settings_fragment_length">Chunk length (bytes)</string>
+    <string name="settings_fragment_length_hint">Value or min-max, e.g. 10-20 (1–1500)</string>
+    <string name="settings_fragment_length_error">Enter N or A-B within 1–1500</string>
+    <string name="settings_fragment_interval">Delay between chunks (ms)</string>
+    <string name="settings_fragment_interval_hint">Value or min-max, e.g. 10-20 (0–1000)</string>
+    <string name="settings_fragment_interval_error">Enter N or A-B within 0–1000</string>
+    <string name="settings_fragment_max_split">Max chunks (optional)</string>
+    <string name="settings_fragment_max_split_hint">Blank for unlimited, or N / A-B (1–1000)</string>
+    <string name="settings_fragment_max_split_error">Leave blank or enter N / A-B within 1–1000</string>
 
     <string name="settings_dns">DNS</string>
     <string name="settings_remote_dns">DNS through the proxy</string>
@@ -748,6 +805,9 @@ Send it here: %2$s</string>
     <string name="settings_geozones_preemptive_subtitle">Pre-warm mobile servers in the buffer ring and switch upon entry without waiting for drops</string>
     <string name="settings_geozones_auto_return">Return to ordinary server outside zones</string>
     <string name="settings_geozones_auto_return_subtitle">Switch back from mobile relays once back in a clean area</string>
+    <string name="settings_geozones_mobile_missing_title">No mobile server list set</string>
+    <string name="settings_geozones_mobile_missing_body">Geo-zone switching will not work until you pick servers for mobile data — there is nothing to switch to inside a whitelist zone.</string>
+    <string name="settings_geozones_mobile_missing_action">Choose mobile servers</string>
 
     <string name="connect_zones_map">City zones map</string>
     <string name="connect_zone_inside">Inside whitelist zone</string>
@@ -760,6 +820,7 @@ Send it here: %2$s</string>
     <string name="zones_permission_title">Location access needed</string>
     <string name="zones_permission_body">Stays on your phone: maps cellular drop hexes, matches cell towers under GPS jamming, and pre-switches to mobile servers.</string>
     <string name="zones_permission_grant">Grant</string>
+    <string name="zones_mobile_missing_action">Choose</string>
     <string name="zones_status_outside">Clear zone</string>
     <string name="zones_status_approaching">Approaching zone · %1$d m</string>
     <string name="zones_status_inside">Inside whitelist zone</string>

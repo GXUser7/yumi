@@ -61,6 +61,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,11 +75,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -99,16 +103,224 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppLanguage
 import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.DnsProfile
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProbeTargets
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.vpn.TunnelTileService
 import com.mydrop.vpn.vpn.TunnelWidgetProvider
+
+internal data class FragmentPreset(
+    val labelRes: Int,
+    val length: String,
+    val interval: String,
+    val maxChunks: String = "",
+)
+
+internal val FRAGMENT_PRESETS = listOf(
+    FragmentPreset(R.string.fragment_preset_gentle, length = "50-100", interval = "5-10"),
+    FragmentPreset(R.string.fragment_preset_standard, length = "10-20", interval = "10-20"),
+    FragmentPreset(R.string.fragment_preset_aggressive, length = "1-5", interval = "1-5"),
+)
+
+@Composable
+internal fun TlsFingerprintSetting(
+    selected: TlsFingerprintOverride,
+    onSelect: (TlsFingerprintOverride) -> Unit,
+) {
+    Column {
+        Text(
+            text = stringResource(R.string.settings_tls_fingerprint),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.settings_tls_fingerprint_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TlsFingerprintOverride.entries.forEach { fp ->
+                ToggleButton(
+                    checked = selected == fp,
+                    onCheckedChange = { onSelect(fp) },
+                ) {
+                    Text(
+                        text = stringResource(fp.labelRes),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun FragmentationSettings(
+    mode: FragmentMode,
+    scope: FragmentScope,
+    length: String,
+    interval: String,
+    maxChunks: String,
+    resetKey: Any = Unit,
+    onModeChange: (FragmentMode) -> Unit,
+    onScopeChange: (FragmentScope) -> Unit,
+    onPresetSelect: (FragmentPreset) -> Unit,
+    onLengthCommit: (String) -> Unit,
+    onIntervalCommit: (String) -> Unit,
+    onMaxChunksCommit: (String) -> Unit,
+) {
+    Column {
+        Text(
+            text = stringResource(R.string.settings_fragment),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(mode.descriptionRes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FragmentMode.entries.forEach { entry ->
+                ChoiceButton(
+                    label = stringResource(entry.labelRes),
+                    checked = mode == entry,
+                    onClick = { onModeChange(entry) },
+                )
+            }
+        }
+        AnimatedVisibility(visible = mode != FragmentMode.Off) {
+            DependentGroup {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_fragment_presets),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FRAGMENT_PRESETS.forEach { preset ->
+                            val matchesPreset = length == preset.length &&
+                                interval == preset.interval &&
+                                maxChunks.isBlank() &&
+                                preset.maxChunks.isBlank()
+                            ChoiceButton(
+                                label = stringResource(preset.labelRes),
+                                checked = matchesPreset,
+                                onClick = { onPresetSelect(preset) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.settings_fragment_scope),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(scope.descriptionRes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FragmentScope.entries.forEach { entry ->
+                            ChoiceButton(
+                                label = stringResource(entry.labelRes),
+                                checked = scope == entry,
+                                onClick = { onScopeChange(entry) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        key(resetKey) {
+                            ValidatedField(
+                                initial = length,
+                                label = stringResource(R.string.settings_fragment_length),
+                                hint = stringResource(R.string.settings_fragment_length_hint),
+                                error = stringResource(R.string.settings_fragment_length_error),
+                                isValid = AppSettings::isValidFragmentLength,
+                                onCommit = { raw ->
+                                    AppSettings.normalizeRange(
+                                        raw,
+                                        AppSettings.MIN_FRAGMENT_LENGTH,
+                                        AppSettings.MAX_FRAGMENT_LENGTH,
+                                    )?.let(onLengthCommit)
+                                },
+                            )
+                            ValidatedField(
+                                initial = interval,
+                                label = stringResource(R.string.settings_fragment_interval),
+                                hint = stringResource(R.string.settings_fragment_interval_hint),
+                                error = stringResource(R.string.settings_fragment_interval_error),
+                                isValid = AppSettings::isValidFragmentInterval,
+                                onCommit = { raw ->
+                                    AppSettings.normalizeRange(
+                                        raw,
+                                        AppSettings.MIN_FRAGMENT_INTERVAL,
+                                        AppSettings.MAX_FRAGMENT_INTERVAL,
+                                    )?.let(onIntervalCommit)
+                                },
+                            )
+                            ValidatedField(
+                                initial = maxChunks,
+                                label = stringResource(R.string.settings_fragment_max_split),
+                                hint = stringResource(R.string.settings_fragment_max_split_hint),
+                                error = stringResource(R.string.settings_fragment_max_split_error),
+                                isValid = AppSettings::isValidFragmentMaxChunks,
+                                onCommit = { raw ->
+                                    val normalized = if (raw.isBlank()) {
+                                        ""
+                                    } else {
+                                        AppSettings.normalizeRange(
+                                            raw,
+                                            AppSettings.MIN_FRAGMENT_MAX_CHUNKS,
+                                            AppSettings.MAX_FRAGMENT_MAX_CHUNKS,
+                                        ) ?: return@ValidatedField
+                                    }
+                                    onMaxChunksCommit(normalized)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /**
  * A text setting that only reaches storage once it is valid.
@@ -190,6 +402,8 @@ fun SettingsScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
+    var gratitudeOpen by rememberSaveable { mutableStateOf(false) }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
@@ -360,6 +574,36 @@ fun SettingsScreen(
                     error = stringResource(R.string.settings_mtu_error),
                     isValid = { it.toIntOrNull() in 1280..9000 },
                     onCommit = { raw -> onUpdate { s -> s.copy(mtu = raw.toInt()) } },
+                )
+                Spacer(Modifier.height(16.dp))
+                var fragmentPresetEpoch by rememberSaveable { mutableIntStateOf(0) }
+                TlsFingerprintSetting(
+                    selected = settings.tlsFingerprint,
+                    onSelect = { fp -> onUpdate { s -> s.copy(tlsFingerprint = fp) } },
+                )
+                Spacer(Modifier.height(16.dp))
+                FragmentationSettings(
+                    mode = settings.fragmentMode,
+                    scope = settings.fragmentScope,
+                    length = settings.fragmentLength,
+                    interval = settings.fragmentInterval,
+                    maxChunks = settings.fragmentMaxChunks,
+                    resetKey = fragmentPresetEpoch,
+                    onModeChange = { mode -> onUpdate { s -> s.copy(fragmentMode = mode) } },
+                    onScopeChange = { scope -> onUpdate { s -> s.copy(fragmentScope = scope) } },
+                    onPresetSelect = { preset ->
+                        onUpdate { s ->
+                            s.copy(
+                                fragmentLength = preset.length,
+                                fragmentInterval = preset.interval,
+                                fragmentMaxChunks = preset.maxChunks,
+                            )
+                        }
+                        fragmentPresetEpoch++
+                    },
+                    onLengthCommit = { value -> onUpdate { s -> s.copy(fragmentLength = value) } },
+                    onIntervalCommit = { value -> onUpdate { s -> s.copy(fragmentInterval = value) } },
+                    onMaxChunksCommit = { value -> onUpdate { s -> s.copy(fragmentMaxChunks = value) } },
                 )
             }
         }
@@ -714,6 +958,15 @@ fun SettingsScreen(
                         }
                     },
                 )
+                AnimatedVisibility(visible = settings.mobileNodeIds.isEmpty()) {
+                    Column {
+                        Spacer(Modifier.height(10.dp))
+                        GeoZonesMobileWarningCard(
+                            emphasized = settings.geoZonesEnabled,
+                            onOpenMobileNodes = onOpenMobileNodes,
+                        )
+                    }
+                }
                 AnimatedVisibility(visible = settings.geoZonesEnabled) {
                     DependentGroup {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
@@ -762,7 +1015,7 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
 
                 Button(
                     onClick = onOpenZonesMap,
@@ -917,6 +1170,13 @@ fun SettingsScreen(
             }
         }
 
+        item("gratitude") {
+            GratitudeBoardRow(
+                count = GRATITUDE_ENTRIES.size,
+                onClick = { gratitudeOpen = true },
+            )
+        }
+
         item("version") {
             val context = LocalContext.current
             // Read from the package rather than written here: a hand-maintained string on this
@@ -942,6 +1202,12 @@ fun SettingsScreen(
         }
 
         item("tail") { Spacer(Modifier.height(88.dp)) }
+    }
+
+    if (gratitudeOpen) {
+        GratitudeBoardSheet(
+            onDismiss = { gratitudeOpen = false },
+        )
     }
 }
 
@@ -1051,6 +1317,70 @@ internal fun GroupDivider() {
     HorizontalDivider(
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
     )
+}
+
+@Composable
+private fun GeoZonesMobileWarningCard(
+    emphasized: Boolean,
+    onOpenMobileNodes: () -> Unit,
+) {
+    val containerColor = if (emphasized) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val contentColor = if (emphasized) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Surface(
+        onClick = onOpenMobileNodes,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor,
+        contentColor = contentColor,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(22.dp),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_geozones_mobile_missing_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = contentColor,
+                )
+                Text(
+                    text = stringResource(R.string.settings_geozones_mobile_missing_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor.copy(alpha = 0.88f),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_geozones_mobile_missing_action),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = contentColor,
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = contentColor.copy(alpha = 0.8f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
 }
 
 /**

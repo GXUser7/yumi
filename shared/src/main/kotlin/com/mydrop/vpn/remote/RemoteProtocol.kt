@@ -1,11 +1,14 @@
 package com.mydrop.vpn.remote
 
 import com.mydrop.vpn.core.model.AppLanguage
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.Palette
 import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.RoutingMode
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
 import com.mydrop.vpn.core.model.ThemeMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.Visualizer
 import com.mydrop.vpn.pairing.base64Url
 import com.mydrop.vpn.pairing.base64UrlBytes
@@ -234,6 +237,12 @@ data class RemoteSettings(
     val remoteDns: String = "https://1.1.1.1/dns-query",
     val directDns: String = "8.8.8.8",
     val mtu: Int = 9000,
+    val tlsFingerprint: TlsFingerprintOverride = TlsFingerprintOverride.Auto,
+    val fragmentMode: FragmentMode = FragmentMode.Off,
+    val fragmentScope: FragmentScope = FragmentScope.TlsAndReality,
+    val fragmentLength: String = "10-20",
+    val fragmentInterval: String = "10-20",
+    val fragmentMaxChunks: String = "",
 )
 
 @Serializable
@@ -257,6 +266,12 @@ data class RemoteSettingsPatch(
     val remoteDns: String? = null,
     val directDns: String? = null,
     val mtu: Int? = null,
+    val tlsFingerprint: TlsFingerprintOverride? = null,
+    val fragmentMode: FragmentMode? = null,
+    val fragmentScope: FragmentScope? = null,
+    val fragmentLength: String? = null,
+    val fragmentInterval: String? = null,
+    val fragmentMaxChunks: String? = null,
 )
 
 /**

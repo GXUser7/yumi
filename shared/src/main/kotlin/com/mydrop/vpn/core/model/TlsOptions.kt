@@ -12,6 +12,18 @@ data class RealityOptions(
     val publicKey: String,
     val shortId: String = "",
     val spiderX: String = "/",
+    val mldsa65Verify: String = "",
+)
+
+/**
+ * Freedom outbound TCP/TLS packet fragmentation parameters used to bypass DPI on ClientHello.
+ */
+@Serializable
+data class FragmentOptions(
+    val packets: String = "tlshello",
+    val length: String = "10-20",
+    val interval: String = "10-20",
+    val maxSplit: String = "",
 )
 
 @Serializable
@@ -45,6 +57,7 @@ data class TlsOptions(
     val verifyPeerCertByName: String = "",
     val certificate: String? = null,
     val ech: EchOptions? = null,
+    val echConfigList: String = "",
 ) {
     val isReality: Boolean get() = reality != null
 

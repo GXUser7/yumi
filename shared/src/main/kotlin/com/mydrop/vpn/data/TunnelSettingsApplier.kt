@@ -2,7 +2,10 @@ package com.mydrop.vpn.data
 
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.SplitTunnelRules
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.VpnState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +66,12 @@ class TunnelSettingsApplier(
         val directDns: String,
         val hijackDns: Boolean,
         val providerRouting: Boolean,
+        val tlsFingerprint: TlsFingerprintOverride,
+        val fragmentMode: FragmentMode,
+        val fragmentScope: FragmentScope,
+        val fragmentLength: String,
+        val fragmentInterval: String,
+        val fragmentMaxChunks: String,
     )
 
     private fun AppSettings.baked() = Baked(
@@ -76,6 +85,12 @@ class TunnelSettingsApplier(
         directDns = directDns,
         hijackDns = hijackDns,
         providerRouting = providerRouting,
+        tlsFingerprint = tlsFingerprint,
+        fragmentMode = fragmentMode,
+        fragmentScope = fragmentScope,
+        fragmentLength = fragmentLength,
+        fragmentInterval = fragmentInterval,
+        fragmentMaxChunks = fragmentMaxChunks,
     )
 
     fun start() {

@@ -1,13 +1,18 @@
 package com.mydrop.vpn.core.xray
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.FragmentMode
+import com.mydrop.vpn.core.model.FragmentOptions
+import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.ProxySettings
 import com.mydrop.vpn.core.model.RealityOptions
 import com.mydrop.vpn.core.model.RoutingMode
+import com.mydrop.vpn.core.model.TlsFingerprintOverride
 import com.mydrop.vpn.core.model.TlsOptions
 import com.mydrop.vpn.core.model.TransportOptions
+import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -972,5 +977,401 @@ class XrayConfigFactoryTest {
         assertEquals(5353, remoteObj["port"]!!.jsonPrimitive.content.toInt())
 
         assertEquals("8.8.8.8", servers[1].jsonPrimitive.content)
+    }
+
+    @Test
+    fun `default settings emit no fragment outbound and no dialerProxy`() {
+        val tlsNode = ProxyNode(
+            id = "n1",
+            name = "N1",
+            server = "a.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-n1"),
+            tls = TlsOptions(serverName = "a.example.com"),
+        )
+        val doc = XrayConfigFactory.build(listOf(tlsNode), tlsNode, AppSettings())
+        val outbounds = Json.parseToJsonElement(doc.json).jsonObject["outbounds"]!!.jsonArray
+
+        assertNull(outbounds.firstOrNull { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.FRAGMENT_TAG })
+        val proxyStream = outbounds
+            .first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag("n1") }
+            .jsonObject["streamSettings"]!!.jsonObject
+        assertNull(proxyStream["sockopt"])
+    }
+
+    @Test
+    fun `global fragmentation emits freedom outbound with AsIs strategy and honors scope and excluded protocols`() {
+        val tlsNode = ProxyNode(
+            id = "tls",
+            name = "TLS",
+            server = "tls.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-tls"),
+            tls = TlsOptions(serverName = "tls.example.com"),
+        )
+        val realityNode = ProxyNode(
+            id = "rel",
+            name = "REL",
+            server = "rel.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-rel"),
+            tls = TlsOptions(serverName = "decoy.example.com", reality = RealityOptions(publicKey = "PUB")),
+        )
+        val plainNode = ProxyNode(
+            id = "plain",
+            name = "PLAIN",
+            server = "plain.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-plain"),
+            tls = null,
+        )
+        val h3XhttpNode = ProxyNode(
+            id = "h3",
+            name = "H3",
+            server = "h3.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-h3"),
+            tls = TlsOptions(serverName = "h3.example.com", alpn = listOf("h3")),
+            transport = TransportOptions.Xhttp(host = "h3.example.com", path = "/xh"),
+        )
+        val hy2Node = ProxyNode(
+            id = "hy2",
+            name = "HY2",
+            server = "hy2.example.com",
+            port = 443,
+            settings = ProxySettings.Hysteria2(password = "pw"),
+            tls = TlsOptions(serverName = "hy2.example.com"),
+        )
+        val wgNode = ProxyNode(
+            id = "wg",
+            name = "WG",
+            server = "wg.example.com",
+            port = 51820,
+            settings = ProxySettings.WireGuard(privateKey = "priv", peerPublicKey = "pub"),
+        )
+        val directNode = ProxyNode(
+            id = "dir",
+            name = "Direct",
+            server = "direct",
+            port = 0,
+            settings = ProxySettings.Direct,
+        )
+        val allNodes = listOf(tlsNode, realityNode, plainNode, h3XhttpNode, hy2Node, wgNode, directNode)
+
+        fun dialerProxyOf(doc: XrayConfigFactory.Document, nodeId: String): String? {
+            val outbounds = Json.parseToJsonElement(doc.json).jsonObject["outbounds"]!!.jsonArray
+            val ob = outbounds.first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag(nodeId) }
+                .jsonObject
+            return ob["streamSettings"]?.jsonObject?.get("sockopt")?.jsonObject?.get("dialerProxy")?.jsonPrimitive?.content
+        }
+
+        val tlsOnlyDoc = XrayConfigFactory.build(
+            nodes = allNodes,
+            selected = tlsNode,
+            settings = AppSettings(
+                fragmentMode = FragmentMode.TlsHello,
+                fragmentScope = FragmentScope.TlsOnly,
+                fragmentLength = "10-20",
+                fragmentInterval = "5-10",
+                fragmentMaxChunks = "4",
+            ),
+        )
+        val outbounds = Json.parseToJsonElement(tlsOnlyDoc.json).jsonObject["outbounds"]!!.jsonArray
+        val fragOb = outbounds.first {
+            it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.FRAGMENT_TAG
+        }.jsonObject
+        assertFalse(XrayConfigFactory.FRAGMENT_TAG.startsWith(XrayConfigFactory.nodeTag("")))
+        assertEquals("freedom", fragOb["protocol"]?.jsonPrimitive?.content)
+        val fragSettings = fragOb["settings"]!!.jsonObject
+        assertEquals("AsIs", fragSettings["domainStrategy"]?.jsonPrimitive?.content)
+        val frag = fragSettings["fragment"]!!.jsonObject
+        assertEquals("tlshello", frag["packets"]?.jsonPrimitive?.content)
+        assertEquals("10-20", frag["length"]?.jsonPrimitive?.content)
+        assertEquals("5-10", frag["interval"]?.jsonPrimitive?.content)
+        assertEquals("4", frag["maxSplit"]?.jsonPrimitive?.content)
+
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(tlsOnlyDoc, "tls"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "rel"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "plain"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "h3"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "hy2"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "wg"))
+        assertNull(dialerProxyOf(tlsOnlyDoc, "dir"))
+
+        val tlsRealityDoc = XrayConfigFactory.build(
+            nodes = allNodes,
+            selected = tlsNode,
+            settings = AppSettings(
+                fragmentMode = FragmentMode.TcpSegments,
+                fragmentScope = FragmentScope.TlsAndReality,
+            ),
+        )
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(tlsRealityDoc, "tls"))
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(tlsRealityDoc, "rel"))
+        assertNull(dialerProxyOf(tlsRealityDoc, "plain"))
+        assertNull(dialerProxyOf(tlsRealityDoc, "h3"))
+        assertNull(dialerProxyOf(tlsRealityDoc, "hy2"))
+
+        val allTcpDoc = XrayConfigFactory.build(
+            nodes = allNodes,
+            selected = tlsNode,
+            settings = AppSettings(
+                fragmentMode = FragmentMode.TcpSegments,
+                fragmentScope = FragmentScope.AllTcp,
+            ),
+        )
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(allTcpDoc, "tls"))
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(allTcpDoc, "rel"))
+        assertEquals(XrayConfigFactory.FRAGMENT_TAG, dialerProxyOf(allTcpDoc, "plain"))
+        assertNull(dialerProxyOf(allTcpDoc, "h3"))
+        assertNull(dialerProxyOf(allTcpDoc, "hy2"))
+        assertNull(dialerProxyOf(allTcpDoc, "wg"))
+        assertNull(dialerProxyOf(allTcpDoc, "dir"))
+    }
+
+    @Test
+    fun `provider fragment configs deduplicate and are overridden when global fragment is enabled`() {
+        val fragA = FragmentOptions(packets = "tlshello", length = "10-20", interval = "10-20")
+        val fragB = FragmentOptions(packets = "1-3", length = "1-5", interval = "2-5", maxSplit = "6")
+        val n1 = ProxyNode(
+            id = "n1",
+            name = "N1",
+            server = "a.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-n1"),
+            tls = TlsOptions(),
+            fragment = fragA,
+        )
+        val n2 = ProxyNode(
+            id = "n2",
+            name = "N2",
+            server = "b.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-n2"),
+            tls = TlsOptions(),
+            fragment = fragA,
+        )
+        val n3 = ProxyNode(
+            id = "n3",
+            name = "N3",
+            server = "c.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-n3"),
+            tls = TlsOptions(),
+            fragment = fragB,
+        )
+
+        val offDoc = XrayConfigFactory.build(listOf(n1, n2, n3), n1, AppSettings(fragmentMode = FragmentMode.Off))
+        val offOutbounds = Json.parseToJsonElement(offDoc.json).jsonObject["outbounds"]!!.jsonArray
+        val offFragTags = offOutbounds.mapNotNull { ob ->
+            val obj = ob.jsonObject
+            if (obj["protocol"]?.jsonPrimitive?.content == "freedom" &&
+                obj["settings"]?.jsonObject?.containsKey("fragment") == true
+            ) {
+                obj["tag"]?.jsonPrimitive?.content
+            } else {
+                null
+            }
+        }
+        assertEquals(listOf("fragment", "fragment-2"), offFragTags)
+
+        fun dialerProxy(outbounds: JsonArray, id: String) = outbounds
+            .first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag(id) }
+            .jsonObject["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content
+
+        assertEquals("fragment", dialerProxy(offOutbounds, "n1"))
+        assertEquals("fragment", dialerProxy(offOutbounds, "n2"))
+        assertEquals("fragment-2", dialerProxy(offOutbounds, "n3"))
+
+        val overrideDoc = XrayConfigFactory.build(
+            listOf(n1, n2, n3),
+            n1,
+            AppSettings(
+                fragmentMode = FragmentMode.TcpSegments,
+                fragmentScope = FragmentScope.TlsAndReality,
+                fragmentLength = "2-4",
+                fragmentInterval = "3-6",
+            ),
+        )
+        val overrideOutbounds = Json.parseToJsonElement(overrideDoc.json).jsonObject["outbounds"]!!.jsonArray
+        val overrideFragCount = overrideOutbounds.count {
+            it.jsonObject["settings"]?.jsonObject?.containsKey("fragment") == true
+        }
+        assertEquals(1, overrideFragCount)
+        assertEquals("fragment", dialerProxy(overrideOutbounds, "n3"))
+    }
+
+    @Test
+    fun `tls fingerprint override applies to TLS and REALITY but skips Hysteria2, and expanded known list works`() {
+        val tlsShuffle = ProxyNode(
+            id = "tls",
+            name = "TLS",
+            server = "tls.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-tls"),
+            tls = TlsOptions(serverName = "tls.example.com", fingerprint = "hellochrome_106_shuffle"),
+        )
+        val realityBad = ProxyNode(
+            id = "rel",
+            name = "REL",
+            server = "rel.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-rel"),
+            tls = TlsOptions(
+                serverName = "decoy.example.com",
+                fingerprint = "hellogolang",
+                reality = RealityOptions(publicKey = "PUB"),
+            ),
+        )
+        val tlsUnsafe = ProxyNode(
+            id = "unsafe",
+            name = "UNSAFE",
+            server = "u.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-u"),
+            tls = TlsOptions(serverName = "u.example.com", fingerprint = "unsafe"),
+        )
+        val hy2 = ProxyNode(
+            id = "hy2",
+            name = "HY2",
+            server = "hy2.example.com",
+            port = 443,
+            settings = ProxySettings.Hysteria2(password = "pw"),
+            tls = TlsOptions(serverName = "hy2.example.com", fingerprint = "firefox"),
+        )
+
+        val autoDoc = XrayConfigFactory.build(
+            listOf(tlsShuffle, realityBad, tlsUnsafe, hy2),
+            tlsShuffle,
+            AppSettings(tlsFingerprint = TlsFingerprintOverride.Auto),
+        )
+        val autoOutbounds = Json.parseToJsonElement(autoDoc.json).jsonObject["outbounds"]!!.jsonArray
+        fun streamOf(outbounds: JsonArray, id: String) = outbounds
+            .first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag(id) }
+            .jsonObject["streamSettings"]!!.jsonObject
+
+        assertEquals(
+            "hellochrome_106_shuffle",
+            streamOf(autoOutbounds, "tls")["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "chrome",
+            streamOf(autoOutbounds, "rel")["realitySettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "chrome",
+            streamOf(autoOutbounds, "unsafe")["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "firefox",
+            streamOf(autoOutbounds, "hy2")["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+
+        val qqDoc = XrayConfigFactory.build(
+            listOf(tlsShuffle, realityBad, hy2),
+            tlsShuffle,
+            AppSettings(tlsFingerprint = TlsFingerprintOverride.Qq),
+        )
+        val qqOutbounds = Json.parseToJsonElement(qqDoc.json).jsonObject["outbounds"]!!.jsonArray
+        assertEquals(
+            "qq",
+            streamOf(qqOutbounds, "tls")["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "qq",
+            streamOf(qqOutbounds, "rel")["realitySettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "firefox",
+            streamOf(qqOutbounds, "hy2")["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `xhttp extra sanitization, VLESS encryption, mldsa65Verify, echConfigList, and grpc multiMode are emitted safely`() {
+        val rawExtra = """
+            {
+              "host": "ignored-by-extra.example.com",
+              "path": "/ignored",
+              "mode": "packet-up",
+              "xPaddingBytes": "100-500",
+              "scMaxEachPostBytes": 1000000,
+              "headers": {"Host": "bad.example.com", "User-Agent": "InnerAgent"},
+              "downloadSettings": {
+                "address": "cdn.example.com",
+                "port": 443,
+                "network": "xhttp",
+                "security": "tls",
+                "tlsSettings": {"serverName": "cdn.example.com", "allowInsecure": true, "fingerprint": "unsafe"},
+                "sockopt": {"dialerProxy": "unknown-proxy"},
+                "xhttpSettings": {"host": "cdn.example.com", "path": "/dl", "mode": "stream-one"}
+              }
+            }
+        """.trimIndent()
+        val pqKey = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 7 })
+        val validEncryption = "mlkem768x25519plus.native.1rtt.$pqKey"
+        val validPqv = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(1952) { 3 })
+
+        val xhttpNode = ProxyNode(
+            id = "xh",
+            name = "XH",
+            server = "xh.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-xh", encryption = validEncryption),
+            tls = TlsOptions(serverName = "xh.example.com", echConfigList = "ECH-CFG-DATA"),
+            transport = TransportOptions.Xhttp(
+                host = "xh.example.com",
+                path = "/up",
+                mode = "auto",
+                headers = mapOf("Host" to "outer.example.com", "X-Outer" to "keep-if-needed"),
+                extraJson = rawExtra,
+            ),
+        )
+        val grpcNode = ProxyNode(
+            id = "gr",
+            name = "GR",
+            server = "gr.example.com",
+            port = 443,
+            settings = ProxySettings.Vless(uuid = "uuid-gr", encryption = "not-valid-encryption"),
+            tls = TlsOptions(
+                serverName = "decoy.example.com",
+                reality = RealityOptions(publicKey = "PUB", mldsa65Verify = validPqv),
+            ),
+            transport = TransportOptions.Grpc(serviceName = "svc", multiMode = true, authority = "grpc.example.com"),
+        )
+
+        val doc = XrayConfigFactory.build(listOf(xhttpNode, grpcNode), xhttpNode, AppSettings())
+        val outbounds = Json.parseToJsonElement(doc.json).jsonObject["outbounds"]!!.jsonArray
+
+        val xhOb = outbounds.first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag("xh") }.jsonObject
+        val xhUser = xhOb["settings"]!!.jsonObject["vnext"]!!.jsonArray[0].jsonObject["users"]!!.jsonArray[0].jsonObject
+        assertEquals(validEncryption, xhUser["encryption"]!!.jsonPrimitive.content)
+
+        val xhStream = xhOb["streamSettings"]!!.jsonObject
+        assertEquals("ECH-CFG-DATA", xhStream["tlsSettings"]!!.jsonObject["echConfigList"]!!.jsonPrimitive.content)
+        val xhSettings = xhStream["xhttpSettings"]!!.jsonObject
+        val emittedExtra = xhSettings["extra"]!!.jsonObject
+        assertNull(emittedExtra["host"])
+        assertEquals("100-500", emittedExtra["xPaddingBytes"]!!.jsonPrimitive.content)
+        assertNull(emittedExtra["headers"]!!.jsonObject["Host"])
+        assertEquals("InnerAgent", emittedExtra["headers"]!!.jsonObject["User-Agent"]!!.jsonPrimitive.content)
+
+        val dl = emittedExtra["downloadSettings"]!!.jsonObject
+        assertNull(dl["tlsSettings"]!!.jsonObject["allowInsecure"])
+        assertEquals("chrome", dl["tlsSettings"]!!.jsonObject["fingerprint"]!!.jsonPrimitive.content)
+        assertNull(dl["sockopt"])
+        val dlXhttp = dl["xhttpSettings"]!!.jsonObject
+        assertEquals("cdn.example.com", dlXhttp["host"]!!.jsonPrimitive.content)
+        assertEquals("/dl", dlXhttp["path"]!!.jsonPrimitive.content)
+        assertEquals("stream-one", dlXhttp["mode"]!!.jsonPrimitive.content)
+
+        val grOb = outbounds.first { it.jsonObject["tag"]?.jsonPrimitive?.content == XrayConfigFactory.nodeTag("gr") }.jsonObject
+        val grUser = grOb["settings"]!!.jsonObject["vnext"]!!.jsonArray[0].jsonObject["users"]!!.jsonArray[0].jsonObject
+        assertEquals("none", grUser["encryption"]!!.jsonPrimitive.content)
+        val grStream = grOb["streamSettings"]!!.jsonObject
+        assertEquals(validPqv, grStream["realitySettings"]!!.jsonObject["mldsa65Verify"]!!.jsonPrimitive.content)
+        val grpcSettings = grStream["grpcSettings"]!!.jsonObject
+        assertEquals(true, grpcSettings["multiMode"]!!.jsonPrimitive.content.toBooleanStrict())
+        assertEquals("grpc.example.com", grpcSettings["authority"]!!.jsonPrimitive.content)
     }
 }

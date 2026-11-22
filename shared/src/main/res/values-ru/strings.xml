@@ -215,6 +215,25 @@
     <string name="settings_debug_remote_demo_subtitle">Фейковые ТВ, серверы, подписки и трафик без реального телевизора</string>
     <string name="settings_debug_remote_open">Открыть пульт (демо)</string>
 
+    <string name="settings_gratitude_title">Доска благодарности</string>
+    <plurals name="settings_gratitude_subtitle">
+        <item quantity="one">%1$d участник помог сделать Yumi лучше</item>
+        <item quantity="few">%1$d участника помогли сделать Yumi лучше</item>
+        <item quantity="many">%1$d участников помогли сделать Yumi лучше</item>
+        <item quantity="other">%1$d участника помогли сделать Yumi лучше</item>
+    </plurals>
+    <string name="settings_gratitude_sheet_subtitle">Люди, чьи идеи, логи и баг-репорты сделали Yumi лучше</string>
+    <string name="settings_gratitude_footer_prompt">Есть идея или нашли баг?</string>
+    <string name="settings_gratitude_footer_action">GitHub Issues</string>
+    <string name="gratitude_badge_telegram">Telegram</string>
+    <string name="gratitude_badge_tester">Тестер</string>
+    <string name="gratitude_sha_li">Поделился логом и подсказал про uTLS, фрагментацию пакетов и gRPC — в Yumi появились выбор отпечатка, фрагментация и полная поддержка gRPC.</string>
+    <string name="gratitude_eternal_blue">Нашёл утечку внешнего IP в тесте RKNHardering — появилась фильтрация по UID на входе в tun0 и отказ от локальных портов.</string>
+    <string name="gratitude_lesak">Предложил фильтры по странам и протоколам, режим «Исключить», сохранение фильтров, виджет 1×1, автообновление и свой URL пробы, а ещё помог дожать баги автовыбора и подмены.</string>
+    <string name="gratitude_obsida">Поймал баг со split tunneling, когда удалённое приложение зависало в списке и не попадало в туннель после переустановки.</string>
+    <string name="gratitude_thetimick">Подсказал про клиентскую маршрутизацию и DNS от провайдера — появилась поддержка правил из подписок.</string>
+    <string name="gratitude_aror">Один из первых тестеров Yumi — помогал обкатывать ранние сборки и ловить баги с самого старта.</string>
+
     <!-- ================================================ Экран подписок -->
 
     <string name="subscriptions_title">Подписки</string>
@@ -325,6 +344,46 @@
     <string name="settings_hijack_dns_subtitle">Заворачивать запросы к порту 53 в собственный резолвер</string>
     <string name="settings_mtu_hint">От 1280 до 9000</string>
     <string name="settings_mtu_error">Допустимо от 1280 до 9000</string>
+    <string name="settings_tls_fingerprint">Отпечаток uTLS</string>
+    <string name="settings_tls_fingerprint_subtitle">Под какой браузер Xray маскирует TLS-рукопожатие. «Авто» берёт настройку из ссылки или Chrome; при блокировке попробуйте Firefox, Edge, QQ или Randomized</string>
+    <string name="tls_fp_auto">Авто</string>
+    <string name="tls_fp_chrome">Chrome</string>
+    <string name="tls_fp_firefox">Firefox</string>
+    <string name="tls_fp_safari">Safari</string>
+    <string name="tls_fp_ios">iOS</string>
+    <string name="tls_fp_android">Android</string>
+    <string name="tls_fp_edge">Edge</string>
+    <string name="tls_fp_qq">QQ</string>
+    <string name="tls_fp_360">360</string>
+    <string name="tls_fp_random">Random</string>
+    <string name="tls_fp_randomized">Randomized</string>
+    <string name="settings_fragment">Фрагментация пакетов</string>
+    <string name="fragment_mode_off">Выкл</string>
+    <string name="fragment_mode_off_description">Отправляет рукопожатия целиком (берёт фрагментацию из подписки, если провайдер её задал)</string>
+    <string name="fragment_mode_tlshello">TLS Hello</string>
+    <string name="fragment_mode_tlshello_description">Режет запись TLS ClientHello, чтобы ТСПУ не видел SNI. Подходит для TLS, WS, gRPC и XHTTP</string>
+    <string name="fragment_mode_tcp">TCP 1–3</string>
+    <string name="fragment_mode_tcp_description">Дробит первые 1–3 TCP-пакета на мелкие части. Совместимо и с TLS, и с REALITY</string>
+    <string name="settings_fragment_presets">Пресеты</string>
+    <string name="fragment_preset_gentle">Мягкий</string>
+    <string name="fragment_preset_standard">Стандарт</string>
+    <string name="fragment_preset_aggressive">Агрессивный</string>
+    <string name="settings_fragment_scope">Применять к</string>
+    <string name="fragment_scope_tls_only">Только TLS</string>
+    <string name="fragment_scope_tls_only_description">Фрагментирует обычные TLS-серверы, не трогая REALITY</string>
+    <string name="fragment_scope_tls_reality">TLS и REALITY</string>
+    <string name="fragment_scope_tls_reality_description">Фрагментирует шифрованные TCP-серверы; пропускает QUIC/Hysteria2 и WireGuard</string>
+    <string name="fragment_scope_all_tcp">Все TCP</string>
+    <string name="fragment_scope_all_tcp_description">Фрагментирует все TCP-прокси, включая без TLS</string>
+    <string name="settings_fragment_length">Длина фрагмента (байт)</string>
+    <string name="settings_fragment_length_hint">Число или диапазон, например 10-20 (1–1500)</string>
+    <string name="settings_fragment_length_error">Укажите N или A-B от 1 до 1500</string>
+    <string name="settings_fragment_interval">Интервал между частями (мс)</string>
+    <string name="settings_fragment_interval_hint">Число или диапазон, например 10-20 (0–1000)</string>
+    <string name="settings_fragment_interval_error">Укажите N или A-B от 0 до 1000</string>
+    <string name="settings_fragment_max_split">Макс. частей (необязательно)</string>
+    <string name="settings_fragment_max_split_hint">Пусто — без лимита, или N / A-B (1–1000)</string>
+    <string name="settings_fragment_max_split_error">Оставьте пустым или укажите N / A-B от 1 до 1000</string>
 
     <string name="settings_dns">DNS</string>
     <string name="settings_remote_dns">DNS через прокси</string>
@@ -746,6 +805,9 @@
     <string name="settings_geozones_preemptive_subtitle">Фоном проверять мобильный список перед границей зоны и переезжать без ожидания сбоя</string>
     <string name="settings_geozones_auto_return">Возвращать обычный сервер вне зоны</string>
     <string name="settings_geozones_auto_return_subtitle">Когда телефон выходит в чистый район, проверять прежний сервер и возвращаться на него</string>
+    <string name="settings_geozones_mobile_missing_title">Нет мобильного списка серверов</string>
+    <string name="settings_geozones_mobile_missing_body">Без серверов для мобильного переключение по гео-зонам работать не будет — туннелю некуда переехать в зоне белого списка.</string>
+    <string name="settings_geozones_mobile_missing_action">Выбрать серверы для мобильного</string>
 
     <string name="connect_zones_map">Карта зон города</string>
     <string name="connect_zone_inside">В зоне белого списка</string>
@@ -758,6 +820,7 @@
     <string name="zones_permission_title">Нужен доступ к геолокации</string>
     <string name="zones_permission_body">Нужен только на устройстве: строить гексагоны сбоев, узнавать сотовые вышки при РЭБ и переезжать на мобильный список до обрыва.</string>
     <string name="zones_permission_grant">Разрешить</string>
+    <string name="zones_mobile_missing_action">Выбрать</string>
     <string name="zones_status_outside">Чистая зона</string>
     <string name="zones_status_approaching">Подлёт к зоне · %1$d м</string>
     <string name="zones_status_inside">В зоне белого списка</string>

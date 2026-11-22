@@ -29,6 +29,8 @@ sealed interface TransportOptions {
     data class Grpc(
         val serviceName: String = "",
         val permitWithoutStream: Boolean = false,
+        val multiMode: Boolean = false,
+        val authority: String = "",
     ) : TransportOptions {
         override val label: String get() = "gRPC"
     }
@@ -78,6 +80,7 @@ sealed interface TransportOptions {
         /** `auto`, `packet-up`, `stream-up`, `stream-one`; the core decides when left as `auto`. */
         val mode: String = "auto",
         val headers: Map<String, String> = emptyMap(),
+        val extraJson: String? = null,
     ) : TransportOptions {
         override val label: String get() = "XHTTP"
     }
