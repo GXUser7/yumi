@@ -166,6 +166,9 @@ class AppContainer(context: Context) {
      * it survives restarts — a panel that saw a new identifier on every refresh would burn through
      * the user's device limit in a week.
      */
+    private val appUserAgent = "Yumi/$versionName (Android ${android.os.Build.VERSION.RELEASE}; " +
+        "${android.os.Build.MODEL})"
+
     val subscriptionService = SubscriptionService(
         logs = logs,
         strings = strings,
@@ -173,9 +176,16 @@ class AppContainer(context: Context) {
         // to decide which format to emit, and the caching front-ends in front of them key on it
         // too, so a bare "Yumi (Android)" shares one cache entry with every other install and can
         // be served an answer that was refused to somebody else.
-        userAgent = "Yumi/$versionName (Android ${android.os.Build.VERSION.RELEASE}; " +
-            "${android.os.Build.MODEL})",
+        userAgent = appUserAgent,
         identity = { deviceIdentity() },
+        allowLocalBillingHttp = debuggable,
+    )
+
+    val billingService = BillingService(
+        logs = logs,
+        strings = strings,
+        userAgent = appUserAgent,
+        allowLocalHttp = debuggable,
     )
 
     val tunnelConfigs = TunnelConfigBuilder(

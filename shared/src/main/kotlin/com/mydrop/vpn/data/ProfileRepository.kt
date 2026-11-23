@@ -7,6 +7,7 @@ import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProviderRouting
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
+import com.mydrop.vpn.core.model.SubscriptionFailureMetadata
 import com.mydrop.vpn.core.model.SubscriptionUserInfo
 import java.io.File
 import java.util.UUID
@@ -299,6 +300,9 @@ class ProfileRepository(
         webPageUrl: String?,
         /** Null keeps what the last refresh learned; see [SubscriptionUpdate.Success.providerRouting]. */
         providerRouting: ProviderRouting? = null,
+        billingManifestUrl: String? = null,
+        paymentUrl: String? = null,
+        supportUrl: String? = null,
     ): Pair<Int, Int> {
         var added = 0
         var removed = 0
@@ -329,6 +333,9 @@ class ProfileRepository(
                             userInfo = userInfo ?: sub.userInfo,
                             remoteTitle = remoteTitle ?: sub.remoteTitle,
                             webPageUrl = webPageUrl ?: sub.webPageUrl,
+                            billingManifestUrl = billingManifestUrl ?: sub.billingManifestUrl,
+                            paymentUrl = paymentUrl ?: sub.paymentUrl,
+                            supportUrl = supportUrl ?: sub.supportUrl,
                             lastUpdatedEpochMillis = System.currentTimeMillis(),
                             lastError = null,
                             // Pruned to the servers that survived either way: a remembered profile
@@ -376,10 +383,26 @@ class ProfileRepository(
         return sameName?.id ?: nodes.firstOrNull()?.id
     }
 
-    fun recordSubscriptionError(subscriptionId: String, message: String) = store.update { current ->
+    fun recordSubscriptionError(
+        subscriptionId: String,
+        message: String,
+        metadata: SubscriptionFailureMetadata? = null,
+    ) = store.update { current ->
         current.copy(
-            subscriptions = current.subscriptions.map {
-                if (it.id == subscriptionId) it.copy(lastError = message) else it
+            subscriptions = current.subscriptions.map { sub ->
+                if (sub.id != subscriptionId) {
+                    sub
+                } else {
+                    sub.copy(
+                        userInfo = metadata?.userInfo ?: sub.userInfo,
+                        remoteTitle = metadata?.remoteTitle ?: sub.remoteTitle,
+                        webPageUrl = metadata?.webPageUrl ?: sub.webPageUrl,
+                        billingManifestUrl = metadata?.billingManifestUrl ?: sub.billingManifestUrl,
+                        paymentUrl = metadata?.paymentUrl ?: sub.paymentUrl,
+                        supportUrl = metadata?.supportUrl ?: sub.supportUrl,
+                        lastError = message,
+                    )
+                }
             },
         )
     }

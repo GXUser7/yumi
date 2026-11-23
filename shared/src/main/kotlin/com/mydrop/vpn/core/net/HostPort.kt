@@ -265,7 +265,7 @@ fun isForbiddenDnsHost(host: String): Boolean {
     return isLoopbackOrUnspecifiedHost(clean)
 }
 
-private fun isNonCanonicalOrZonedIpLiteral(host: String): Boolean {
+internal fun isNonCanonicalOrZonedIpLiteral(host: String): Boolean {
     val raw = host.trim().removeSurrounding("[", "]").trimEnd('.').lowercase()
     if (raw.isEmpty()) return false
     if (':' in raw && '%' in raw) return true

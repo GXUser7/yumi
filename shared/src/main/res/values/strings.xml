@@ -256,6 +256,36 @@
     <string name="subscriptions_used_of">%1$s of %2$s</string>
     <string name="subscriptions_days_left">%1$d d left</string>
     <string name="subscriptions_expired">expired</string>
+    <string name="subscriptions_action_plans">Plans</string>
+    <string name="subscriptions_action_renew">Renew</string>
+    <string name="subscriptions_action_account">Account</string>
+
+    <string name="billing_sheet_title">Renew subscription</string>
+    <string name="billing_sheet_tab_plans">Plans (%1$d)</string>
+    <string name="billing_sheet_tab_addons">Add-ons (%1$d)</string>
+    <string name="billing_sheet_promo_toggle">Have a promo code?</string>
+    <string name="billing_sheet_promo_label">Promo code</string>
+    <string name="billing_sheet_promo_apply">Apply</string>
+    <string name="billing_sheet_promo_applied">Promo code %1$s will be applied at checkout</string>
+    <string name="billing_sheet_promo_clear">Remove</string>
+    <string name="billing_sheet_pay_cta">Pay %1$s</string>
+    <string name="billing_sheet_pay_free_cta">Continue</string>
+    <string name="billing_sheet_domain_hint">Opens %1$s · HTTPS</string>
+    <string name="billing_sheet_direct_global_hint">Global VPN is active — if your bank declines payment, pause the tunnel briefly</string>
+    <string name="billing_sheet_loading">Loading plans…</string>
+    <string name="billing_sheet_empty">No plans available for this subscription</string>
+    <string name="billing_sheet_retry">Retry</string>
+    <string name="billing_sheet_open_web">Open portal</string>
+    <string name="billing_traffic_unlimited">Unlimited</string>
+    <string name="billing_traffic_gb">%1$d GB</string>
+    <string name="billing_devices_count">up to %1$d devices</string>
+    <string name="billing_days_duration">%1$d d</string>
+    <string name="billing_error_unsafe_url">Refused an unsafe billing link (HTTPS is required)</string>
+    <string name="billing_error_unsupported_version">Unsupported billing manifest format</string>
+    <string name="billing_error_no_checkout">Checkout endpoint is missing in the manifest</string>
+    <string name="billing_error_browser_missing">No browser found to open the payment page</string>
+    <string name="billing_returning_refresh">Checking payment and refreshing subscription…</string>
+    <string name="billing_renewed_ok">Subscription refreshed</string>
 
     <string name="add_sheet_title">Add</string>
     <string name="add_sheet_hint">A link from a provider, a happ:// link, a server itself (vless://, vmess://, trojan://, ss://, hysteria2://, tuic://…) or a DNS address (tls://, sdns://, a DoH URL)</string>

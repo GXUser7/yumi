@@ -56,6 +56,9 @@ class SubscriptionRefresher(
                     remoteTitle = result.subscription.remoteTitle,
                     webPageUrl = result.subscription.webPageUrl,
                     providerRouting = result.providerRouting,
+                    billingManifestUrl = result.subscription.billingManifestUrl,
+                    paymentUrl = result.subscription.paymentUrl,
+                    supportUrl = result.subscription.supportUrl,
                 )
                 val counted = strings.plural(R.plurals.servers, result.nodes.size)
                 val detail = when {
@@ -69,7 +72,7 @@ class SubscriptionRefresher(
             }
 
             is SubscriptionUpdate.Failure -> {
-                profiles.recordSubscriptionError(subscription.id, result.message)
+                profiles.recordSubscriptionError(subscription.id, result.message, result.metadata)
                 logs.warn(R.string.log_subscription_message, subscription.name, result.message)
                 strings.get(R.string.log_subscription_message, subscription.name, result.message)
             }

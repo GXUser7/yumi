@@ -4,9 +4,12 @@ import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.ProviderProfile
 import com.mydrop.vpn.core.model.ProxyNode
 import com.mydrop.vpn.core.model.Subscription
+import com.mydrop.vpn.core.model.SubscriptionFailureMetadata
 import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.model.TransportOptions
 import com.mydrop.vpn.core.net.resolveSafeDirectRedirect
+import com.mydrop.vpn.core.net.sanitizeBillingUrl
+import com.mydrop.vpn.core.net.sanitizePortalUrl
 import com.mydrop.vpn.core.parse.ProviderProfileParser
 import com.mydrop.vpn.core.parse.SubscriptionBody
 import com.mydrop.vpn.core.parse.ProxyUriParser
@@ -68,6 +71,7 @@ class SubscriptionService(
     private val identity: () -> DeviceIdentity? = { null },
     /** In-process tunnel bridge used when direct refresh fails while the core is running. */
     private val bridge: TunnelBridge = XrayCore,
+    private val allowLocalBillingHttp: Boolean = false,
 ) {
 
     private companion object {
@@ -117,6 +121,7 @@ class SubscriptionService(
             return SubscriptionUpdate.Failure(
                 subscription.id,
                 strings.get(R.string.error_http, response.code),
+                metadata = response.toFailureMetadata(),
             )
         }
 
@@ -146,11 +151,13 @@ class SubscriptionService(
                         return SubscriptionUpdate.Failure(
                             subscription.id,
                             strings.get(R.string.error_device_limit),
+                            metadata = response.toFailureMetadata(),
                         )
                     }
                     return SubscriptionUpdate.Failure(
                         subscription.id,
                         strings.get(R.string.error_panel_notice, notice),
+                        metadata = response.toFailureMetadata(),
                     )
                 }
 
@@ -204,6 +211,10 @@ class SubscriptionService(
                             ?: subscription.userInfo,
                         remoteTitle = response.profileTitle ?: subscription.remoteTitle,
                         webPageUrl = response.webPageUrl ?: subscription.webPageUrl,
+                        billingManifestUrl = response.billingManifestUrl
+                            ?: subscription.billingManifestUrl,
+                        paymentUrl = response.paymentUrl ?: subscription.paymentUrl,
+                        supportUrl = response.supportUrl ?: subscription.supportUrl,
                         lastUpdatedEpochMillis = System.currentTimeMillis(),
                         lastError = null,
                     ),
@@ -227,10 +238,19 @@ class SubscriptionService(
                 SubscriptionUpdate.Failure(
                     subscription.id,
                     strings.get(R.string.error_unsupported_format, body.format),
+                    metadata = response.toFailureMetadata(),
                 )
 
             is SubscriptionBody.Empty ->
-                SubscriptionUpdate.Failure(subscription.id, strings.get(body.reason.messageRes))
+                SubscriptionUpdate.Failure(
+                    subscription.id,
+                    if (response.deviceLimitReached) {
+                        strings.get(R.string.error_device_limit)
+                    } else {
+                        strings.get(body.reason.messageRes)
+                    },
+                    metadata = response.toFailureMetadata(),
+                )
         }
     }
 
@@ -373,7 +393,64 @@ class SubscriptionService(
         val hwidRequired: Boolean = false,
         /** It also said the account has no free device slots left. */
         val deviceLimitReached: Boolean = false,
-    )
+        val billingManifestUrl: String? = null,
+        val paymentUrl: String? = null,
+        val supportUrl: String? = null,
+    ) {
+        fun toFailureMetadata(): SubscriptionFailureMetadata? {
+            val parsedInfo = SubscriptionParser.parseUserInfo(userInfoHeader)
+            if (parsedInfo == null && profileTitle == null && webPageUrl == null &&
+                billingManifestUrl == null && paymentUrl == null && supportUrl == null
+            ) {
+                return null
+            }
+            return SubscriptionFailureMetadata(
+                userInfo = parsedInfo,
+                remoteTitle = profileTitle,
+                webPageUrl = webPageUrl,
+                billingManifestUrl = billingManifestUrl,
+                paymentUrl = paymentUrl,
+                supportUrl = supportUrl,
+            )
+        }
+    }
+
+    private fun buildParsedResponse(
+        code: Int,
+        body: String,
+        headerValue: (String) -> String?,
+        hasHeader: (String) -> Boolean,
+    ): Response {
+        val comments = SubscriptionParser.parseMetadataComments(body)
+        fun metaValue(vararg names: String): String? =
+            names.firstNotNullOfOrNull { headerValue(it)?.trim()?.takeIf(String::isNotEmpty) }
+                ?: names.firstNotNullOfOrNull { comments[it] }
+
+        return Response(
+            code = code,
+            body = body,
+            userInfoHeader = metaValue("subscription-userinfo"),
+            profileTitle = metaValue("profile-title")?.let(::decodeProfileTitle),
+            webPageUrl = sanitizePortalUrl(
+                metaValue("profile-web-page-url"),
+                allowLocalBillingHttp,
+            ),
+            hwidRequired = hasHeader("x-hwid-active") || hasHeader("x-hwid-not-supported"),
+            deviceLimitReached = hasHeader("x-hwid-max-devices-reached"),
+            billingManifestUrl = sanitizeBillingUrl(
+                metaValue("billing-manifest-url"),
+                allowLocalBillingHttp,
+            ),
+            paymentUrl = sanitizeBillingUrl(
+                metaValue("payment-url", "sub-expire-button-link"),
+                allowLocalBillingHttp,
+            ),
+            supportUrl = sanitizePortalUrl(
+                metaValue("support-url"),
+                allowLocalBillingHttp,
+            ),
+        )
+    }
 
     /**
      * A server that cannot be dialled: the all-zero UUID at `0.0.0.0:1` that panels use to carry a
@@ -519,14 +596,11 @@ class SubscriptionService(
                     headersObj?.containsKey(name.lowercase()) == true ||
                         response.header(name).isNotEmpty()
 
-                return Response(
+                return buildParsedResponse(
                     code = code,
                     body = body,
-                    userInfoHeader = headerValue("subscription-userinfo"),
-                    profileTitle = headerValue("profile-title")?.let(::decodeProfileTitle),
-                    webPageUrl = headerValue("profile-web-page-url"),
-                    hwidRequired = hasHeader("x-hwid-active") || hasHeader("x-hwid-not-supported"),
-                    deviceLimitReached = hasHeader("x-hwid-max-devices-reached"),
+                    headerValue = ::headerValue,
+                    hasHeader = ::hasHeader,
                 )
             } finally {
                 runCatching { response.close() }
@@ -568,17 +642,11 @@ class SubscriptionService(
                 }
                 val body = String(raw, Charsets.UTF_8)
 
-                return Response(
+                return buildParsedResponse(
                     code = code,
                     body = body,
-                    userInfoHeader = connection.getHeaderField("subscription-userinfo"),
-                    profileTitle = connection.getHeaderField("profile-title")
-                        ?.let(::decodeProfileTitle),
-                    webPageUrl = connection.getHeaderField("profile-web-page-url"),
-                    hwidRequired = connection.getHeaderField("x-hwid-active") != null ||
-                        connection.getHeaderField("x-hwid-not-supported") != null,
-                    deviceLimitReached =
-                        connection.getHeaderField("x-hwid-max-devices-reached") != null,
+                    headerValue = { name -> connection.getHeaderField(name) },
+                    hasHeader = { name -> connection.getHeaderField(name) != null },
                 )
             } finally {
                 connection.disconnect()

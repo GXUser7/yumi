@@ -108,6 +108,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="happ" />
                 <data android:scheme="mydrop" />
+                <data android:scheme="yumi" />
             </intent-filter>
 
             <!--

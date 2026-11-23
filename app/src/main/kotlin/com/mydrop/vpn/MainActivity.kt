@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as MyDropApplication).container
         container.geoMonitor.refreshPermission()
         com.mydrop.vpn.vpn.MyDropVpnService.refreshForegroundType()
+        viewModel.onAppResumed()
     }
 
     override fun onNewIntent(intent: Intent) {

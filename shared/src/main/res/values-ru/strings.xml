@@ -258,6 +258,36 @@
     <string name="subscriptions_used_of">%1$s из %2$s</string>
     <string name="subscriptions_days_left">осталось %1$d дн.</string>
     <string name="subscriptions_expired">истекла</string>
+    <string name="subscriptions_action_plans">Тарифы</string>
+    <string name="subscriptions_action_renew">Продлить</string>
+    <string name="subscriptions_action_account">Кабинет</string>
+
+    <string name="billing_sheet_title">Продление подписки</string>
+    <string name="billing_sheet_tab_plans">Тарифы (%1$d)</string>
+    <string name="billing_sheet_tab_addons">Доп. опции (%1$d)</string>
+    <string name="billing_sheet_promo_toggle">У меня есть промокод</string>
+    <string name="billing_sheet_promo_label">Промокод</string>
+    <string name="billing_sheet_promo_apply">Применить</string>
+    <string name="billing_sheet_promo_applied">Промокод %1$s применится при оплате</string>
+    <string name="billing_sheet_promo_clear">Сбросить</string>
+    <string name="billing_sheet_pay_cta">Оплатить %1$s</string>
+    <string name="billing_sheet_pay_free_cta">Продолжить</string>
+    <string name="billing_sheet_domain_hint">Откроется %1$s · HTTPS</string>
+    <string name="billing_sheet_direct_global_hint">Включён глобальный VPN — если банк отклонит платёж, поставьте туннель на паузу</string>
+    <string name="billing_sheet_loading">Загружаем тарифы…</string>
+    <string name="billing_sheet_empty">Для этой подписки нет доступных тарифов</string>
+    <string name="billing_sheet_retry">Повторить</string>
+    <string name="billing_sheet_open_web">Открыть портал</string>
+    <string name="billing_traffic_unlimited">Безлимит</string>
+    <string name="billing_traffic_gb">%1$d ГБ</string>
+    <string name="billing_devices_count">до %1$d устр.</string>
+    <string name="billing_days_duration">%1$d дн.</string>
+    <string name="billing_error_unsafe_url">Отклонена небезопасная ссылка оплаты (требуется HTTPS)</string>
+    <string name="billing_error_unsupported_version">Неподдерживаемый формат манифеста оплаты</string>
+    <string name="billing_error_no_checkout">В манифесте не указан адрес оформления заказа</string>
+    <string name="billing_error_browser_missing">Не найден браузер для открытия оплаты</string>
+    <string name="billing_returning_refresh">Проверяем оплату и обновляем подписку…</string>
+    <string name="billing_renewed_ok">Подписка обновлена</string>
 
     <string name="add_sheet_title">Добавить</string>
     <string name="add_sheet_hint">Ссылка от провайдера, happ://-ссылка, сам сервер (vless://, vmess://, trojan://, ss://, hysteria2://, tuic://…) или адрес DNS (tls://, sdns://, DoH-ссылка)</string>

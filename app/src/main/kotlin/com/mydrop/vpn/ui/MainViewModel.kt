@@ -11,6 +11,8 @@ import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.AddKind
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.BillingCheckoutRequest
+import com.mydrop.vpn.core.model.BillingManifest
 import com.mydrop.vpn.core.model.CountryFilterMode
 import com.mydrop.vpn.core.model.CustomRules
 import com.mydrop.vpn.core.model.DnsProfile
@@ -30,11 +32,14 @@ import com.mydrop.vpn.core.model.SubscriptionUpdate
 import com.mydrop.vpn.core.model.TrafficStats
 import com.mydrop.vpn.core.model.VpnState
 import com.mydrop.vpn.core.model.ZoneProximity
+import com.mydrop.vpn.core.net.sanitizeBillingUrl
+import com.mydrop.vpn.core.net.sanitizePortalUrl
 import com.mydrop.vpn.core.parse.DeepLinkParser
 import com.mydrop.vpn.core.parse.DeepLinkPayload
 import com.mydrop.vpn.core.parse.DnsUriParser
 import com.mydrop.vpn.core.parse.ProxyUriParser
 import com.mydrop.vpn.data.AppContainer
+import com.mydrop.vpn.data.BillingResult
 import com.mydrop.vpn.data.ConnectionLog
 import com.mydrop.vpn.data.FilteredPingCoordinator
 import com.mydrop.vpn.data.GeoAssetStore
@@ -53,8 +58,10 @@ import com.mydrop.vpn.ui.screens.servers.ServerFilterState
 import com.mydrop.vpn.ui.screens.servers.ServerSort
 import com.mydrop.vpn.ui.screens.servers.filteredNodesForPing
 import com.mydrop.vpn.vpn.XrayCore
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -146,6 +153,16 @@ data class PendingImport(
     val source: String,
 )
 
+/** Live state for the in-app subscription plans & checkout modal sheet. */
+data class BillingSheetUiState(
+    val subscription: Subscription,
+    val loading: Boolean = false,
+    val manifest: BillingManifest? = null,
+    val loadError: String? = null,
+    val submitting: Boolean = false,
+    val checkoutError: String? = null,
+)
+
 private data class TransientState(
     val pingingNodeIds: Set<String> = emptySet(),
     val refreshingSubscriptionIds: Set<String> = emptySet(),
@@ -176,6 +193,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val pairingInvite: StateFlow<PairingInvite?> = _pairingInvite.asStateFlow()
     private val _pairingSending = MutableStateFlow(false)
     val pairingSending: StateFlow<Boolean> = _pairingSending.asStateFlow()
+
+    private val _billingSheet = MutableStateFlow<BillingSheetUiState?>(null)
+    val billingSheet: StateFlow<BillingSheetUiState?> = _billingSheet.asStateFlow()
+
+    private val _externalUrls = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val externalUrls = _externalUrls.asSharedFlow()
+
+    private var pendingBillingSubscriptionId: String? = null
+    private var billingPollJob: Job? = null
 
     /* ── The television's remote ─────────────────────────────────────────────────────────── */
 
@@ -737,6 +763,197 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setSubscriptionEnabled(subscriptionId: String, enabled: Boolean) =
         container.profiles.setSubscriptionEnabled(subscriptionId, enabled)
 
+    // ------------------------------------------------------------ Billing
+
+    fun openSubscriptionBilling(subscriptionId: String) {
+        val sub = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId } ?: return
+        when {
+            sub.billingManifestUrl != null -> {
+                _billingSheet.value = BillingSheetUiState(subscription = sub, loading = true)
+                viewModelScope.launch { loadBillingManifest(sub) }
+            }
+            sub.paymentUrl != null -> {
+                val safe = sanitizeBillingUrl(sub.paymentUrl, container.diagnosticBuild)
+                if (safe == null) {
+                    emit(R.string.billing_error_unsafe_url)
+                } else {
+                    pendingBillingSubscriptionId = sub.id
+                    _externalUrls.tryEmit(safe)
+                }
+            }
+            sub.webPageUrl != null -> openSubscriptionPortal(subscriptionId)
+        }
+    }
+
+    fun openSubscriptionPortal(subscriptionId: String) {
+        val sub = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId } ?: return
+        val safe = sanitizePortalUrl(sub.webPageUrl, container.diagnosticBuild)
+        if (safe == null) {
+            emit(R.string.billing_error_unsafe_url)
+        } else {
+            _externalUrls.tryEmit(safe)
+        }
+    }
+
+    fun openExternalBillingUrl(url: String, markPendingForSubscriptionId: String? = null) {
+        val safe = sanitizePortalUrl(url, container.diagnosticBuild)
+        if (safe == null) {
+            emit(R.string.billing_error_unsafe_url)
+        } else {
+            if (markPendingForSubscriptionId != null) {
+                pendingBillingSubscriptionId = markPendingForSubscriptionId
+            }
+            _billingSheet.value = null
+            _externalUrls.tryEmit(safe)
+        }
+    }
+
+    fun retryBillingManifest() {
+        val sub = _billingSheet.value?.subscription ?: return
+        _billingSheet.value = BillingSheetUiState(subscription = sub, loading = true)
+        viewModelScope.launch { loadBillingManifest(sub) }
+    }
+
+    fun dismissBillingSheet() {
+        _billingSheet.value = null
+    }
+
+    fun clearBillingCheckoutError() {
+        _billingSheet.update { it?.copy(checkoutError = null) }
+    }
+
+    fun submitBillingCheckout(
+        planId: String?,
+        addonId: String?,
+        paymentMethod: String,
+        promoCode: String?,
+    ) {
+        val current = _billingSheet.value ?: return
+        val endpoint = current.manifest?.checkout?.endpoint
+        if (endpoint.isNullOrBlank()) {
+            _billingSheet.update {
+                it?.copy(checkoutError = strings.get(R.string.billing_error_no_checkout))
+            }
+            return
+        }
+        _billingSheet.update { it?.copy(submitting = true, checkoutError = null) }
+        viewModelScope.launch {
+            val request = BillingCheckoutRequest(
+                planId = planId,
+                addonId = addonId,
+                paymentMethod = paymentMethod,
+                promoCode = promoCode?.trim()?.takeIf { it.isNotEmpty() },
+                returnUrl = "mydrop://billing/return?sub_id=${current.subscription.id}",
+            )
+            val result = container.billingService.createCheckout(
+                endpoint = endpoint,
+                request = request,
+                acceptLanguage = Locale.getDefault().toLanguageTag(),
+            )
+            when (result) {
+                is BillingResult.Success -> {
+                    pendingBillingSubscriptionId = current.subscription.id
+                    _billingSheet.value = null
+                    _externalUrls.tryEmit(result.value.paymentUrl)
+                }
+                is BillingResult.Failure -> {
+                    _billingSheet.update {
+                        if (it?.subscription?.id == current.subscription.id) {
+                            it.copy(submitting = false, checkoutError = result.message)
+                        } else {
+                            it
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun notifyBrowserMissing() {
+        emit(R.string.billing_error_browser_missing)
+    }
+
+    fun onAppResumed() {
+        val targetId = pendingBillingSubscriptionId ?: return
+        pendingBillingSubscriptionId = null
+        startBillingRefreshPolling(targetId)
+    }
+
+    private fun onBillingReturn(subscriptionId: String?) {
+        val subs = uiState.value.subscriptions
+        val targetId = subscriptionId?.takeIf { id -> subs.any { it.id == id } }
+            ?: pendingBillingSubscriptionId
+            ?: return
+        pendingBillingSubscriptionId = null
+        startBillingRefreshPolling(targetId)
+    }
+
+    private suspend fun loadBillingManifest(sub: Subscription) {
+        val url = sub.billingManifestUrl ?: return
+        val result = container.billingService.fetchManifest(
+            manifestUrl = url,
+            acceptLanguage = Locale.getDefault().toLanguageTag(),
+        )
+        _billingSheet.update { state ->
+            if (state?.subscription?.id != sub.id) {
+                state
+            } else {
+                when (result) {
+                    is BillingResult.Success -> state.copy(
+                        loading = false,
+                        manifest = result.value,
+                        loadError = null,
+                    )
+                    is BillingResult.Failure -> state.copy(
+                        loading = false,
+                        loadError = result.message,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun startBillingRefreshPolling(subscriptionId: String) {
+        billingPollJob?.cancel()
+        val before = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId } ?: return
+        val beforeExpire = before.userInfo?.expiresAtEpochSeconds ?: -1L
+        val beforeHadError = before.lastError != null
+        val beforeCount = before.nodeIds.size
+
+        billingPollJob = viewModelScope.launch {
+            emit(R.string.billing_returning_refresh)
+            val delays = longArrayOf(1_500L, 3_000L, 5_000L)
+            var lastSummary: String? = null
+            for (waitMs in delays) {
+                delay(waitMs)
+                val current = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId }
+                    ?: break
+                transient.update {
+                    it.copy(refreshingSubscriptionIds = it.refreshingSubscriptionIds + subscriptionId)
+                }
+                lastSummary = try {
+                    container.subscriptionRefresher.refresh(current)
+                } finally {
+                    transient.update {
+                        it.copy(refreshingSubscriptionIds = it.refreshingSubscriptionIds - subscriptionId)
+                    }
+                }
+                val after = uiState.value.subscriptions.firstOrNull { it.id == subscriptionId }
+                if (after != null) {
+                    val afterExpire = after.userInfo?.expiresAtEpochSeconds ?: -1L
+                    val recovered = beforeHadError && after.lastError == null && after.nodeIds.isNotEmpty()
+                    val extended = afterExpire > beforeExpire
+                    val grew = after.nodeIds.size > beforeCount
+                    if (recovered || extended || grew) {
+                        emit(R.string.billing_renewed_ok)
+                        return@launch
+                    }
+                }
+            }
+            if (!lastSummary.isNullOrBlank()) emit(lastSummary)
+        }
+    }
+
     // ------------------------------------------------------------ Import
 
     /**
@@ -1031,6 +1248,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
      */
     fun importFromExternalLink(raw: String) {
         val payload = DeepLinkParser.parse(raw)
+        if (payload is DeepLinkPayload.BillingReturn) {
+            onBillingReturn(payload.subscriptionId)
+            return
+        }
         if (payload is DeepLinkPayload.Unsupported) {
             emit(strings.describe(payload))
             return
@@ -1075,6 +1296,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     emit(R.string.message_dns_added_many, payload.profiles.size)
                 }
             }
+
+            is DeepLinkPayload.BillingReturn -> onBillingReturn(payload.subscriptionId)
 
             is DeepLinkPayload.Unsupported -> emit(strings.describe(payload))
         }

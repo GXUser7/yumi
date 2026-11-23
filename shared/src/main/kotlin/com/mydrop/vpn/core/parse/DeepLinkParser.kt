@@ -11,6 +11,9 @@ sealed interface DeepLinkPayload {
     /** Resolvers: `tls://`, `quic://`, a DoH URL, or an `sdns://` stamp. */
     data class AddDns(val profiles: List<DnsProfile>) : DeepLinkPayload
 
+    /** Return trip from an external payment page (`mydrop://billing/return?sub_id=...`). */
+    data class BillingReturn(val subscriptionId: String?, val orderId: String?) : DeepLinkPayload
+
     data class Unsupported(
         val raw: String,
         val reason: UnsupportedReason,
@@ -53,7 +56,7 @@ object DeepLinkParser {
         val scheme = text.substringBefore("://", missingDelimiterValue = "").lowercase()
 
         return when (scheme) {
-            "happ", "mydrop" -> parseAppLink(text, scheme)
+            "happ", "mydrop", "yumi" -> parseAppLink(text, scheme)
             // A DoH link and a subscription link are both https; only the resolver has the
             // well-known path, so asking the DNS parser first cannot swallow a subscription.
             "http", "https" -> DnsUriParser.parse(text)
@@ -89,8 +92,24 @@ object DeepLinkParser {
         }
 
         val query = payloadWithQuery.substringAfter('?', "")
-        val name = parseQuery(query)["name"]?.takeIf(String::isNotEmpty)
         val head = payloadWithQuery.substringBefore('?')
+        if (action == "billing") {
+            return if (head.trim('/').equals("return", ignoreCase = true)) {
+                val params = parseQuery(query)
+                DeepLinkPayload.BillingReturn(
+                    subscriptionId = params["sub_id"]?.takeIf { it.isNotBlank() },
+                    orderId = params["order_id"]?.takeIf { it.isNotBlank() },
+                )
+            } else {
+                DeepLinkPayload.Unsupported(
+                    text,
+                    UnsupportedReason.UnsupportedAction,
+                    action = action,
+                )
+            }
+        }
+
+        val name = parseQuery(query)["name"]?.takeIf(String::isNotEmpty)
 
         // Cutting at the `?` is right for an encoded payload and wrong for a plain one, and the
         // difference is a working subscription or a dead one.

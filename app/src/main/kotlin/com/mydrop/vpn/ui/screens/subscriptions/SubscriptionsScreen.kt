@@ -21,12 +21,15 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Autorenew
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ErrorOutline
@@ -36,9 +39,11 @@ import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
@@ -83,6 +88,8 @@ fun SubscriptionsScreen(
     onRefresh: (String) -> Unit,
     onRemove: (String) -> Unit,
     onSetEnabled: (String, Boolean) -> Unit,
+    onOpenBilling: (String) -> Unit,
+    onOpenPortal: (String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
@@ -129,6 +136,8 @@ fun SubscriptionsScreen(
                 onRefresh = { onRefresh(subscription.id) },
                 onRemove = { onRemove(subscription.id) },
                 onSetEnabled = { onSetEnabled(subscription.id, it) },
+                onOpenBilling = { onOpenBilling(subscription.id) },
+                onOpenPortal = { onOpenPortal(subscription.id) },
                 onShare = { sharing = subscription },
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
@@ -154,6 +163,8 @@ private fun SubscriptionCard(
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
     onSetEnabled: (Boolean) -> Unit,
+    onOpenBilling: () -> Unit,
+    onOpenPortal: () -> Unit,
     onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -238,6 +249,102 @@ private fun SubscriptionCard(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+            }
+
+            if (subscription.hasAnyPortalAction) {
+                Spacer(Modifier.height(12.dp))
+                val urgent = subscription.lastError != null ||
+                    (daysUntil(subscription.userInfo?.expiresAtEpochSeconds)?.let { it <= 3 } == true)
+                SubscriptionPortalActions(
+                    hasBilling = subscription.hasBillingAction,
+                    hasPortal = subscription.webPageUrl != null,
+                    urgent = urgent,
+                    onOpenBilling = onOpenBilling,
+                    onOpenPortal = onOpenPortal,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscriptionPortalActions(
+    hasBilling: Boolean,
+    hasPortal: Boolean,
+    urgent: Boolean,
+    onOpenBilling: () -> Unit,
+    onOpenPortal: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (hasBilling) {
+            if (urgent) {
+                Button(
+                    onClick = onOpenBilling,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Bolt,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.subscriptions_action_renew), maxLines = 1)
+                }
+            } else {
+                FilledTonalButton(
+                    onClick = onOpenBilling,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AccountBalanceWallet,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.subscriptions_action_plans), maxLines = 1)
+                }
+            }
+            if (hasPortal) {
+                FilledTonalButton(
+                    onClick = onOpenPortal,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.subscriptions_action_account), maxLines = 1)
+                }
+            }
+        } else if (hasPortal) {
+            FilledTonalButton(
+                onClick = onOpenPortal,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.subscriptions_action_account), maxLines = 1)
             }
         }
     }

@@ -1,5 +1,10 @@
 package com.mydrop.vpn.ui
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
@@ -28,6 +33,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.SnackbarHost
@@ -42,7 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
@@ -70,6 +78,7 @@ import com.mydrop.vpn.ui.screens.servers.ServersScreen
 import com.mydrop.vpn.ui.screens.settings.SettingsScreen
 import com.mydrop.vpn.ui.screens.speed.SpeedTestScreen
 import com.mydrop.vpn.ui.screens.subscriptions.AddSubscriptionSheet
+import com.mydrop.vpn.ui.screens.subscriptions.BillingSheet
 import com.mydrop.vpn.ui.screens.subscriptions.SubscriptionsScreen
 import com.mydrop.vpn.ui.screens.zones.ZonesMapScreen
 
@@ -121,8 +130,20 @@ fun MyDropApp(viewModel: MainViewModel) {
     val debugRemoteDemo by viewModel.debugRemoteDemo.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val toolbarColor = MaterialTheme.colorScheme.surface.toArgb()
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
+    }
+    LaunchedEffect(context, toolbarColor) {
+        viewModel.externalUrls.collect { url ->
+            openCustomTabOrBrowser(
+                context = context,
+                url = url,
+                toolbarColorArgb = toolbarColor,
+                onBrowserMissing = viewModel::notifyBrowserMissing,
+            )
+        }
     }
 
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
@@ -131,6 +152,7 @@ fun MyDropApp(viewModel: MainViewModel) {
     val pendingImport by viewModel.pendingImport.collectAsStateWithLifecycle()
     val pairingInvite by viewModel.pairingInvite.collectAsStateWithLifecycle()
     val pairingSending by viewModel.pairingSending.collectAsStateWithLifecycle()
+    val billingSheet by viewModel.billingSheet.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Routes.CONNECT
@@ -327,6 +349,8 @@ fun MyDropApp(viewModel: MainViewModel) {
                     onRefresh = viewModel::refreshSubscription,
                     onRemove = viewModel::removeSubscription,
                     onSetEnabled = viewModel::setSubscriptionEnabled,
+                    onOpenBilling = viewModel::openSubscriptionBilling,
+                    onOpenPortal = viewModel::openSubscriptionPortal,
                     contentPadding = contentPadding,
                 )
             }
@@ -488,6 +512,42 @@ fun MyDropApp(viewModel: MainViewModel) {
             onSend = viewModel::sendSubscriptionToTv,
             onDismiss = viewModel::dismissPairingInvite,
         )
+    }
+
+    billingSheet?.let { sheetState ->
+        BillingSheet(
+            state = sheetState,
+            vpnActive = state.vpnState.isActive,
+            routingMode = state.settings.routingMode,
+            onDismiss = viewModel::dismissBillingSheet,
+            onRetry = viewModel::retryBillingManifest,
+            onOpenFallbackUrl = viewModel::openExternalBillingUrl,
+            onCheckout = viewModel::submitBillingCheckout,
+            onClearError = viewModel::clearBillingCheckoutError,
+        )
+    }
+}
+
+private fun openCustomTabOrBrowser(
+    context: Context,
+    url: String,
+    toolbarColorArgb: Int,
+    onBrowserMissing: () -> Unit,
+) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        putExtras(
+            Bundle().apply {
+                putBinder("android.support.customtabs.extra.SESSION", null)
+            },
+        )
+        putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", toolbarColorArgb)
+        putExtra("android.support.customtabs.extra.SHOW_TITLE", true)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        onBrowserMissing()
     }
 }
 

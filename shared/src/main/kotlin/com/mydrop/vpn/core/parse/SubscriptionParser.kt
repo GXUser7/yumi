@@ -87,6 +87,56 @@ object SubscriptionParser {
 
     private const val CLASH = "Clash YAML"
 
+    private val METADATA_COMMENT_KEYS = setOf(
+        "billing-manifest-url",
+        "payment-url",
+        "sub-expire-button-link",
+        "profile-web-page-url",
+        "support-url",
+        "profile-title",
+        "subscription-userinfo",
+    )
+
+    /**
+     * Reads `#key: value` or `//key: value` metadata lines from the first 10 non-blank lines of a
+     * subscription body (including base64-encoded link blobs). Real HTTP response headers always
+     * override values found here.
+     */
+    fun parseMetadataComments(body: String): Map<String, String> {
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return emptyMap()
+
+        val direct = scanMetadataLines(trimmed)
+        if (direct.isNotEmpty() || looksLikeLinkList(trimmed) || detectStructuredFormat(trimmed) != null) {
+            return direct
+        }
+
+        val decoded = base64DecodeOrNull(trimmed) ?: return emptyMap()
+        return scanMetadataLines(decoded)
+    }
+
+    private fun scanMetadataLines(text: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        var nonBlankSeen = 0
+        for (rawLine in text.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            if (++nonBlankSeen > 10) break
+            val uncommented = when {
+                line.startsWith("//") -> line.removePrefix("//").trimStart()
+                line.startsWith("#") -> line.removePrefix("#").trimStart()
+                else -> continue
+            }
+            val colon = uncommented.indexOf(':')
+            if (colon <= 0) continue
+            val key = uncommented.substring(0, colon).trim().lowercase()
+            if (key !in METADATA_COMMENT_KEYS) continue
+            val value = uncommented.substring(colon + 1).trim()
+            if (value.isNotEmpty()) out.putIfAbsent(key, value)
+        }
+        return out
+    }
+
     private fun detectStructuredFormat(text: String): String? = when {
         // The array form is what panels emit for Xray clients: one whole config per server.
         text.startsWith("[") -> "Xray JSON"

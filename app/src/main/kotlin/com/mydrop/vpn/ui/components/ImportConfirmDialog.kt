@@ -71,6 +71,8 @@ private fun summarise(pending: PendingImport): String = when (val payload = pend
         stringResource(R.string.import_confirm_servers, payload.nodes.size)
     is DeepLinkPayload.AddDns ->
         stringResource(R.string.import_confirm_dns, payload.profiles.size)
+    // Handled directly without showing a confirmation dialog.
+    is DeepLinkPayload.BillingReturn -> pending.source
     // Never reached: an unreadable link is reported rather than confirmed.
     is DeepLinkPayload.Unsupported -> pending.source
 }
