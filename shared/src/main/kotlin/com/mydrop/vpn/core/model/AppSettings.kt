@@ -75,11 +75,12 @@ enum class SplitTunnelMode(@StringRes val labelRes: Int) {
 enum class LogLevel { Trace, Debug, Info, Warn, Error }
 
 /**
- * How a server's latency gets measured. QUIC nodes ignore this and always use a UDP probe —
- * they have no TCP port to handshake with.
+ * How a server's latency gets measured. [UrlTest] dials the probe URL through the Xray core, while
+ * [Tcp]/[Tls]/[Median] still upgrade QUIC, WireGuard, and fragmented nodes to the core automatically.
  */
 @Serializable
 enum class PingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
+    UrlTest(R.string.ping_url_test, R.string.ping_url_test_description),
     Tcp(R.string.ping_tcp, R.string.ping_tcp_description),
     Tls(R.string.ping_tls, R.string.ping_tls_description),
     Median(R.string.ping_median, R.string.ping_median_description),
@@ -238,15 +239,18 @@ data class AppSettings(
 
     // Behaviour
     /**
-     * TLS rather than TCP, because a bare handshake answers the wrong question here.
-     *
-     * Russian DPI routinely lets the TCP connection to a blocked server complete and kills the
-     * session after the ClientHello. A TCP probe sees the SYN-ACK, calls the server alive, and
-     * [com.mydrop.vpn.data.FailoverWatchdog] never moves off a server that carries nothing. A
-     * full handshake is the cheapest probe that fails when the thing the user cares about fails —
-     * and for REALITY it is the difference between "the port is open" and "the disguise works".
+     * Real-delay HTTP 204 probe through Xray by default so Hysteria2 (Salamander), REALITY, uTLS,
+     * fragmented nodes, and WireGuard all measure end-to-end usability rather than bare sockets.
      */
-    val pingMode: PingMode = PingMode.Tls,
+    val pingMode: PingMode = PingMode.UrlTest,
+    /**
+     * One-time upgrade marker for installs coming from pre-2.3.1 versions whose persisted
+     * `settings.json` explicitly saved an older default (`PingMode.Tls`/`PingMode.Tcp` via
+     * `encodeDefaults = true`). Missing in older files (decodes as `false`), so [SettingsRepository]
+     * switches those installs to [PingMode.UrlTest] once and persists `true` so later manual
+     * choices (`Tcp`/`Tls`/`Median`) are respected.
+     */
+    val pingModeUrlTestDefaultApplied: Boolean = false,
     val probeUrl: String = ProbeTargets.DEFAULT_URL,
     val probeTimeoutMillis: Int = LatencyResult.TIMEOUT_MILLIS,
     val autoConnectOnBoot: Boolean = false,

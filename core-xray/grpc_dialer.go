@@ -53,6 +53,7 @@ type yumiGrpcEntry struct {
 	conn          *grpc.ClientConn
 	genCtx        context.Context
 	outboundTag   string
+	probeOnly     bool
 	activeStreams int
 	dialing       int
 	closed        bool
@@ -174,13 +175,14 @@ func acquireYumiGrpcEntry(
 	streamSettings *internet.MemoryStreamConfig,
 	grpcSettings *xgrpc.Config,
 	outboundTag string,
+	probeOnly bool,
 ) (*yumiGrpcEntry, error) {
 	key := yumiGrpcKey{dest: dest, stream: streamSettings}
 	var staleConn *grpc.ClientConn
 
 	yumiGrpcMu.Lock()
 	if existing, found := yumiGrpcMap[key]; found {
-		if !existing.closed && existing.genCtx == genCtx && existing.conn.GetState() != connectivity.Shutdown {
+		if !existing.closed && existing.genCtx == genCtx && existing.probeOnly == probeOnly && existing.conn.GetState() != connectivity.Shutdown {
 			existing.dialing++
 			if existing.outboundTag == "" && outboundTag != "" {
 				existing.outboundTag = outboundTag
@@ -318,6 +320,7 @@ func acquireYumiGrpcEntry(
 		conn:        conn,
 		genCtx:      genCtx,
 		outboundTag: outboundTag,
+		probeOnly:   probeOnly,
 		dialing:     1,
 	}
 
@@ -327,7 +330,7 @@ func acquireYumiGrpcEntry(
 		_ = conn.Close()
 		return nil, genCtx.Err()
 	}
-	if raceEntry, found := yumiGrpcMap[key]; found && !raceEntry.closed && raceEntry.genCtx == genCtx && raceEntry.conn.GetState() != connectivity.Shutdown {
+	if raceEntry, found := yumiGrpcMap[key]; found && !raceEntry.closed && raceEntry.genCtx == genCtx && raceEntry.probeOnly == probeOnly && raceEntry.conn.GetState() != connectivity.Shutdown {
 		raceEntry.dialing++
 		if raceEntry.outboundTag == "" && outboundTag != "" {
 			raceEntry.outboundTag = outboundTag
@@ -380,12 +383,13 @@ func dialYumiGRPC(
 	}
 
 	outboundTag := outboundTagFromContext(ctx)
-	if strings.HasPrefix(outboundTag, NodeTagPrefix) && !isMeasureProbeCtx(ctx) {
+	probeOnly := isMeasureProbeCtx(ctx)
+	if strings.HasPrefix(outboundTag, NodeTagPrefix) && !probeOnly {
 		if pinned := currentPinnedTag(); pinned != "" && outboundTag != pinned {
 			return nil, errors.New("outbound switched from " + outboundTag + " to " + pinned)
 		}
 	}
-	entry, err := acquireYumiGrpcEntry(ctx, genCtx, dest, streamSettings, grpcSettings, outboundTag)
+	entry, err := acquireYumiGrpcEntry(ctx, genCtx, dest, streamSettings, grpcSettings, outboundTag, probeOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -475,8 +479,20 @@ func makeStreamCloseFunc(entry *yumiGrpcEntry, stopGen func() bool, streamCancel
 			if entry.activeStreams > 0 {
 				entry.activeStreams--
 			}
-			if !entry.closed && entry.activeStreams == 0 && entry.dialing == 0 && entry.outboundTag != "" {
-				if pinned := currentPinnedTag(); pinned != "" && entry.outboundTag != pinned {
+			if !entry.closed && entry.activeStreams == 0 && entry.dialing == 0 {
+				evict := false
+				if entry.probeOnly {
+					if !isActiveCoreCtx(entry.genCtx) {
+						evict = true
+					} else if pinned := currentPinnedTag(); pinned == "" || entry.outboundTag != pinned {
+						evict = true
+					}
+				} else if entry.outboundTag != "" {
+					if pinned := currentPinnedTag(); pinned != "" && entry.outboundTag != pinned {
+						evict = true
+					}
+				}
+				if evict {
 					entry.closed = true
 					delete(yumiGrpcMap, entry.key)
 					toClose = entry.conn
@@ -487,6 +503,30 @@ func makeStreamCloseFunc(entry *yumiGrpcEntry, stopGen func() bool, streamCancel
 				_ = toClose.Close()
 			}
 		})
+	}
+}
+
+func closeGrpcConnsForGenCtx(target context.Context) {
+	if target == nil {
+		return
+	}
+	yumiGrpcMu.Lock()
+	var toClose []*grpc.ClientConn
+	for key, entry := range yumiGrpcMap {
+		if entry.genCtx == target {
+			if !entry.closed {
+				entry.closed = true
+				toClose = append(toClose, entry.conn)
+			}
+			delete(yumiGrpcMap, key)
+		}
+	}
+	yumiGrpcMu.Unlock()
+
+	for _, conn := range toClose {
+		if conn != nil {
+			_ = conn.Close()
+		}
 	}
 }
 
@@ -513,6 +553,9 @@ func evictOtherYumiGrpcConns(keepTag string) {
 	yumiGrpcMu.Lock()
 	var toClose []*grpc.ClientConn
 	for key, entry := range yumiGrpcMap {
+		if entry.probeOnly && !isActiveCoreCtx(entry.genCtx) {
+			continue
+		}
 		if entry.outboundTag != "" && entry.outboundTag != keepTag {
 			if !entry.closed {
 				entry.closed = true

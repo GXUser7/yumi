@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import com.mydrop.vpn.pairing.PairingClient
 import com.mydrop.vpn.remote.RemoteClient
 import com.mydrop.vpn.remote.RemoteProbe
+import com.mydrop.vpn.vpn.XrayCore
 
 /**
  * Manual dependency graph. The object count here is small enough that a DI framework would add
@@ -110,7 +111,12 @@ class AppContainer(context: Context) {
     val logs = LogRepository(strings, diagnostics)
     val connectionLog = ConnectionLog()
     val profiles = ProfileRepository(context.filesDir, applicationScope, writeFailure)
-    val latencyTester = LatencyTester(timeoutProvider = { settings.value.probeTimeoutMillis })
+    val latencyTester = LatencyTester(
+        timeoutProvider = { settings.value.probeTimeoutMillis },
+        settingsProvider = { settings.value },
+        coreProber = XrayCore::probeNodes,
+        isTunnelRunning = { XrayCore.running },
+    )
     val tunnelHealth = TunnelHealthCheck(
         logs = logs,
         probeUrl = { settings.value.probeUrl },

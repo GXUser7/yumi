@@ -36,11 +36,14 @@ import (
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	xdns "github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/features/dns/localdns"
 	"github.com/xtls/xray-core/features/inbound"
+	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	xtun "github.com/xtls/xray-core/proxy/tun"
+	"github.com/xtls/xray-core/transport/internet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	// Registers every protocol, transport and app with the core's factory tables. Without this
@@ -468,8 +471,13 @@ func startCore(
 	success := false
 	defer func() {
 		if !success {
-			cancelCoreLifecycle()
-			closeAllYumiGrpcConns()
+			compositeObm.setLive(nil)
+			if probeHost.Load() != nil {
+				internet.InitSystemDialer(localdns.New(), compositeObm)
+			}
+			if stopped := cancelCoreLifecycle(); stopped != nil {
+				closeGrpcConnsForGenCtx(stopped)
+			}
 			protectorMu.Lock()
 			protector = nil
 			protectorMu.Unlock()
@@ -535,10 +543,22 @@ func startCore(
 		}
 	}
 
+	if _, err := ensureProbeHostLocked(); err != nil {
+		return err
+	}
+
 	genCtx, _ := beginCoreLifecycle()
 	started, err := core.New(config)
 	if err != nil {
 		return err
+	}
+	if liveObm, ok := started.GetFeature(outbound.ManagerType()).(outbound.Manager); ok && liveObm != nil {
+		compositeObm.setLive(liveObm)
+		if liveDns, ok := started.GetFeature(xdns.ClientType()).(xdns.Client); ok && liveDns != nil {
+			internet.InitSystemDialer(liveDns, compositeObm)
+		} else {
+			internet.InitSystemDialer(localdns.New(), compositeObm)
+		}
 	}
 	bindCoreInstance(started, genCtx, pinnedTag)
 
@@ -612,10 +632,15 @@ func Stop() error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	cancelCoreLifecycle()
-	closeAllYumiGrpcConns()
+	compositeObm.setLive(nil)
+	if stopped := cancelCoreLifecycle(); stopped != nil {
+		closeGrpcConnsForGenCtx(stopped)
+	}
 
 	if instance == nil {
+		if probeHost.Load() != nil {
+			internet.InitSystemDialer(localdns.New(), compositeObm)
+		}
 		protectorMu.Lock()
 		protector = nil
 		protectorMu.Unlock()
@@ -623,6 +648,9 @@ func Stop() error {
 	}
 	err := instance.Close()
 	instance = nil
+	if probeHost.Load() != nil {
+		internet.InitSystemDialer(localdns.New(), compositeObm)
+	}
 
 	protectorMu.Lock()
 	protector = nil

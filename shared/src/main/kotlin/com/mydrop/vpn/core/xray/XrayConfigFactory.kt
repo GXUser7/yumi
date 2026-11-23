@@ -209,6 +209,39 @@ object XrayConfigFactory {
         }
     }
 
+    fun usesFragment(node: ProxyNode, settings: AppSettings): Boolean =
+        effectiveFragment(node, settings) != null
+
+    /**
+     * Minimal outbounds-only Xray document for ephemeral latency probes via `Yumi.startProbe`.
+     * Omits `log`, `stats`, `policy`, `dns`, `inbounds`, and `routing` so probe runs never touch
+     * the running tunnel's logger, stats, or TUN setup while preserving `salamander`, `REALITY`,
+     * `uTLS`, `fragment`, and transport settings.
+     */
+    fun buildProbeConfig(nodes: List<ProxyNode>, settings: AppSettings): String {
+        val usable = nodes.filter { unsupported(it) == null }.distinctBy { it.id }
+        val (resolvedFragments, fragmentTags) = resolveFragments(usable, settings)
+        val allowedDialerProxyTags = fragmentTags.values.toSet() + DIRECT_TAG
+
+        val config = buildJsonObject {
+            putJsonArray("outbounds") {
+                usable.forEachIndexed { index, node ->
+                    val dialerProxyTag = resolvedFragments[index]?.let(fragmentTags::get)
+                    add(buildOutbound(node, settings, dialerProxyTag, allowedDialerProxyTags))
+                }
+                fragmentTags.forEach { (opts, tag) ->
+                    add(buildFragmentOutbound(tag, opts))
+                }
+                addJsonObject {
+                    put("tag", DIRECT_TAG)
+                    put("protocol", "freedom")
+                    putJsonObject("settings") { put("domainStrategy", "AsIs") }
+                }
+            }
+        }
+        return json.encodeToString(JsonObject.serializer(), config)
+    }
+
     /**
      * @param nodes every server the balancer may move onto without the core being rebuilt. The
      *   caller decides what belongs here — the failover group, the mobile list — and anything
@@ -550,14 +583,7 @@ object XrayConfigFactory {
             add(buildTunInbound(settings))
         }
 
-        val resolvedFragments = nodes.map { effectiveFragment(it, settings) }
-        val fragmentTags = LinkedHashMap<FragmentOptions, String>()
-        resolvedFragments.filterNotNull().forEach { opts ->
-            if (opts !in fragmentTags) {
-                val tag = if (fragmentTags.isEmpty()) FRAGMENT_TAG else "$FRAGMENT_TAG-${fragmentTags.size + 1}"
-                fragmentTags[opts] = tag
-            }
-        }
+        val (resolvedFragments, fragmentTags) = resolveFragments(nodes, settings)
         val allowedDialerProxyTags = fragmentTags.values.toSet() + DIRECT_TAG
 
         putJsonArray("outbounds") {
@@ -669,6 +695,21 @@ object XrayConfigFactory {
                 if (options.maxSplit.isNotBlank()) put("maxSplit", options.maxSplit)
             }
         }
+    }
+
+    private fun resolveFragments(
+        nodes: List<ProxyNode>,
+        settings: AppSettings,
+    ): Pair<List<FragmentOptions?>, LinkedHashMap<FragmentOptions, String>> {
+        val resolvedFragments = nodes.map { effectiveFragment(it, settings) }
+        val fragmentTags = LinkedHashMap<FragmentOptions, String>()
+        resolvedFragments.filterNotNull().forEach { opts ->
+            if (opts !in fragmentTags) {
+                val tag = if (fragmentTags.isEmpty()) FRAGMENT_TAG else "$FRAGMENT_TAG-${fragmentTags.size + 1}"
+                fragmentTags[opts] = tag
+            }
+        }
+        return resolvedFragments to fragmentTags
     }
 
     private fun effectiveFragment(node: ProxyNode, settings: AppSettings): FragmentOptions? {

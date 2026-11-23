@@ -88,8 +88,9 @@ func currentPinnedTag() string {
 	return tag
 }
 
-func cancelCoreLifecycle() {
+func cancelCoreLifecycle() context.Context {
 	coreLifecycleMu.Lock()
+	ctx := activeCoreCtx
 	cancel := activeCoreCancel
 	activeCoreCtx = nil
 	activeCoreCancel = nil
@@ -99,6 +100,17 @@ func cancelCoreLifecycle() {
 	if cancel != nil {
 		cancel()
 	}
+	return ctx
+}
+
+func isActiveCoreCtx(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	coreLifecycleMu.RLock()
+	active := activeCoreCtx == ctx
+	coreLifecycleMu.RUnlock()
+	return active
 }
 
 func withGenCtxValue(ctx context.Context, genCtx context.Context) context.Context {

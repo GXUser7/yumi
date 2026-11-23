@@ -872,7 +872,10 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_latency),
                 icon = Icons.Rounded.NetworkPing,
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     PingMode.entries.forEach { mode ->
                         ChoiceButton(
                             label = stringResource(mode.labelRes),

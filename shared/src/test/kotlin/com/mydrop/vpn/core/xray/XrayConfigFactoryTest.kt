@@ -1499,4 +1499,71 @@ class XrayConfigFactoryTest {
         }
         assertTrue(directModeProxyIdx in 0 until directCatchAll)
     }
+
+    @Test
+    fun `buildProbeConfig emits outbounds only with salamander, fragment dialerProxy, and skips unsupported nodes`() {
+        val hy2 = node(
+            id = "hy2",
+            name = "Hy2",
+            settings = ProxySettings.Hysteria2(
+                password = "pw",
+                obfsType = "salamander",
+                obfsPassword = "obfs",
+            ),
+            tls = TlsOptions(enabled = true, serverName = "hy.example.com"),
+        )
+        val vlessTls = node(
+            id = "vless-frag",
+            name = "VLESS",
+            settings = ProxySettings.Vless(uuid = "11111111-2222-3333-4444-555555555555"),
+            tls = TlsOptions(enabled = true, serverName = "vless.example.com"),
+        )
+        val unsupportedTuic = node(
+            id = "tuic",
+            name = "TUIC",
+            settings = ProxySettings.Tuic(uuid = "11111111-2222-3333-4444-555555555555", password = "pw"),
+        )
+
+        val fragSettings = settings.copy(
+            fragmentMode = FragmentMode.TcpSegments,
+            fragmentScope = FragmentScope.TlsAndReality,
+        )
+        assertFalse(XrayConfigFactory.usesFragment(hy2, fragSettings))
+        assertTrue(XrayConfigFactory.usesFragment(vlessTls, fragSettings))
+
+        val doc = Json.parseToJsonElement(
+            XrayConfigFactory.buildProbeConfig(listOf(hy2, vlessTls, unsupportedTuic), fragSettings),
+        ).jsonObject
+
+        assertNull(doc["log"])
+        assertNull(doc["stats"])
+        assertNull(doc["policy"])
+        assertNull(doc["dns"])
+        assertNull(doc["inbounds"])
+        assertNull(doc["routing"])
+
+        val outbounds = doc["outbounds"]!!.jsonArray.map { it.jsonObject }
+        val tags = outbounds.map { it["tag"]!!.jsonPrimitive.content }
+        assertTrue(XrayConfigFactory.nodeTag("hy2") in tags)
+        assertTrue(XrayConfigFactory.nodeTag("vless-frag") in tags)
+        assertTrue(XrayConfigFactory.FRAGMENT_TAG in tags)
+        assertTrue(XrayConfigFactory.DIRECT_TAG in tags)
+        assertFalse(XrayConfigFactory.nodeTag("tuic") in tags)
+
+        val hyOutbound = outbounds.first { it["tag"]!!.jsonPrimitive.content == XrayConfigFactory.nodeTag("hy2") }
+        val udpMasks = hyOutbound["streamSettings"]!!.jsonObject["finalmask"]!!.jsonObject["udp"]!!.jsonArray
+        assertEquals("salamander", udpMasks[0].jsonObject["type"]!!.jsonPrimitive.content)
+
+        val vlessOutbound = outbounds.first { it["tag"]!!.jsonPrimitive.content == XrayConfigFactory.nodeTag("vless-frag") }
+        assertEquals(
+            XrayConfigFactory.FRAGMENT_TAG,
+            vlessOutbound["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content,
+        )
+
+        val directOutbound = outbounds.first { it["tag"]!!.jsonPrimitive.content == XrayConfigFactory.DIRECT_TAG }
+        assertEquals(
+            "AsIs",
+            directOutbound["settings"]!!.jsonObject["domainStrategy"]!!.jsonPrimitive.content,
+        )
+    }
 }

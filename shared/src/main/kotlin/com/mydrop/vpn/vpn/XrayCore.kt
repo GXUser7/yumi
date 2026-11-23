@@ -1,16 +1,26 @@
 package com.mydrop.vpn.vpn
 
 import android.util.Log
+import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LogEntry
 import com.mydrop.vpn.core.model.ProbeTargets
+import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import com.mydrop.vpn.xray.yumi.HTTPResponse
 import com.mydrop.vpn.xray.yumi.Logger
+import com.mydrop.vpn.xray.yumi.ProbeCallback
 import com.mydrop.vpn.xray.yumi.Protector
 import com.mydrop.vpn.xray.yumi.TrafficGuard
 import com.mydrop.vpn.xray.yumi.TunnelConn
 import com.mydrop.vpn.xray.yumi.Yumi
 import java.io.Closeable
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -213,6 +223,80 @@ object XrayCore : TunnelBridge {
                 value.jsonPrimitive.content.toIntOrNull()?.let { tag to it }
             }.toMap()
         }.getOrDefault(emptyMap())
+    }
+
+    /**
+     * Probes [nodes] through an isolated ephemeral Xray host without disturbing any running VPN
+     * tunnel, streaming `(nodeId, millisOrNull)` back as each node finishes.
+     */
+    suspend fun probeNodes(
+        nodes: List<ProxyNode>,
+        settings: AppSettings,
+        timeoutMillis: Int,
+        concurrency: Int,
+        onResult: (nodeId: String, millis: Int?) -> Unit,
+    ) {
+        if (nodes.isEmpty()) return
+        val supported = ArrayList<ProxyNode>(nodes.size)
+        for (node in nodes) {
+            if (XrayConfigFactory.unsupported(node) == null) {
+                supported.add(node)
+            } else {
+                onResult(node.id, null)
+            }
+        }
+        if (supported.isEmpty()) return
+        if (version == null) {
+            supported.forEach { onResult(it.id, null) }
+            return
+        }
+
+        val configJson = XrayConfigFactory.buildProbeConfig(supported, settings)
+        val tagToNodeId = supported.associate { XrayConfigFactory.nodeTag(it.id) to it.id }
+        val tags = tagToNodeId.keys.joinToString(" ")
+        val probeUrl = settings.probeUrl.takeIf(ProbeTargets::isValidProbeUrl) ?: ProbeTargets.DEFAULT_URL
+
+        withContext(Dispatchers.IO) {
+            val reported = ConcurrentHashMap.newKeySet<String>(supported.size)
+            val session = runCatching {
+                Yumi.startProbe(
+                    configJson,
+                    tags,
+                    probeUrl,
+                    timeoutMillis.toLong(),
+                    concurrency.toLong(),
+                    ProbeCallback { tag, delay ->
+                        val nodeId = tagToNodeId[tag] ?: return@ProbeCallback
+                        if (reported.add(nodeId)) {
+                            onResult(nodeId, delay.toInt().takeIf { it > 0 })
+                        }
+                    },
+                )
+            }.getOrElse { error ->
+                Log.w(TAG, "startProbe failed: ${error.message}")
+                supported.forEach { node ->
+                    if (reported.add(node.id)) onResult(node.id, null)
+                }
+                return@withContext
+            }
+
+            val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    runCatching { session.cancel() }
+                }
+            }
+            try {
+                session.await()
+            } finally {
+                cancelHandle?.dispose()
+            }
+
+            if (isActive) {
+                supported.forEach { node ->
+                    if (reported.add(node.id)) onResult(node.id, null)
+                }
+            }
+        }
     }
 
     /** The tag the balancer is pinned to, or empty when nothing is running. */

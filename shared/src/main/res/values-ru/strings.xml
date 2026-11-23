@@ -106,6 +106,8 @@
     <string name="split_tunnel_allow_list">Только выбранные</string>
     <string name="split_tunnel_block_list">Кроме выбранных</string>
 
+    <string name="ping_url_test">URL-тест</string>
+    <string name="ping_url_test_description">Полная проверка через ядро Xray до адреса пробы: работает с Hysteria2 (Salamander), REALITY, uTLS, фрагментацией и WireGuard</string>
     <string name="ping_tcp">TCP</string>
     <string name="ping_tcp_description">Одно рукопожатие TCP. Быстро, годится для длинных списков</string>
     <string name="ping_tls">TLS</string>
@@ -457,7 +459,7 @@
     <string name="settings_dns_from_settings">Из настроек</string>
 
     <string name="settings_latency">Замер задержки</string>
-    <string name="settings_quic_note">Hysteria2 и TUIC работают поверх QUIC и TCP-порта не имеют — их всегда проверяет UDP-проба, независимо от выбора выше.</string>
+    <string name="settings_quic_note">Hysteria2, WireGuard и узлы с фрагментацией всегда проверяются через ядро Xray (URL-тест), даже если выше выбран быстрый TCP или TLS.</string>
     <string name="settings_probe_url">URL проверки</string>
     <string name="settings_probe_url_hint">Адрес http:// или https:// для проверки связи через туннель</string>
     <string name="settings_probe_url_error">Укажите корректный адрес http:// или https://</string>

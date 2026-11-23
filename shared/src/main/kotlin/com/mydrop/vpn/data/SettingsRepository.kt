@@ -1,6 +1,7 @@
 package com.mydrop.vpn.data
 
 import com.mydrop.vpn.core.model.AppSettings
+import com.mydrop.vpn.core.model.PingMode
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
@@ -14,10 +15,25 @@ class SettingsRepository(
     private val store = JsonStore(
         file = File(filesDir, "settings.json"),
         serializer = AppSettings.serializer(),
-        defaultValue = AppSettings(),
+        defaultValue = AppSettings(pingMode = PingMode.UrlTest, pingModeUrlTestDefaultApplied = true),
         scope = scope,
         onWriteFailure = onWriteFailure,
     )
+
+    init {
+        if (!store.value.pingModeUrlTestDefaultApplied) {
+            store.update { current ->
+                if (current.pingModeUrlTestDefaultApplied) {
+                    current
+                } else {
+                    current.copy(
+                        pingMode = PingMode.UrlTest,
+                        pingModeUrlTestDefaultApplied = true,
+                    )
+                }
+            }
+        }
+    }
 
     val settings: StateFlow<AppSettings> = store.state
 

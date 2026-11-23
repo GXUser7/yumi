@@ -106,6 +106,8 @@
     <string name="split_tunnel_allow_list">Selected only</string>
     <string name="split_tunnel_block_list">All but selected</string>
 
+    <string name="ping_url_test">URL test</string>
+    <string name="ping_url_test_description">Full check through the Xray core to the probe URL: works with Hysteria2 (Salamander), REALITY, uTLS, fragmentation, and WireGuard</string>
     <string name="ping_tcp">TCP</string>
     <string name="ping_tcp_description">A single TCP handshake. Fast, and fine for long lists</string>
     <string name="ping_tls">TLS</string>
@@ -455,7 +457,7 @@
     <string name="settings_dns_from_settings">From settings</string>
 
     <string name="settings_latency">Latency probe</string>
-    <string name="settings_quic_note">Hysteria2 and TUIC run over QUIC and have no TCP port — a UDP probe always checks them, whatever is chosen above.</string>
+    <string name="settings_quic_note">Hysteria2, WireGuard, and fragmented nodes are always checked through the Xray core (URL test), even when fast TCP or TLS is selected above.</string>
     <string name="settings_probe_url">Probe URL</string>
     <string name="settings_probe_url_hint">An http:// or https:// URL used to verify the tunnel</string>
     <string name="settings_probe_url_error">Enter a valid http:// or https:// URL</string>

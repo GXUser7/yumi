@@ -4,48 +4,76 @@ import com.mydrop.vpn.core.model.AppSettings
 import com.mydrop.vpn.core.model.LatencyResult
 import com.mydrop.vpn.core.model.NodeGroup
 import com.mydrop.vpn.core.model.PingMode
+import com.mydrop.vpn.core.model.Protocol
 import com.mydrop.vpn.core.model.ProxyNode
+import com.mydrop.vpn.core.xray.XrayConfigFactory
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.cert.X509Certificate
+import java.util.concurrent.atomic.AtomicReferenceArray
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509ExtendedTrustManager
+import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
- * Reachability probes against a server's endpoint.
+ * Measures nodes through an ephemeral Xray core probe session and streams results back as
+ * `(nodeId, millisOrNull)` as each node finishes.
+ */
+fun interface CoreProber {
+    suspend fun probe(
+        nodes: List<ProxyNode>,
+        settings: AppSettings,
+        timeoutMillis: Int,
+        concurrency: Int,
+        onResult: (nodeId: String, millis: Int?) -> Unit,
+    )
+}
+
+/**
+ * Reachability and real-delay probes against a server's endpoint.
  *
- * None of these say anything about whether the credentials work — that would need the core
- * running and a separate outbound per node. What they do is separate live endpoints from blocked
- * or dead ones and give a number worth sorting by, which is the job the list actually needs.
- *
- * The transport dictates the probe: TCP protocols get a handshake, QUIC ones (Hysteria2, TUIC)
- * get a UDP probe, because they have no TCP port to connect to and used to be reported as
- * unmeasurable for that reason.
+ * When a [CoreProber] is provided, [PingMode.UrlTest] measures every node end-to-end by fetching
+ * the probe URL through an ephemeral Xray outbound, and fast socket modes ([PingMode.Tcp],
+ * [PingMode.Tls], [PingMode.Median]) automatically upgrade QUIC, WireGuard, and fragmented TLS
+ * nodes to the core as well. All modes optionally resolve server hostnames through DoH first so
+ * operator DNS poisoning does not hide working nodes.
  */
 class LatencyTester(
     private val maxConcurrency: Int = 16,
     private val timeoutProvider: () -> Int = { LatencyResult.TIMEOUT_MILLIS },
+    private val settingsProvider: () -> AppSettings = { AppSettings() },
+    private val coreProber: CoreProber? = null,
+    private val isTunnelRunning: () -> Boolean = { false },
+    private val resolveNode: (ProxyNode, String) -> ProxyNode = ServerAddressResolver::resolveNode,
 ) {
 
-    suspend fun measure(node: ProxyNode, mode: PingMode = PingMode.Tcp): LatencyResult {
-        val group = node.group
-        if (group != null && group.members.isNotEmpty()) return measureGroup(node, group, mode)
-        return measureOne(node, mode)
+    suspend fun measure(node: ProxyNode, mode: PingMode = PingMode.UrlTest): LatencyResult {
+        val settings = settingsProvider()
+        if (needsCoreProbe(node, mode, settings)) {
+            return measureAll(listOf(node), mode).single()
+        }
+        val resolved = withContext(Dispatchers.IO) { maybeResolve(node, settings) }
+        val group = resolved.group
+        if (group != null && group.members.isNotEmpty()) return measureGroup(resolved, group, mode)
+        return measureOne(resolved, mode)
     }
 
     /**
@@ -97,12 +125,9 @@ class LatencyTester(
             )
         }
 
-    /** One probe. Returns the round trip in milliseconds, or null if it did not answer. */
+    /** One socket probe. Returns the round trip in milliseconds, or null if it did not answer. */
     private fun probe(node: ProxyNode, mode: PingMode): Int? {
-        val timeout = timeoutProvider().coerceIn(
-            AppSettings.MIN_PROBE_TIMEOUT_MILLIS,
-            AppSettings.MAX_PROBE_TIMEOUT_MILLIS,
-        )
+        val timeout = effectiveTimeoutMillis()
         val start = System.nanoTime()
         val ok = when {
             node.protocol.isQuicBased -> quicProbe(node, timeout)
@@ -157,58 +182,265 @@ class LatencyTester(
     }
 
     /**
-     * QUIC endpoints answer an unknown version with a Version Negotiation packet — RFC 9000 §6
-     * requires it. So we send a long-header packet carrying a reserved version and wait for any
-     * reply; anything coming back means a QUIC server is listening.
-     *
-     * Two honest limits: a datagram carrying an Initial must be padded to 1200 bytes or servers
-     * drop it, and endpoints with obfuscation (Hysteria2's salamander, say) will not answer at
-     * all, so those still read as unreachable.
+     * Fallback QUIC probe when no [CoreProber] is available. Connects the UDP socket so ICMP Port
+     * Unreachable fails immediately and retries once on timeout inside the budget.
      */
     private fun quicProbe(node: ProxyNode, timeout: Int): Boolean = runCatching {
         DatagramSocket().use { socket ->
-            socket.soTimeout = timeout
             val address = InetAddress.getByName(node.server)
+            socket.connect(address, node.port)
             val packet = versionNegotiationProbe()
-            socket.send(DatagramPacket(packet, packet.size, address, node.port))
-
             val reply = ByteArray(1500)
-            socket.receive(DatagramPacket(reply, reply.size))
-            true
+            val deadlineNanos = System.nanoTime() + timeout * 1_000_000L
+            val retryGapMillis = minOf(QUIC_RETRY_GAP_MILLIS, timeout / 3).coerceAtLeast(100)
+            var attempt = 0
+            while (attempt < QUIC_MAX_ATTEMPTS) {
+                val remainingMillis = ((deadlineNanos - System.nanoTime()) / 1_000_000L).toInt()
+                if (remainingMillis <= 0) break
+                val sliceMillis = if (attempt == 0 && remainingMillis > retryGapMillis + 150) {
+                    retryGapMillis
+                } else {
+                    remainingMillis
+                }
+                socket.soTimeout = sliceMillis
+                socket.send(DatagramPacket(packet, packet.size))
+                try {
+                    socket.receive(DatagramPacket(reply, reply.size))
+                    return@runCatching true
+                } catch (_: SocketTimeoutException) {
+                    attempt++
+                }
+            }
+            false
         }
     }.getOrDefault(false)
 
     private fun versionNegotiationProbe(): ByteArray {
         val packet = ByteArray(QUIC_DATAGRAM_SIZE)
-        // Long header with the fixed bit set; the low bits are packet-type and are ignored by a
-        // server that has already decided it does not know the version.
         packet[0] = 0xC0.toByte()
-        // A reserved "greasing" version no server implements, which is what forces the answer.
         packet[1] = 0x0A; packet[2] = 0x0A; packet[3] = 0x0A; packet[4] = 0x0A
-        packet[5] = 8                                   // destination connection id length
+        packet[5] = 8
         Random.nextBytes(packet, 6, 14)
-        packet[14] = 8                                  // source connection id length
+        packet[14] = 8
         Random.nextBytes(packet, 15, 23)
-        // The remainder stays zero: token length, length and payload all read as empty, and the
-        // padding to 1200 bytes is exactly what the anti-amplification rule wants to see.
         return packet
     }
 
-    /** Probes many servers at once, capped so a large subscription cannot exhaust sockets. */
+    /** Probes many servers at once, preserving input order and streaming results as each completes. */
     suspend fun measureAll(
         nodes: List<ProxyNode>,
-        mode: PingMode = PingMode.Tcp,
+        mode: PingMode = PingMode.UrlTest,
         onResult: (LatencyResult) -> Unit = {},
-    ): List<LatencyResult> = coroutineScope {
-        val gate = Semaphore(maxConcurrency)
-        nodes.map { node ->
-            async { gate.withPermit { measure(node, mode).also(onResult) } }
-        }.awaitAll()
+    ): List<LatencyResult> {
+        if (nodes.isEmpty()) return emptyList()
+        val settings = settingsProvider()
+        val timeout = effectiveTimeoutMillis()
+
+        val coreItems = ArrayList<IndexedValue<ProxyNode>>()
+        val socketItems = ArrayList<IndexedValue<ProxyNode>>()
+        nodes.forEachIndexed { index, node ->
+            if (needsCoreProbe(node, mode, settings)) {
+                coreItems.add(IndexedValue(index, node))
+            } else {
+                socketItems.add(IndexedValue(index, node))
+            }
+        }
+
+        val orderedResults = AtomicReferenceArray<LatencyResult>(nodes.size)
+        coroutineScope {
+            if (coreItems.isNotEmpty()) {
+                launch {
+                    measureWithCore(coreItems, settings, timeout, orderedResults, onResult)
+                }
+            }
+            if (socketItems.isNotEmpty()) {
+                val gate = Semaphore(maxConcurrency)
+                socketItems.forEach { (index, node) ->
+                    launch {
+                        gate.withPermit {
+                            val resolved = withContext(Dispatchers.IO) { maybeResolve(node, settings) }
+                            val group = resolved.group
+                            val result = if (group != null && group.members.isNotEmpty()) {
+                                measureGroup(resolved, group, mode)
+                            } else {
+                                measureOne(resolved, mode)
+                            }
+                            orderedResults.set(index, result)
+                            onResult(result)
+                        }
+                    }
+                }
+            }
+        }
+
+        return List(nodes.size) { index ->
+            orderedResults.get(index) ?: LatencyResult(
+                nodeId = nodes[index].id,
+                millis = 0,
+                measuredAtEpochMillis = System.currentTimeMillis(),
+                failed = true,
+            )
+        }
+    }
+
+    private suspend fun measureWithCore(
+        items: List<IndexedValue<ProxyNode>>,
+        settings: AppSettings,
+        timeout: Int,
+        orderedResults: AtomicReferenceArray<LatencyResult>,
+        onResult: (LatencyResult) -> Unit,
+    ) {
+        val prober = coreProber ?: return
+
+        val uniqueMembers = LinkedHashMap<String, ProxyNode>()
+        val memberToPlainTargets = HashMap<String, MutableList<IndexedValue<ProxyNode>>>()
+        val memberToGroups = HashMap<String, MutableList<GroupTracker>>()
+        val trackers = ArrayList<GroupTracker>()
+
+        withContext(Dispatchers.IO) {
+            for ((index, node) in items) {
+                val group = node.group
+                if (group != null && group.members.isNotEmpty()) {
+                    val resolvedMembers = group.members.map { maybeResolve(it, settings) }
+                    resolvedMembers.forEach { member -> uniqueMembers.putIfAbsent(member.id, member) }
+                    val tracker = GroupTracker(index = index, node = node, group = group)
+                    trackers.add(tracker)
+                    resolvedMembers.mapTo(HashSet()) { it.id }.forEach { memberId ->
+                        memberToGroups.getOrPut(memberId) { ArrayList(2) }.add(tracker)
+                    }
+                } else {
+                    val resolved = maybeResolve(node, settings)
+                    uniqueMembers.putIfAbsent(resolved.id, resolved)
+                    memberToPlainTargets
+                        .getOrPut(resolved.id) { ArrayList(1) }
+                        .add(IndexedValue(index, node))
+                }
+            }
+        }
+
+        val lock = Any()
+        val reportedIndices = HashSet<Int>(items.size)
+        val concurrency = if (isTunnelRunning()) CORE_CONCURRENCY_CONNECTED else CORE_CONCURRENCY_IDLE
+
+        prober.probe(uniqueMembers.values.toList(), settings, timeout, concurrency) { memberId, millis ->
+            val readyToEmit = ArrayList<LatencyResult>(2)
+            val now = System.currentTimeMillis()
+            synchronized(lock) {
+                memberToPlainTargets[memberId]?.forEach { (index, node) ->
+                    if (reportedIndices.add(index)) {
+                        val ok = millis != null && millis > 0
+                        val lr = LatencyResult(
+                            nodeId = node.id,
+                            millis = if (ok) millis!! else 0,
+                            measuredAtEpochMillis = now,
+                            failed = !ok,
+                        )
+                        orderedResults.set(index, lr)
+                        readyToEmit.add(lr)
+                    }
+                }
+                memberToGroups[memberId]?.forEach { tracker ->
+                    tracker.record(memberId, millis)
+                    if (tracker.isComplete() && reportedIndices.add(tracker.index)) {
+                        val lr = tracker.buildResult(now)
+                        orderedResults.set(tracker.index, lr)
+                        readyToEmit.add(lr)
+                    }
+                }
+            }
+            readyToEmit.forEach(onResult)
+        }
+
+        if (!coroutineContext.isActive) return
+
+        val missing = ArrayList<LatencyResult>()
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
+            for (tracker in trackers) {
+                if (reportedIndices.add(tracker.index)) {
+                    val lr = tracker.buildResult(now)
+                    orderedResults.set(tracker.index, lr)
+                    missing.add(lr)
+                }
+            }
+            for ((index, node) in items) {
+                if (reportedIndices.add(index)) {
+                    val lr = LatencyResult(
+                        nodeId = node.id,
+                        millis = 0,
+                        measuredAtEpochMillis = now,
+                        failed = true,
+                    )
+                    orderedResults.set(index, lr)
+                    missing.add(lr)
+                }
+            }
+        }
+        missing.forEach(onResult)
+    }
+
+    internal fun needsCoreProbe(node: ProxyNode, mode: PingMode, settings: AppSettings): Boolean {
+        if (coreProber == null) return false
+        if (mode == PingMode.UrlTest) return true
+        val members = node.group?.members?.takeIf { it.isNotEmpty() } ?: listOf(node)
+        return members.any { member ->
+            member.protocol.isQuicBased ||
+                member.protocol == Protocol.WIREGUARD ||
+                (mode == PingMode.Tls && XrayConfigFactory.usesFragment(member, settings))
+        }
+    }
+
+    private fun maybeResolve(node: ProxyNode, settings: AppSettings): ProxyNode =
+        if (settings.resolveServerAddress) {
+            resolveNode(node, settings.resolveDohUrl)
+        } else {
+            node
+        }
+
+    private fun effectiveTimeoutMillis(): Int = timeoutProvider().coerceIn(
+        AppSettings.MIN_PROBE_TIMEOUT_MILLIS,
+        AppSettings.MAX_PROBE_TIMEOUT_MILLIS,
+    )
+
+    private class GroupTracker(
+        val index: Int,
+        val node: ProxyNode,
+        val group: NodeGroup,
+    ) {
+        private val expectedMemberIds: Set<String> = group.members.mapTo(HashSet()) { it.id }
+        private val memberDelays = HashMap<String, Int?>(expectedMemberIds.size)
+
+        fun record(memberId: String, millis: Int?) {
+            memberDelays[memberId] = millis
+        }
+
+        fun isComplete(): Boolean = memberDelays.size >= expectedMemberIds.size
+
+        fun buildResult(now: Long): LatencyResult {
+            val delays = HashMap<Int, Int>(group.members.size)
+            group.members.forEachIndexed { idx, member ->
+                val ms = memberDelays[member.id]
+                if (ms != null && ms > 0) {
+                    delays[idx] = ms.coerceAtLeast(1)
+                }
+            }
+            val chosen = group.pick(delays)
+            return LatencyResult(
+                nodeId = node.id,
+                millis = chosen?.let(delays::get) ?: 0,
+                measuredAtEpochMillis = now,
+                failed = chosen == null,
+            )
+        }
     }
 
     private companion object {
         const val MEDIAN_SAMPLES = 3
         const val QUIC_DATAGRAM_SIZE = 1200
+        const val QUIC_MAX_ATTEMPTS = 2
+        const val QUIC_RETRY_GAP_MILLIS = 600
+        const val CORE_CONCURRENCY_IDLE = 12
+        const val CORE_CONCURRENCY_CONNECTED = 8
     }
 }
 
