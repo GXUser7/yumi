@@ -22,7 +22,7 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 
 ### [Download the latest release](https://github.com/GXUser7/yumi/releases/latest)
 
-[Features](#features) &nbsp;·&nbsp; [Television](#on-a-television) &nbsp;·&nbsp; [Privacy](#privacy) &nbsp;·&nbsp; [Installation](#installation) &nbsp;·&nbsp; [Building](#building-from-source) &nbsp;·&nbsp; [Русский](README.md)
+[For everyone](#easy-for-parents-and-non-technical-users) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Television](#on-a-television) &nbsp;·&nbsp; [Privacy](#privacy) &nbsp;·&nbsp; [Installation](#installation) &nbsp;·&nbsp; [Building](#building-from-source) &nbsp;·&nbsp; [Русский](README.md)
 
 <br>
 
@@ -53,6 +53,17 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 
 <br>
 
+## Easy for parents and non-technical users
+
+Set Yumi up once — for yourself, your parents, or anyone who never wants to touch networking terminology — and forget about "it stopped working again" calls.
+
+- **“Breeze” settings mode:** enabled by default, showing only the essentials in plain words (“Smart” mode for local sites and banking, ad blocking, app selection, fastest-server auto-pick, and automatic stall recovery). Full fine-grained controls are one tap away under **“Under the hood”** and stay completely in sync.
+- **“Recommended” hints and smart defaults out of the box:** optimal routing, encrypted DNS lookup, and subscription auto-refresh are turned on from first launch, while clean “Recommended” badges show which switches are best left alone (and can be hidden with one toggle).
+- **Filters + automatic failover:** pick the countries you want once in Servers and turn on “Fix stalled connection” — when a server stalls or mobile whitelists kick in, Yumi moves to a live server inside your filter on its own.
+- **One button and a TV remote:** one big Connect button on the home screen, routing databases download and apply automatically, and the television can be driven entirely from the phone.
+
+<br>
+
 ## Features
 
 <table>
@@ -79,7 +90,7 @@ Subscriptions, servers from a link or a QR code, your own DNS resolvers, a telev
 
 ### Servers and subscriptions
 
-- **You can add almost anything:** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `wireguard://`, `socks://`, `http://` — by pasting or by QR code; everything except `http://` is also caught when you tap such a link in another app.
+- **You can add almost anything:** `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `wireguard://`, `socks://`, `http://` — by pasting or by QR code; everything except `http://` is also caught when you tap such a link in another app. The scanner in Add also pairs an Android TV and transfers subscriptions to it.
 - **Subscriptions in any format panels use:** a list of links (base64 or plain text), **Clash YAML**, **Xray/v2ray JSON**, **SIP008**. Say what you are pasting, or leave the detection to the app — including panels that deliver fragmentation and transport extras for Happ.
 - **Transports and options:** TCP/RAW, WebSocket, gRPC (`multiMode` and `authority`), HTTPUpgrade, **XHTTP** (splithttp, `extra` and `downloadSettings`), mKCP, QUIC — with TLS, post-quantum VLESS `encryption`, REALITY (`mldsa65Verify`), ECH, Vision, browser-fingerprint mimicry (uTLS) and provider-supplied fragmentation.
 - **Filters and persisted selection:** include or exclude countries and protocols; latency checks, fastest-server auto-pick and automatic failover all respect active filters, while collapsed subscriptions are skipped during bulk probes.
@@ -151,14 +162,17 @@ happens — which is exactly why nobody learns that it did.
 ### DNS and routing
 
 - **DNS resolvers are objects just like servers:** added by a link (a DoH address, `tcp://`, `udp://`, a bare address or an `sdns://` stamp), stored as a list and switched with a single tap, including on a live tunnel.
+- **Server address lookup via DoH** (enabled by default): resolves the server IP over encrypted HTTPS DNS with TTL caching so operator DNS tampering does not break connections.
 - **No quiet downgrades:** DNS-over-TLS and DNS-over-QUIC are not in this core, so `tls://` and `quic://` are refused when added rather than turned into plain UDP.
 - **"Direct" plus your own DNS** — no VPN, but the resolver you want: traffic leaves from your ordinary address while names are resolved by the service you picked.
-- **Provider routing** (a switch in settings): when a subscription sends its own rules and DNS — the way panels send them to Happ — those go first and your own settings after them. A rule the core could not read is left out on its own instead of taking the tunnel down.
-- **Routing databases** (`geoip.dat` and `geosite.dat`, some 24 MB) are fetched on their own after the first connection; settings show whether they are on disk, with a button to refresh. Until they are there, the country rules are left out of the configuration — and that is shown rather than hidden.
+- **Custom routing rules:** separate Via VPN, Direct and Block lists for sites, IPs and `geosite:` / `geoip:` categories that take priority over the global routing mode and provider rules; addresses can be added in one tap straight from the live Connections log.
+- **Provider routing** (enabled by default): when a subscription sends its own rules and DNS — the way panels send them to Happ — those go first and your own settings after them. A rule the core could not read is left out on its own instead of taking the tunnel down.
+- **Routing databases** (`geoip.dat` and `geosite.dat`, some 24 MB) are fetched on their own and immediately applied to an active tunnel without reconnecting by hand; settings show whether they are on disk, with a button to refresh. Until they are there, the country rules are left out of the configuration — and that is shown rather than hidden.
 - **Also:** local network bypass, ad-domain blocking and per-app split tunnelling with IP-leak protection.
 
 ### And also
 
+- **Two settings modes:** the plain-language **“Breeze”** mode (default) with hideable “Recommended” badges and the full **“Under the hood”** mode, kept completely in sync.
 - **Updates from inside the app:** there is no store, so a check every twelve hours or on a button, a download, and a handover to the system installer.
 - **English and Russian** — the system language by default, or pick one in settings.
 - **A dark theme with an AMOLED mode** and a palette taken from the system wallpaper.

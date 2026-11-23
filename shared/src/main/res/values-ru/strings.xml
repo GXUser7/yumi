@@ -196,6 +196,7 @@
     <string name="servers_filter_clear">Сбросить</string>
     <string name="servers_filters_title">Фильтры</string>
     <string name="servers_filters_reset_all">Сбросить всё</string>
+    <string name="servers_filters_auto_hint">Выбранные фильтры также применяются для автоматического фейловера и автовыбора самого быстрого сервера по пингу.</string>
     <string name="servers_filter_protocol_label">Протокол</string>
     <string name="servers_filter_all">Все</string>
     <string name="servers_filter_countries_all">Все страны</string>
@@ -260,6 +261,7 @@
     <string name="add_sheet_hint">Ссылка от провайдера, happ://-ссылка, сам сервер (vless://, vmess://, trojan://, ss://, hysteria2://, tuic://…) или адрес DNS (tls://, sdns://, DoH-ссылка)</string>
     <string name="add_sheet_link_label">Ссылка</string>
     <string name="add_sheet_name_label">Название (необязательно)</string>
+    <string name="add_sheet_scan_tv_hint">Через сканер QR-кодов можно также подключить телевизор и передать на него подписку.</string>
 
     <!-- =================================================== Экран скорости -->
 
@@ -311,10 +313,50 @@
     <!-- ========================================================= Сканер -->
 
     <string name="scan_permission_rationale">Чтобы прочитать QR-код, нужен доступ к камере. Кадры не сохраняются и никуда не отправляются — они разбираются на устройстве.</string>
+    <string name="scan_hint">QR-код подписки, сервера, подключения ТВ или передачи подписки</string>
 
     <!-- ===================================================== Настройки -->
 
     <string name="settings_title">Настройки</string>
+    <string name="settings_recommended_badge">Рекомендуется</string>
+    <string name="settings_mode_title">Режим настроек</string>
+    <string name="settings_mode_simple">Налегке</string>
+    <string name="settings_mode_simple_description">Только главное простыми словами — остальное уже настроено оптимально. Все настройки общие для обоих режимов.</string>
+    <string name="settings_mode_advanced">Под капотом</string>
+    <string name="settings_mode_advanced_description">Полный список настроек: маршрутизация, DNS, фрагментация, замеры и гео-зоны.</string>
+    <string name="settings_show_recommended">Подсказки «Рекомендуется»</string>
+    <string name="settings_show_recommended_subtitle">Показывать плашку рядом с настройками, которые лучше оставить включёнными</string>
+
+    <string name="settings_simple_vpn_section">Как работает VPN</string>
+    <string name="settings_simple_routing_label">Какие сайты пускать через VPN</string>
+    <string name="settings_simple_routing_rules">Умный</string>
+    <string name="settings_simple_routing_global">Все</string>
+    <string name="settings_simple_routing_direct">Выкл</string>
+    <string name="settings_simple_routing_rules_desc">Российские сайты, банки и сервисы открываются напрямую, остальные — через VPN</string>
+    <string name="settings_simple_routing_global_desc">Весь интернет целиком идёт через VPN — включая российские сайты и банки</string>
+    <string name="settings_simple_routing_direct_desc">VPN на паузе — сайты открываются напрямую, работает только DNS</string>
+    <string name="settings_simple_block_ads">Убрать рекламу</string>
+    <string name="settings_simple_block_ads_subtitle">Скрывать рекламные баннеры на сайтах и в приложениях</string>
+    <string name="settings_simple_apps">Выбрать приложения</string>
+    <string name="settings_simple_apps_all">Сейчас через VPN работают все приложения</string>
+    <string name="settings_simple_apps_allow">Через VPN только выбранные: %1$d</string>
+    <string name="settings_simple_apps_block">Без VPN работают: %1$d</string>
+    <string name="settings_simple_auto_section">Чтобы работало само</string>
+    <string name="settings_simple_fastest">Выбирать самый быстрый сервер</string>
+    <string name="settings_simple_fastest_subtitle">Перед подключением Yumi сам найдёт сервер с лучшей скоростью</string>
+    <string name="settings_simple_failover">Чинить связь при зависании</string>
+    <string name="settings_simple_failover_subtitle">Если сервер перестал грузить сайты — Yumi сам переключит на рабочий</string>
+    <string name="settings_simple_bypass">Помощь при сильных блокировках</string>
+    <string name="settings_simple_bypass_subtitle">Включите, если сайты не грузятся даже с активным VPN</string>
+    <string name="settings_simple_auto_update">Обновлять подписки самостоятельно</string>
+    <string name="settings_simple_auto_update_subtitle">Подгружать свежие серверы при открытии и в фоне</string>
+    <string name="settings_simple_boot">Включать после перезагрузки</string>
+    <string name="settings_simple_boot_subtitle">Автоматически запускать VPN, когда телефон включится</string>
+    <string name="settings_simple_alerts">Предупреждать о неполадках</string>
+    <string name="settings_simple_alerts_subtitle">Сообщать, если сменился сервер, сломался DNS или вышло обновление</string>
+    <string name="settings_simple_appearance_section">Оформление и быстрый запуск</string>
+    <string name="settings_simple_more_title">Нужны тонкие настройки?</string>
+    <string name="settings_simple_more_subtitle">Открыть «Под капотом» — DNS, свои правила, гео-зоны и журнал</string>
 
     <string name="settings_appearance">Внешний вид</string>
     <string name="settings_visualizer">Фигура при подключении</string>

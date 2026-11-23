@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.GppGood
 import androidx.compose.material.icons.rounded.GppMaybe
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.NetworkPing
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.QrCode2
@@ -368,6 +369,7 @@ fun ServersScreen(
             countryMode = filter.countryMode,
             sort = filter.sort,
             activeFilterCount = activeFilterCount,
+            showAutoSelectionHint = true,
             onToggleProtocol = onToggleProtocol,
             onClearProtocols = onClearProtocols,
             onToggleCountry = onToggleCountry,
@@ -663,6 +665,7 @@ internal fun ServersFilterBottomSheet(
     countryMode: CountryFilterMode,
     sort: ServerSort,
     activeFilterCount: Int,
+    showAutoSelectionHint: Boolean = false,
     onToggleProtocol: (Protocol) -> Unit,
     onClearProtocols: () -> Unit,
     onToggleCountry: (String) -> Unit,
@@ -700,6 +703,7 @@ internal fun ServersFilterBottomSheet(
                         countryMode = countryMode,
                         sort = sort,
                         activeFilterCount = activeFilterCount,
+                        showAutoSelectionHint = showAutoSelectionHint,
                         onToggleProtocol = onToggleProtocol,
                         onClearProtocols = onClearProtocols,
                         onOpenCountries = {
@@ -744,6 +748,7 @@ private fun MainFilterSheetContent(
     countryMode: CountryFilterMode,
     sort: ServerSort,
     activeFilterCount: Int,
+    showAutoSelectionHint: Boolean,
     onToggleProtocol: (Protocol) -> Unit,
     onClearProtocols: () -> Unit,
     onOpenCountries: () -> Unit,
@@ -959,7 +964,11 @@ private fun MainFilterSheetContent(
         SheetSectionTitle(title = stringResource(R.string.servers_filter_sort_label))
         Row(
             modifier = Modifier
-                .padding(start = 16.dp, end = 16.dp, bottom = 18.dp)
+                .padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    bottom = if (showAutoSelectionHint) 12.dp else 18.dp,
+                )
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -1002,6 +1011,34 @@ private fun MainFilterSheetContent(
                         color = fgColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (showAutoSelectionHint) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                    .testTag("servers-filter-auto-hint"),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = stringResource(R.string.servers_filters_auto_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

@@ -38,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -75,6 +76,7 @@ import com.mydrop.vpn.ui.screens.settings.DependentGroup
 import com.mydrop.vpn.ui.screens.settings.FragmentPreset
 import com.mydrop.vpn.ui.screens.settings.FragmentationSettings
 import com.mydrop.vpn.ui.screens.settings.GroupDivider
+import com.mydrop.vpn.ui.screens.settings.LocalShowRecommendedBadges
 import com.mydrop.vpn.ui.screens.settings.NavigationRow
 import com.mydrop.vpn.ui.screens.settings.SettingsSection
 import com.mydrop.vpn.ui.screens.settings.SwitchRow
@@ -102,16 +104,18 @@ internal fun RemoteSettingsTab(
     onPatchSettings: (RemoteSettingsPatch) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    showRecommendedBadges: Boolean = true,
 ) {
     val bond = state.active ?: return
     val online = state.link is RemoteLinkState.Online
     val tvSettings = state.snapshot?.settings
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    CompositionLocalProvider(LocalShowRecommendedBadges provides showRecommendedBadges) {
+        LazyColumn(
+            modifier = modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
         item(key = "header") {
             ScreenHeader(
                 title = stringResource(R.string.settings_title),
@@ -336,6 +340,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(providerRouting = it))
                             },
+                            recommended = true,
                         )
                         SwitchRow(
                             title = stringResource(R.string.settings_bypass_lan),
@@ -344,6 +349,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(bypassLan = it))
                             },
+                            recommended = true,
                         )
                         SwitchRow(
                             title = stringResource(R.string.settings_block_ads),
@@ -360,6 +366,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(blockQuic = it))
                             },
+                            recommended = true,
                         )
                     }
                 }
@@ -386,6 +393,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(hijackDns = it))
                             },
+                            recommended = true,
                         )
 
                         Spacer(Modifier.height(8.dp))
@@ -534,6 +542,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(dnsFallback = it))
                             },
+                            recommended = true,
                         )
                     }
                 }
@@ -568,6 +577,7 @@ internal fun RemoteSettingsTab(
                             onCheckedChange = {
                                 if (online) onPatchSettings(RemoteSettingsPatch(subscriptionAutoUpdate = it))
                             },
+                            recommended = true,
                         )
 
                         AnimatedVisibility(visible = tvSettings.subscriptionAutoUpdate) {
@@ -612,5 +622,6 @@ internal fun RemoteSettingsTab(
         }
 
         item(key = "tail") { Spacer(Modifier.height(88.dp)) }
+        }
     }
 }

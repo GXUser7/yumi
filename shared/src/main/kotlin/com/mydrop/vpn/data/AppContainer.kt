@@ -7,7 +7,9 @@ import kotlinx.coroutines.SupervisorJob
 import com.mydrop.vpn.shared.R
 import com.mydrop.vpn.core.model.NodeIdMigration
 import com.mydrop.vpn.core.model.VpnState
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.mydrop.vpn.pairing.PairingClient
 import com.mydrop.vpn.remote.RemoteClient
@@ -274,8 +276,13 @@ class AppContainer(context: Context) {
         MapTileStore(appContext, applicationScope)
 
     private val geoOnFirstConnection = applicationScope.launch {
-        tunnel.state.first { it is VpnState.Connected }
-        if (!geoAssets.available()) geoAssets.refresh()
+        if (!geoAssets.available()) {
+            geoAssets.refresh()
+        }
+        if (!geoAssets.available()) {
+            tunnel.state.first { it is VpnState.Connected }
+            if (!geoAssets.available()) geoAssets.refresh()
+        }
     }
 
     /**
@@ -429,6 +436,22 @@ class AppContainer(context: Context) {
             tunnel.state.collect { state ->
                 com.mydrop.vpn.vpn.TunnelWidgetProvider.updateAll(appContext, state)
             }
+        }
+        applicationScope.launch {
+            geoAssets.state
+                .map { it.ready }
+                .distinctUntilChanged()
+                .collect { ready ->
+                    if (ready &&
+                        tunnel.state.value is VpnState.Connected &&
+                        tunnelConfigs.geoInForce.value == false
+                    ) {
+                        profiles.selectedNode()?.let { node ->
+                            logs.info(R.string.log_settings_reapplied)
+                            tunnelLauncher.switchTo(node, reloadConfig = true)
+                        }
+                    }
+                }
         }
     }
 

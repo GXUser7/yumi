@@ -16,6 +16,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -126,30 +128,38 @@ class GeoAssetStore internal constructor(
         return code in current.codes
     }
 
+    private val refreshMutex = Mutex()
+
     /**
      * Fetches whatever is missing. Returns whether everything is present afterwards.
      *
      * Safe to call on every connection: an asset already on disk at a plausible size is left alone,
      * so the ordinary case costs one `stat` per file and no network at all.
      */
-    suspend fun refresh(force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
-        publish(refreshing = true)
-        try {
-            val target = directory.apply { mkdirs() }
-            ASSETS.forEach { asset ->
-                val file = File(target, asset.fileName)
-                // `force` is what the button in settings passes: a person asking again has a reason
-                // — a database from six months ago routes by six-month-old categories — and the
-                // background pass on every connection must not do that or it would re-download
-                // thirty megabytes each time the tunnel comes up.
-                if (!force && file.isFile && file.length() >= MINIMUM_BYTES) return@forEach
-                runCatching { download(asset, file) }
-                    .onSuccess { logs.info(R.string.log_geo_downloaded, asset.fileName) }
-                    .onFailure { logs.warn(R.string.log_geo_failed, asset.fileName, it.message.orEmpty()) }
+    suspend fun refresh(force: Boolean = false): Boolean = refreshMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (!force && available()) {
+                publish(refreshing = false)
+                return@withContext true
             }
-            available()
-        } finally {
-            publish()
+            publish(refreshing = true)
+            try {
+                val target = directory.apply { mkdirs() }
+                ASSETS.forEach { asset ->
+                    val file = File(target, asset.fileName)
+                    // `force` is what the button in settings passes: a person asking again has a reason
+                    // — a database from six months ago routes by six-month-old categories — and the
+                    // background pass on every connection must not do that or it would re-download
+                    // thirty megabytes each time the tunnel comes up.
+                    if (!force && file.isFile && file.length() >= MINIMUM_BYTES) return@forEach
+                    runCatching { download(asset, file) }
+                        .onSuccess { logs.info(R.string.log_geo_downloaded, asset.fileName) }
+                        .onFailure { logs.warn(R.string.log_geo_failed, asset.fileName, it.message.orEmpty()) }
+                }
+                available()
+            } finally {
+                publish()
+            }
         }
     }
 

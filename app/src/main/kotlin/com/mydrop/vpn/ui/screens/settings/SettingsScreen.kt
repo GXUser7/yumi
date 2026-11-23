@@ -12,12 +12,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -61,8 +65,10 @@ import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SignalCellularAlt
+import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
@@ -82,6 +88,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -96,6 +104,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +118,8 @@ import com.mydrop.vpn.core.model.FragmentMode
 import com.mydrop.vpn.core.model.FragmentScope
 import com.mydrop.vpn.core.model.PingMode
 import com.mydrop.vpn.core.model.ProbeTargets
+import com.mydrop.vpn.core.model.RoutingMode
+import com.mydrop.vpn.core.model.SettingsMode
 import com.mydrop.vpn.core.model.SplitTunnelMode
 import com.mydrop.vpn.core.model.ThemeMode
 import com.mydrop.vpn.core.model.TlsFingerprintOverride
@@ -118,6 +129,8 @@ import com.mydrop.vpn.ui.components.ScreenHeader
 import com.mydrop.vpn.ui.components.ShapeSpinner
 import com.mydrop.vpn.vpn.TunnelTileService
 import com.mydrop.vpn.vpn.TunnelWidgetProvider
+
+internal val LocalShowRecommendedBadges = compositionLocalOf { true }
 
 internal data class FragmentPreset(
     val labelRes: Int,
@@ -380,6 +393,7 @@ fun SettingsScreen(
     onSelectDns: (String?) -> Unit,
     onRemoveDns: (String) -> Unit,
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
+    onRoutingModeChange: (RoutingMode) -> Unit = { mode -> onUpdate { it.copy(routingMode = mode) } },
     onOpenLogs: () -> Unit,
     onOpenSplitTunnel: () -> Unit,
     onOpenCustomRules: () -> Unit = {},
@@ -406,93 +420,223 @@ fun SettingsScreen(
 ) {
     var gratitudeOpen by rememberSaveable { mutableStateOf(false) }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item("header") {
-            ScreenHeader(
-                title = stringResource(R.string.settings_title),
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
-
-        item("appearance") {
-            SettingsSection(
-                title = stringResource(R.string.settings_appearance),
-                icon = Icons.Rounded.Palette,
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_theme),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemeMode.entries.forEach { mode ->
-                        ChoiceButton(
-                            label = stringResource(mode.labelRes),
-                            checked = settings.themeMode == mode,
-                            onClick = { onUpdate { it.copy(themeMode = mode) } },
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    text = stringResource(R.string.settings_language),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AppLanguage.entries.forEach { language ->
-                        // The endonyms stay in their own language in every locale: somebody
-                        // looking for their language recognises "Русский", not "Russian".
-                        ChoiceButton(
-                            label = stringResource(language.labelRes),
-                            checked = settings.language == language,
-                            onClick = { onUpdate { it.copy(language = language) } },
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    text = stringResource(R.string.settings_visualizer),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Visualizer.entries.forEach { visualizer ->
-                        ChoiceButton(
-                            label = stringResource(visualizer.labelRes),
-                            checked = settings.visualizer == visualizer,
-                            onClick = { onUpdate { it.copy(visualizer = visualizer) } },
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                SwitchRow(
-                    title = stringResource(R.string.settings_dynamic_color),
-                    subtitle = stringResource(R.string.settings_dynamic_color_subtitle),
-                    checked = settings.dynamicColor,
-                    onCheckedChange = { onUpdate { s -> s.copy(dynamicColor = it) } },
-                )
-                SwitchRow(
-                    title = stringResource(R.string.settings_amoled),
-                    subtitle = stringResource(R.string.settings_amoled_subtitle),
-                    checked = settings.amoled,
-                    onCheckedChange = { onUpdate { s -> s.copy(amoled = it) } },
+    CompositionLocalProvider(LocalShowRecommendedBadges provides settings.showRecommendedBadges) {
+        LazyColumn(
+            modifier = modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item("header") {
+                ScreenHeader(
+                    title = stringResource(R.string.settings_title),
+                    modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
-        }
+
+            item("settings-mode") {
+                SettingsModeCard(
+                    mode = settings.settingsMode,
+                    onSelect = { mode -> onUpdate { it.copy(settingsMode = mode) } },
+                )
+            }
+
+            if (settings.settingsMode == SettingsMode.Simple) {
+                item("simple-vpn") {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_simple_vpn_section),
+                        icon = Icons.Rounded.Shield,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_simple_routing_label),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(RoutingMode.Rules, RoutingMode.Global, RoutingMode.Direct).forEach { mode ->
+                                ChoiceButton(
+                                    label = stringResource(
+                                        when (mode) {
+                                            RoutingMode.Rules -> R.string.settings_simple_routing_rules
+                                            RoutingMode.Global -> R.string.settings_simple_routing_global
+                                            RoutingMode.Direct -> R.string.settings_simple_routing_direct
+                                        },
+                                    ),
+                                    checked = settings.routingMode == mode,
+                                    onClick = { onRoutingModeChange(mode) },
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(
+                                when (settings.routingMode) {
+                                    RoutingMode.Rules -> R.string.settings_simple_routing_rules_desc
+                                    RoutingMode.Global -> R.string.settings_simple_routing_global_desc
+                                    RoutingMode.Direct -> R.string.settings_simple_routing_direct_desc
+                                },
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_block_ads),
+                            subtitle = stringResource(R.string.settings_simple_block_ads_subtitle),
+                            checked = settings.blockAds,
+                            onCheckedChange = { onUpdate { s -> s.copy(blockAds = it) } },
+                        )
+                        NavigationRow(
+                            title = stringResource(R.string.settings_simple_apps),
+                            subtitle = when (settings.splitTunnelMode) {
+                                SplitTunnelMode.Off -> stringResource(R.string.settings_simple_apps_all)
+                                SplitTunnelMode.AllowList ->
+                                    stringResource(R.string.settings_simple_apps_allow, splitTunnelAppCount)
+                                SplitTunnelMode.BlockList ->
+                                    stringResource(R.string.settings_simple_apps_block, splitTunnelAppCount)
+                            },
+                            icon = Icons.Rounded.Apps,
+                            onClick = onOpenSplitTunnel,
+                        )
+                    }
+                }
+
+                item("simple-auto") {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_simple_auto_section),
+                        icon = Icons.Rounded.Bolt,
+                    ) {
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_fastest),
+                            subtitle = stringResource(R.string.settings_simple_fastest_subtitle),
+                            checked = settings.autoSelectFastest,
+                            onCheckedChange = { onUpdate { s -> s.copy(autoSelectFastest = it) } },
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_failover),
+                            subtitle = stringResource(R.string.settings_simple_failover_subtitle),
+                            checked = settings.autoFailover,
+                            onCheckedChange = { onUpdate { s -> s.copy(autoFailover = it) } },
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_bypass),
+                            subtitle = stringResource(R.string.settings_simple_bypass_subtitle),
+                            checked = settings.simpleBypassEnabled,
+                            onCheckedChange = { onUpdate { s -> s.withSimpleBypass(it) } },
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_auto_update),
+                            subtitle = stringResource(R.string.settings_simple_auto_update_subtitle),
+                            checked = settings.simpleAutoUpdateEnabled,
+                            onCheckedChange = { onUpdate { s -> s.withSimpleAutoUpdate(it) } },
+                            recommended = true,
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_boot),
+                            subtitle = stringResource(R.string.settings_simple_boot_subtitle),
+                            checked = settings.autoConnectOnBoot,
+                            onCheckedChange = { onUpdate { s -> s.copy(autoConnectOnBoot = it) } },
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_simple_alerts),
+                            subtitle = stringResource(R.string.settings_simple_alerts_subtitle),
+                            checked = settings.simpleAlertsEnabled,
+                            onCheckedChange = { onUpdate { s -> s.withSimpleAlerts(it) } },
+                            recommended = true,
+                        )
+                    }
+                }
+
+                item("simple-appearance") {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_simple_appearance_section),
+                        icon = Icons.Rounded.Palette,
+                    ) {
+                        ThemeAndLanguagePickers(
+                            themeMode = settings.themeMode,
+                            language = settings.language,
+                            onThemeChange = { mode -> onUpdate { it.copy(themeMode = mode) } },
+                            onLanguageChange = { language -> onUpdate { it.copy(language = language) } },
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        RecommendedHintsSwitchRow(
+                            checked = settings.showRecommendedBadges,
+                            onCheckedChange = { onUpdate { s -> s.copy(showRecommendedBadges = it) } },
+                        )
+                        QuickTileRow()
+                        WidgetRow()
+                    }
+                }
+
+                item("updates") {
+                    UpdatesSection(
+                        autoCheck = settings.updateAutoCheck,
+                        onAutoCheckChange = { onUpdate { s -> s.copy(updateAutoCheck = it) } },
+                        updates = updates,
+                        onCheckUpdate = onCheckUpdate,
+                        onDownloadUpdate = onDownloadUpdate,
+                        onInstallUpdate = onInstallUpdate,
+                        onDismissUpdate = onDismissUpdate,
+                    )
+                }
+
+                item("simple-more") {
+                    SimpleMoreSettingsCard(
+                        onClick = { onUpdate { it.copy(settingsMode = SettingsMode.Advanced) } },
+                    )
+                }
+            } else {
+                item("appearance") {
+                    SettingsSection(
+                        title = stringResource(R.string.settings_appearance),
+                        icon = Icons.Rounded.Palette,
+                    ) {
+                        ThemeAndLanguagePickers(
+                            themeMode = settings.themeMode,
+                            language = settings.language,
+                            onThemeChange = { mode -> onUpdate { it.copy(themeMode = mode) } },
+                            onLanguageChange = { language -> onUpdate { it.copy(language = language) } },
+                        )
+
+                        Spacer(Modifier.height(12.dp))
+
+                        Text(
+                            text = stringResource(R.string.settings_visualizer),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Visualizer.entries.forEach { visualizer ->
+                                ChoiceButton(
+                                    label = stringResource(visualizer.labelRes),
+                                    checked = settings.visualizer == visualizer,
+                                    onClick = { onUpdate { it.copy(visualizer = visualizer) } },
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        SwitchRow(
+                            title = stringResource(R.string.settings_dynamic_color),
+                            subtitle = stringResource(R.string.settings_dynamic_color_subtitle),
+                            checked = settings.dynamicColor,
+                            onCheckedChange = { onUpdate { s -> s.copy(dynamicColor = it) } },
+                            recommended = true,
+                        )
+                        SwitchRow(
+                            title = stringResource(R.string.settings_amoled),
+                            subtitle = stringResource(R.string.settings_amoled_subtitle),
+                            checked = settings.amoled,
+                            onCheckedChange = { onUpdate { s -> s.copy(amoled = it) } },
+                        )
+                        RecommendedHintsSwitchRow(
+                            checked = settings.showRecommendedBadges,
+                            onCheckedChange = { onUpdate { s -> s.copy(showRecommendedBadges = it) } },
+                        )
+                    }
+                }
 
         item("routing") {
             SettingsSection(
@@ -506,12 +650,14 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_provider_routing_subtitle),
                     checked = settings.providerRouting,
                     onCheckedChange = { onUpdate { s -> s.copy(providerRouting = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_bypass_lan),
                     subtitle = stringResource(R.string.settings_bypass_lan_subtitle),
                     checked = settings.bypassLan,
                     onCheckedChange = { onUpdate { s -> s.copy(bypassLan = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_block_ads),
@@ -524,6 +670,7 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_block_quic_subtitle),
                     checked = settings.blockQuic,
                     onCheckedChange = { onUpdate { s -> s.copy(blockQuic = it) } },
+                    recommended = true,
                 )
 
                 NavigationRow(
@@ -574,6 +721,7 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_hijack_dns_subtitle),
                     checked = settings.hijackDns,
                     onCheckedChange = { onUpdate { s -> s.copy(hijackDns = it) } },
+                    recommended = true,
                 )
 
                 Spacer(Modifier.height(8.dp))
@@ -661,12 +809,14 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_dns_fallback_subtitle),
                     checked = settings.dnsFallback,
                     onCheckedChange = { onUpdate { s -> s.copy(dnsFallback = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_resolve_server_doh),
                     subtitle = stringResource(R.string.settings_resolve_server_doh_subtitle),
                     checked = settings.resolveServerAddress,
                     onCheckedChange = { onUpdate { s -> s.copy(resolveServerAddress = it) } },
+                    recommended = true,
                 )
                 AnimatedVisibility(visible = settings.resolveServerAddress) {
                     DependentGroup {
@@ -793,12 +943,14 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_auto_update_subtitle),
                     checked = settings.subscriptionAutoUpdate,
                     onCheckedChange = { onUpdate { s -> s.copy(subscriptionAutoUpdate = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_auto_update_on_start),
                     subtitle = stringResource(R.string.settings_auto_update_on_start_subtitle),
                     checked = settings.subscriptionUpdateOnStart,
                     onCheckedChange = { onUpdate { s -> s.copy(subscriptionUpdateOnStart = it) } },
+                    recommended = true,
                 )
 
                 AnimatedVisibility(visible = settings.subscriptionAutoUpdate) {
@@ -924,6 +1076,7 @@ fun SettingsScreen(
                                     onCheckedChange = {
                                         onUpdate { s -> s.copy(preferOrdinaryOnCellular = it) }
                                     },
+                                    recommended = true,
                                 )
                                 SwitchRow(
                                     title = stringResource(R.string.settings_restore_wifi),
@@ -941,6 +1094,7 @@ fun SettingsScreen(
                             subtitle = stringResource(R.string.settings_return_home_subtitle),
                             checked = settings.returnHome,
                             onCheckedChange = { onUpdate { s -> s.copy(returnHome = it) } },
+                            recommended = true,
                         )
                         GroupDivider()
                         SwitchRow(
@@ -1027,6 +1181,7 @@ fun SettingsScreen(
                                     onCheckedChange = {
                                         onUpdate { s -> s.copy(geoPreemptiveSwitch = it) }
                                     },
+                                    recommended = true,
                                 )
                                 GroupDivider()
                                 SwitchRow(
@@ -1036,6 +1191,7 @@ fun SettingsScreen(
                                     onCheckedChange = {
                                         onUpdate { s -> s.copy(geoAutoReturnOrdinary = it) }
                                     },
+                                    recommended = true,
                                 )
                             }
                         }
@@ -1123,48 +1279,43 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_alert_server_subtitle),
                     checked = settings.alertServer,
                     onCheckedChange = { onUpdate { s -> s.copy(alertServer = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_alert_dns),
                     subtitle = stringResource(R.string.settings_alert_dns_subtitle),
                     checked = settings.alertDns,
                     onCheckedChange = { onUpdate { s -> s.copy(alertDns = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_alert_lists),
                     subtitle = stringResource(R.string.settings_alert_lists_subtitle),
                     checked = settings.alertLists,
                     onCheckedChange = { onUpdate { s -> s.copy(alertLists = it) } },
+                    recommended = true,
                 )
                 SwitchRow(
                     title = stringResource(R.string.settings_alert_update),
                     subtitle = stringResource(R.string.settings_alert_update_subtitle),
                     checked = settings.alertUpdate,
                     onCheckedChange = { onUpdate { s -> s.copy(alertUpdate = it) } },
+                    recommended = true,
                 )
             }
         }
 
         item("updates") {
-            SettingsSection(
-                title = stringResource(R.string.settings_updates),
-                icon = Icons.Rounded.SystemUpdate,
-            ) {
-                SwitchRow(
-                    title = stringResource(R.string.settings_update_auto),
-                    subtitle = stringResource(R.string.settings_update_auto_subtitle),
-                    checked = settings.updateAutoCheck,
-                    onCheckedChange = { onUpdate { s -> s.copy(updateAutoCheck = it) } },
-                )
-                Spacer(Modifier.height(8.dp))
-                UpdateRow(
-                    state = updates,
-                    onCheck = onCheckUpdate,
-                    onDownload = onDownloadUpdate,
-                    onInstall = onInstallUpdate,
-                    onDismiss = onDismissUpdate,
-                )
-            }
+            UpdatesSection(
+                autoCheck = settings.updateAutoCheck,
+                onAutoCheckChange = { onUpdate { s -> s.copy(updateAutoCheck = it) } },
+                updates = updates,
+                onCheckUpdate = onCheckUpdate,
+                onDownloadUpdate = onDownloadUpdate,
+                onInstallUpdate = onInstallUpdate,
+                onDismissUpdate = onDismissUpdate,
+            )
+        }
         }
 
         if (BuildConfig.DEBUG) {
@@ -1228,12 +1379,235 @@ fun SettingsScreen(
         }
 
         item("tail") { Spacer(Modifier.height(88.dp)) }
+        }
     }
 
     if (gratitudeOpen) {
         GratitudeBoardSheet(
             onDismiss = { gratitudeOpen = false },
         )
+    }
+}
+
+@Composable
+private fun SettingsModeCard(
+    mode: SettingsMode,
+    onSelect: (SettingsMode) -> Unit,
+) {
+    SettingsSection(
+        title = stringResource(R.string.settings_mode_title),
+        icon = Icons.Rounded.Tune,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SettingsMode.entries.forEach { entry ->
+                val selected = mode == entry
+                val containerColor by animateColorAsState(
+                    targetValue = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    label = "settings-mode-bg-${entry.name}",
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    label = "settings-mode-fg-${entry.name}",
+                )
+                val icon = if (entry == SettingsMode.Simple) {
+                    Icons.Rounded.Spa
+                } else {
+                    Icons.Rounded.Tune
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(containerColor)
+                        .clickable { onSelect(entry) }
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = contentColor,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = stringResource(entry.labelRes),
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = contentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = stringResource(mode.descriptionRes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ThemeAndLanguagePickers(
+    themeMode: ThemeMode,
+    language: AppLanguage,
+    onThemeChange: (ThemeMode) -> Unit,
+    onLanguageChange: (AppLanguage) -> Unit,
+) {
+    Text(
+        text = stringResource(R.string.settings_theme),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ThemeMode.entries.forEach { mode ->
+            ChoiceButton(
+                label = stringResource(mode.labelRes),
+                checked = themeMode == mode,
+                onClick = { onThemeChange(mode) },
+            )
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    Text(
+        text = stringResource(R.string.settings_language),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppLanguage.entries.forEach { entry ->
+            // The endonyms stay in their own language in every locale: somebody
+            // looking for their language recognises "Русский", not "Russian".
+            ChoiceButton(
+                label = stringResource(entry.labelRes),
+                checked = language == entry,
+                onClick = { onLanguageChange(entry) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecommendedHintsSwitchRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    SwitchRow(
+        title = stringResource(R.string.settings_show_recommended),
+        subtitle = stringResource(R.string.settings_show_recommended_subtitle),
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+    )
+}
+
+@Composable
+private fun UpdatesSection(
+    autoCheck: Boolean,
+    onAutoCheckChange: (Boolean) -> Unit,
+    updates: UpdateState,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: (Context) -> Unit,
+    onDismissUpdate: () -> Unit,
+) {
+    SettingsSection(
+        title = stringResource(R.string.settings_updates),
+        icon = Icons.Rounded.SystemUpdate,
+    ) {
+        SwitchRow(
+            title = stringResource(R.string.settings_update_auto),
+            subtitle = stringResource(R.string.settings_update_auto_subtitle),
+            checked = autoCheck,
+            onCheckedChange = onAutoCheckChange,
+            recommended = true,
+        )
+        Spacer(Modifier.height(8.dp))
+        UpdateRow(
+            state = updates,
+            onCheck = onCheckUpdate,
+            onDownload = onDownloadUpdate,
+            onInstall = onInstallUpdate,
+            onDismiss = onDismissUpdate,
+        )
+    }
+}
+
+@Composable
+private fun SimpleMoreSettingsCard(onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_simple_more_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.settings_simple_more_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -1463,6 +1837,7 @@ internal fun SwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    recommended: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -1471,8 +1846,24 @@ internal fun SwitchRow(
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+        ) {
+            if (recommended && LocalShowRecommendedBadges.current) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge)
+                    RecommendedBadge()
+                }
+            } else {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+            }
+            Spacer(Modifier.height(2.dp))
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -1480,6 +1871,25 @@ internal fun SwitchRow(
             )
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+internal fun RecommendedBadge(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ) {
+        Text(
+            text = stringResource(R.string.settings_recommended_badge),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
     }
 }
 

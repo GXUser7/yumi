@@ -49,6 +49,15 @@ enum class Visualizer(@StringRes val labelRes: Int) {
 }
 
 @Serializable
+enum class SettingsMode(
+    @StringRes val labelRes: Int,
+    @StringRes val descriptionRes: Int,
+) {
+    Simple(R.string.settings_mode_simple, R.string.settings_mode_simple_description),
+    Advanced(R.string.settings_mode_advanced, R.string.settings_mode_advanced_description),
+}
+
+@Serializable
 enum class RoutingMode(@StringRes val labelRes: Int, @StringRes val descriptionRes: Int) {
     Global(R.string.routing_global, R.string.routing_global_description),
     Rules(R.string.routing_rules, R.string.routing_rules_description),
@@ -140,9 +149,7 @@ data class AppSettings(
     // Appearance
     val themeMode: ThemeMode = ThemeMode.System,
     val visualizer: Visualizer = Visualizer.Waves,
-    // Off by default: wallpaper colours replace the ice accent, and the tunnel screen leans on
-    // that accent meaning "protected". Still a switch — the choice belongs to the user.
-    val dynamicColor: Boolean = false,
+    val dynamicColor: Boolean = true,
     /**
      * The built-in accent, used wherever wallpaper colours are not.
      *
@@ -154,6 +161,8 @@ data class AppSettings(
     val palette: Palette = Palette.Glacier,
     val amoled: Boolean = false,
     val language: AppLanguage = AppLanguage.System,
+    val settingsMode: SettingsMode = SettingsMode.Simple,
+    val showRecommendedBadges: Boolean = true,
 
     // Routing
     val routingMode: RoutingMode = RoutingMode.Rules,
@@ -169,7 +178,7 @@ data class AppSettings(
      * routing differently because an update learned to read a part of it nobody asked for. Ignored
      * in [RoutingMode.Direct], which means no proxy at all.
      */
-    val providerRouting: Boolean = false,
+    val providerRouting: Boolean = true,
     val customRules: CustomRules = CustomRules(),
     val bypassLan: Boolean = true,
     val blockAds: Boolean = false,
@@ -180,10 +189,9 @@ data class AppSettings(
      * succeeds nor fails quickly — it sits until a timeout, which is what
      * `listen packet connection ... context deadline exceeded` in the journal is. A rejected
      * attempt is answered immediately and Chrome switches protocol on the spot, so blocking it
-     * is faster than letting it through. Off by default: on a network that does not throttle
-     * UDP, QUIC is the better transport and this only takes it away.
+     * is faster than letting it through.
      */
-    val blockQuic: Boolean = false,
+    val blockQuic: Boolean = true,
 
     // Tunnel
     val enableIpv6: Boolean = false,
@@ -218,7 +226,7 @@ data class AppSettings(
      * prefer the outage.
      */
     val dnsFallback: Boolean = true,
-    val resolveServerAddress: Boolean = false,
+    val resolveServerAddress: Boolean = true,
     val resolveDohUrl: String = "https://1.1.1.1/dns-query",
 
     /**
@@ -302,7 +310,7 @@ data class AppSettings(
      * seven dead servers while live ones sat in the list untouched. Deciding to abandon the
      * ordinary servers on that evidence would abandon them permanently.
      */
-    val preferOrdinaryOnCellular: Boolean = false,
+    val preferOrdinaryOnCellular: Boolean = true,
     /**
      * Whether returning to Wi-Fi puts the tunnel back on the exact server it left.
      *
@@ -319,7 +327,7 @@ data class AppSettings(
     val geoPreemptiveSwitch: Boolean = true,
     val geoAutoReturnOrdinary: Boolean = true,
     val subscriptionAutoUpdate: Boolean = true,
-    val subscriptionUpdateOnStart: Boolean = false,
+    val subscriptionUpdateOnStart: Boolean = true,
     /**
      * How often subscriptions refresh themselves, in minutes.
      *
@@ -397,6 +405,33 @@ data class AppSettings(
      */
     val geoZonesActive: Boolean
         get() = autoFailover && geoZonesEnabled
+
+    val simpleBypassEnabled: Boolean
+        get() = fragmentMode != FragmentMode.Off
+
+    fun withSimpleBypass(enabled: Boolean): AppSettings = if (enabled) {
+        if (fragmentMode == FragmentMode.Off) copy(fragmentMode = FragmentMode.TcpSegments) else this
+    } else {
+        copy(fragmentMode = FragmentMode.Off)
+    }
+
+    val simpleAutoUpdateEnabled: Boolean
+        get() = subscriptionAutoUpdate || subscriptionUpdateOnStart
+
+    fun withSimpleAutoUpdate(enabled: Boolean): AppSettings = copy(
+        subscriptionAutoUpdate = enabled,
+        subscriptionUpdateOnStart = enabled,
+    )
+
+    val simpleAlertsEnabled: Boolean
+        get() = alertServer || alertDns || alertLists || alertUpdate
+
+    fun withSimpleAlerts(enabled: Boolean): AppSettings = copy(
+        alertServer = enabled,
+        alertDns = enabled,
+        alertLists = enabled,
+        alertUpdate = enabled,
+    )
 
     companion object {
         const val MIN_PROBE_TIMEOUT_MILLIS = 500

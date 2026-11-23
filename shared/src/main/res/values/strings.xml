@@ -196,6 +196,7 @@
     <string name="servers_filter_clear">Reset</string>
     <string name="servers_filters_title">Filters</string>
     <string name="servers_filters_reset_all">Reset all</string>
+    <string name="servers_filters_auto_hint">Selected filters also apply to automatic failover and automatic fastest-server selection by ping.</string>
     <string name="servers_filter_protocol_label">Protocol</string>
     <string name="servers_filter_all">All</string>
     <string name="servers_filter_countries_all">All countries</string>
@@ -258,6 +259,7 @@
     <string name="add_sheet_hint">A link from a provider, a happ:// link, a server itself (vless://, vmess://, trojan://, ss://, hysteria2://, tuic://…) or a DNS address (tls://, sdns://, a DoH URL)</string>
     <string name="add_sheet_link_label">Link</string>
     <string name="add_sheet_name_label">Name (optional)</string>
+    <string name="add_sheet_scan_tv_hint">You can also use the QR scanner to connect a TV and transfer subscriptions to it.</string>
 
     <!-- =================================================== Speed test screen -->
 
@@ -309,10 +311,50 @@
     <!-- ========================================================= Scan screen -->
 
     <string name="scan_permission_rationale">Reading a QR code needs the camera. Frames are not stored and not sent anywhere — they are decoded on the device.</string>
+    <string name="scan_hint">QR code for a subscription, server, TV pairing, or subscription transfer</string>
 
     <!-- ===================================================== Settings screen -->
 
     <string name="settings_title">Settings</string>
+    <string name="settings_recommended_badge">Recommended</string>
+    <string name="settings_mode_title">Settings mode</string>
+    <string name="settings_mode_simple">Breeze</string>
+    <string name="settings_mode_simple_description">Only the essentials in plain words — everything else is already tuned. Both modes share the same settings.</string>
+    <string name="settings_mode_advanced">Under the hood</string>
+    <string name="settings_mode_advanced_description">Full control: routing, DNS, fragmentation, latency probes, and geo-zones.</string>
+    <string name="settings_show_recommended">“Recommended” hints</string>
+    <string name="settings_show_recommended_subtitle">Show a badge next to settings best left enabled</string>
+
+    <string name="settings_simple_vpn_section">How VPN works</string>
+    <string name="settings_simple_routing_label">Which sites use VPN</string>
+    <string name="settings_simple_routing_rules">Smart</string>
+    <string name="settings_simple_routing_global">All</string>
+    <string name="settings_simple_routing_direct">Off</string>
+    <string name="settings_simple_routing_rules_desc">Local and Russian sites open directly; everything else goes through VPN</string>
+    <string name="settings_simple_routing_global_desc">All internet traffic goes through VPN, including local sites</string>
+    <string name="settings_simple_routing_direct_desc">VPN is bypassed — sites open directly using your chosen DNS</string>
+    <string name="settings_simple_block_ads">Block ads</string>
+    <string name="settings_simple_block_ads_subtitle">Hide ad banners on websites and in apps</string>
+    <string name="settings_simple_apps">Choose apps</string>
+    <string name="settings_simple_apps_all">All apps go through VPN right now</string>
+    <string name="settings_simple_apps_allow">Only %1$d selected apps use VPN</string>
+    <string name="settings_simple_apps_block">%1$d apps bypass VPN</string>
+    <string name="settings_simple_auto_section">Automatic care</string>
+    <string name="settings_simple_fastest">Pick the fastest server</string>
+    <string name="settings_simple_fastest_subtitle">Automatically pick the quickest server before connecting</string>
+    <string name="settings_simple_failover">Fix stalled connection</string>
+    <string name="settings_simple_failover_subtitle">If a server stops loading sites, Yumi switches to a working one</string>
+    <string name="settings_simple_bypass">Extra help with tough blocks</string>
+    <string name="settings_simple_bypass_subtitle">Turn on if websites do not load even while VPN is connected</string>
+    <string name="settings_simple_auto_update">Keep subscriptions fresh</string>
+    <string name="settings_simple_auto_update_subtitle">Refresh your server lists on launch and while running</string>
+    <string name="settings_simple_boot">Start after phone restart</string>
+    <string name="settings_simple_boot_subtitle">Reconnect VPN automatically when the phone boots up</string>
+    <string name="settings_simple_alerts">Notify about issues</string>
+    <string name="settings_simple_alerts_subtitle">Let you know when a server switches, DNS falls back, or an update arrives</string>
+    <string name="settings_simple_appearance_section">Look &amp; shortcuts</string>
+    <string name="settings_simple_more_title">Need more control?</string>
+    <string name="settings_simple_more_subtitle">Switch to “Under the hood” for DNS, custom rules, geo-zones, and journal</string>
 
     <string name="settings_appearance">Appearance</string>
     <string name="settings_visualizer">Connected figure</string>

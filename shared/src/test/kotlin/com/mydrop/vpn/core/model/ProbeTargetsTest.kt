@@ -32,7 +32,12 @@ class ProbeTargetsTest {
         val defaults = AppSettings()
         assertEquals(ProbeTargets.DEFAULT_URL, defaults.probeUrl)
         assertEquals(LatencyResult.TIMEOUT_MILLIS, defaults.probeTimeoutMillis)
-        assertFalse(defaults.subscriptionUpdateOnStart)
+        assertTrue(defaults.subscriptionUpdateOnStart)
+        assertTrue(defaults.resolveServerAddress)
+        assertTrue(defaults.providerRouting)
+        assertTrue(defaults.blockQuic)
+        assertTrue(defaults.dynamicColor)
+        assertTrue(defaults.preferOrdinaryOnCellular)
 
         val json = Json {
             ignoreUnknownKeys = true
@@ -41,12 +46,12 @@ class ProbeTargetsTest {
         val legacy = json.decodeFromString(AppSettings.serializer(), "{}")
         assertEquals(ProbeTargets.DEFAULT_URL, legacy.probeUrl)
         assertEquals(LatencyResult.TIMEOUT_MILLIS, legacy.probeTimeoutMillis)
-        assertFalse(legacy.subscriptionUpdateOnStart)
+        assertTrue(legacy.subscriptionUpdateOnStart)
 
         val custom = AppSettings(
             probeUrl = "https://example.com/204",
             probeTimeoutMillis = 2_500,
-            subscriptionUpdateOnStart = true,
+            subscriptionUpdateOnStart = false,
         )
         val encoded = json.encodeToString(AppSettings.serializer(), custom)
         val decoded = json.decodeFromString(AppSettings.serializer(), encoded)

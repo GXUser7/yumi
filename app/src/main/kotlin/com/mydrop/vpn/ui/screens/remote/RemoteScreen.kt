@@ -139,6 +139,7 @@ fun RemoteScreen(
     darkTheme: Boolean,
     serverFilter: ServerFilterState,
     collapsedGroupIds: Set<String>,
+    showRecommendedBadges: Boolean = true,
     onBack: () -> Unit,
     onScan: () -> Unit,
     onPairCode: (String) -> Unit,
@@ -301,6 +302,7 @@ fun RemoteScreen(
                 RemoteTab.Settings -> RemoteSettingsTab(
                     state = state,
                     darkTheme = darkTheme,
+                    showRecommendedBadges = showRecommendedBadges,
                     onBack = onBack,
                     onReconnect = onReconnect,
                     onOpenRename = { renameTarget = state.active },

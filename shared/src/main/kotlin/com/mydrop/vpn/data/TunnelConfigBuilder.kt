@@ -122,6 +122,14 @@ class TunnelConfigBuilder(
 
     private val _switchable = MutableStateFlow<Set<String>>(emptySet())
 
+    private val _geoInForce = MutableStateFlow<Boolean?>(null)
+
+    /**
+     * Whether the running document was built with `geoip.dat` and `geosite.dat` available on disk.
+     * Null while no document is in force.
+     */
+    val geoInForce: StateFlow<Boolean?> = _geoInForce.asStateFlow()
+
     private val _dnsFallback = MutableStateFlow(false)
 
     /**
@@ -148,6 +156,7 @@ class TunnelConfigBuilder(
         // The group belongs to the same dead tunnel as the document. A stale one would let the
         // watchdog keep choosing from servers the next core has never been told about.
         _switchable.value = emptySet()
+        _geoInForce.value = null
         _ipv6.value = null
         _dns.value = null
         _providerInForce.value = null
@@ -267,6 +276,7 @@ class TunnelConfigBuilder(
             _switchable.value = document.nodeTags.mapTo(mutableSetOf()) { tag ->
                 tag.removePrefix(XrayConfigFactory.nodeTag(""))
             }
+            _geoInForce.value = geoAvailable
             _ipv6.value = Ipv6InForce(answers = answersIpv6, members = members)
             _dns.value = DnsInForce(
                 resolver = document.resolver,
