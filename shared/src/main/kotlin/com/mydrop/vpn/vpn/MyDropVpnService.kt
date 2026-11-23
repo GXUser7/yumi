@@ -106,6 +106,7 @@ class MyDropVpnService : VpnService() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "mydrop_tunnel"
         private const val NATIVE_TAG = "YumiCore"
+        private const val GUARD_TAG = "YumiGuard"
 
         /** gRPC's word for "the caller hung up", which on these streams is always us. */
         private const val CANCELLED = "context canceled"
@@ -432,6 +433,9 @@ class MyDropVpnService : VpnService() {
 
     /** Guards sleep/Doze socket cleanup against false resets during active streams. */
     private val wakeRecovery = WakeRecoveryTracker()
+
+    /** Rate-limits TrafficGuard denial traces so bursts stay readable in yumi.log. */
+    private val guardRateLimiter = TrafficGuardRateLimiter()
 
     /**
      * Which default-interface monitor is the current one.
@@ -818,6 +822,7 @@ class MyDropVpnService : VpnService() {
         runningConfig = null
         coreGenerations.reset()
         coreChatter.reset()
+        guardRateLimiter.reset()
 
         runCatching { tunDescriptor?.close() }
         tunDescriptor = null
@@ -1506,6 +1511,7 @@ class MyDropVpnService : VpnService() {
             }
         }
 
+        guardRateLimiter.reset()
         val uidPolicy = SplitTunnelUidPolicy.create(
             settings = settings,
             packageUidResolver = ::resolvePackageUid,
@@ -1513,6 +1519,11 @@ class MyDropVpnService : VpnService() {
             myUid = Process.myUid(),
             ownPackageName = packageName,
             ownerUidResolver = ::resolveConnectionOwnerUid,
+            onDenied = { reason, proto, dstPort, uid ->
+                guardRateLimiter.record(reason, proto, dstPort, uid)?.let { line ->
+                    logs.trace(GUARD_TAG, line)
+                }
+            },
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
@@ -1523,6 +1534,15 @@ class MyDropVpnService : VpnService() {
         tunAppRules = appRules
         tunLockdownEnabled = lockdownEnabled
         tunUidPolicy = uidPolicy
+        logs.trace(
+            NATIVE_TAG,
+            "tun established: split=${settings.splitTunnelMode} " +
+                "pkgs=${settings.splitTunnelPackages.size} " +
+                "excludedUids=${uidPolicy.excludedUids.size} " +
+                "allowedUids=${uidPolicy.allowedUids.size} " +
+                "allowBypass=${LockdownBypassPolicy.shouldAllowBypass(lockdownEnabled)} " +
+                "lockdown=$lockdownEnabled",
+        )
         return descriptor
     }
 

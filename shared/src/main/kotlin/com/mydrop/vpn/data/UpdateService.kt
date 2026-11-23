@@ -29,11 +29,17 @@ import kotlinx.serialization.json.jsonPrimitive
  * Blocking on purpose — every caller is already inside a coroutine on [kotlinx.coroutines.Dispatchers.IO],
  * and the same is true of [SubscriptionService] next door.
  */
+/** Contract behind [UpdateRepository], separated so download flows are testable without HTTP. */
+interface UpdateClient {
+    fun latest(abi: String): Release
+    fun download(release: Release, target: File, onProgress: (Long, Long) -> Unit): File
+}
+
 class UpdateService(
     private val userAgent: String,
     private val strings: Strings,
     private val assetPrefix: String = "yumi",
-) {
+) : UpdateClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -44,7 +50,7 @@ class UpdateService(
      *   architecture, and handing an arm64 phone the armeabi one wastes a download to fail at the
      *   end of it.
      */
-    fun latest(abi: String): Release = runCatching { fromApi(abi) }
+    override fun latest(abi: String): Release = runCatching { fromApi(abi) }
         .getOrElse { apiFailure ->
             runCatching { fromRedirect(abi) }.getOrElse {
                 // The API's complaint is the more informative of the two — rate limiting says so
@@ -115,7 +121,7 @@ class UpdateService(
      * cannot leave a half-file that looks installable. [onProgress] is called with bytes so far and
      * the total, which is zero when the server did not say — the redirect path has no size either.
      */
-    fun download(release: Release, target: File, onProgress: (Long, Long) -> Unit): File {
+    override fun download(release: Release, target: File, onProgress: (Long, Long) -> Unit): File {
         target.parentFile?.mkdirs()
         val part = File(target.parentFile, target.name + ".part")
         part.delete()

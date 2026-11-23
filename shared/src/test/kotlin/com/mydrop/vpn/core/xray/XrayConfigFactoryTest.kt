@@ -1566,4 +1566,73 @@ class XrayConfigFactoryTest {
             directOutbound["settings"]!!.jsonObject["domainStrategy"]!!.jsonPrimitive.content,
         )
     }
+
+    @Test
+    fun `disabled ipv6 adds tun-in default ipv6 block rule after bypassLan and before custom, provider, and balancer rules`() {
+        val provider = com.mydrop.vpn.core.parse.ProviderProfileParser
+            .parse(com.mydrop.vpn.core.parse.ProviderFixtures.ordinary())!!
+            .values
+            .single()
+        val testNode = node(
+            id = "n1",
+            name = "🇩🇪 Германия #2",
+            server = "203.0.113.10",
+            settings = ProxySettings.Vless(uuid = com.mydrop.vpn.core.parse.ProviderFixtures.UUID),
+        )
+        val rulesSettings = settings.copy(
+            enableIpv6 = false,
+            bypassLan = true,
+            customRules = CustomRules(direct = listOf("domain:example.org")),
+        )
+
+        val disabledDoc = XrayConfigFactory.build(
+            nodes = listOf(testNode),
+            selected = testNode,
+            settings = rulesSettings,
+            provider = provider,
+        )
+        val disabledRules = Json.parseToJsonElement(disabledDoc.json).jsonObject["routing"]!!
+            .jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+
+        val blockV6Idx = disabledRules.indexOfFirst { rule ->
+            val inbound = rule["inboundTag"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+            val ips = rule["ip"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+            XrayConfigFactory.TUN_TAG in inbound &&
+                "::/0" in ips &&
+                rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.BLOCK_TAG
+        }
+        val lanIdx = disabledRules.indexOfFirst { rule ->
+            rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.DIRECT_TAG &&
+                rule["ip"]?.jsonArray?.any { it.jsonPrimitive.content == "fc00::/7" } == true
+        }
+        val customIdx = disabledRules.indexOfFirst { rule ->
+            rule["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:example.org" } == true
+        }
+        val providerIdx = disabledRules.indexOfFirst { rule ->
+            rule["domain"]?.jsonArray?.any { it.jsonPrimitive.content == "domain:2ip.ru" } == true
+        }
+        val balancerIdx = disabledRules.indexOfLast { rule ->
+            rule["balancerTag"]?.jsonPrimitive?.content == XrayConfigFactory.BALANCER_TAG
+        }
+
+        assertTrue("missing tun-in ::/0 block rule when enableIpv6=false", blockV6Idx >= 0)
+        assertTrue("lan bypass ($lanIdx) must precede ::/0 block ($blockV6Idx)", blockV6Idx > lanIdx)
+        assertTrue("::/0 block ($blockV6Idx) must precede custom rule ($customIdx)", customIdx > blockV6Idx)
+        assertTrue("::/0 block ($blockV6Idx) must precede provider rule ($providerIdx)", providerIdx > blockV6Idx)
+        assertTrue("::/0 block ($blockV6Idx) must precede default balancer ($balancerIdx)", balancerIdx > blockV6Idx)
+
+        val enabledDoc = XrayConfigFactory.build(
+            nodes = listOf(testNode),
+            selected = testNode,
+            settings = rulesSettings.copy(enableIpv6 = true),
+            provider = provider,
+        )
+        val enabledRules = Json.parseToJsonElement(enabledDoc.json).jsonObject["routing"]!!
+            .jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        val hasBlockV6 = enabledRules.any { rule ->
+            val ips = rule["ip"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+            "::/0" in ips && rule["outboundTag"]?.jsonPrimitive?.content == XrayConfigFactory.BLOCK_TAG
+        }
+        assertFalse("must not block ::/0 when enableIpv6=true", hasBlockV6)
+    }
 }

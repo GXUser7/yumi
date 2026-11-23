@@ -13,6 +13,8 @@ import com.mydrop.vpn.core.model.Release
 import com.mydrop.vpn.core.model.UpdateState
 import com.mydrop.vpn.core.model.Version
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,16 +36,67 @@ import kotlinx.coroutines.withContext
  * installer, with its own confirmation, from a file the user can see the size and name of. An app
  * that could silently replace its own code would be a worse thing to run than an out-of-date one.
  */
-class UpdateRepository(
-    private val context: Context,
-    private val service: UpdateService,
+class UpdateRepository private constructor(
+    private val context: Context?,
+    private val filesDir: File,
+    private val service: UpdateClient,
     private val settings: SettingsRepository,
     private val logs: LogRepository,
-    private val alerts: AlertNotifier,
+    private val onUpdateAlert: (String) -> Unit,
     private val strings: Strings,
     private val currentVersion: String,
     private val scope: CoroutineScope,
+    private val abiProvider: () -> String,
+    private val ioDispatcher: CoroutineDispatcher,
 ) {
+
+    constructor(
+        context: Context,
+        service: UpdateService,
+        settings: SettingsRepository,
+        logs: LogRepository,
+        alerts: AlertNotifier,
+        strings: Strings,
+        currentVersion: String,
+        scope: CoroutineScope,
+    ) : this(
+        context = context,
+        filesDir = context.filesDir,
+        service = service,
+        settings = settings,
+        logs = logs,
+        onUpdateAlert = alerts::updateAvailable,
+        strings = strings,
+        currentVersion = currentVersion,
+        scope = scope,
+        abiProvider = ::deviceAbi,
+        ioDispatcher = Dispatchers.IO,
+    )
+
+    internal constructor(
+        filesDir: File,
+        service: UpdateClient,
+        settings: SettingsRepository,
+        logs: LogRepository,
+        strings: Strings,
+        currentVersion: String,
+        scope: CoroutineScope,
+        onUpdateAlert: (String) -> Unit = {},
+        abiProvider: () -> String = { "arm64-v8a" },
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ) : this(
+        context = null,
+        filesDir = filesDir,
+        service = service,
+        settings = settings,
+        logs = logs,
+        onUpdateAlert = onUpdateAlert,
+        strings = strings,
+        currentVersion = currentVersion,
+        scope = scope,
+        abiProvider = abiProvider,
+        ioDispatcher = ioDispatcher,
+    )
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
@@ -61,8 +114,9 @@ class UpdateRepository(
             _state.value = UpdateState.Checking
             settings.update { it.copy(lastUpdateCheckEpochMillis = System.currentTimeMillis()) }
 
-            val result = withContext(Dispatchers.IO) {
-                runCatching { service.latest(abi()) }
+            val result = withContext(ioDispatcher) {
+                runCatching { service.latest(abiProvider()) }
+                    .onFailure { if (it is CancellationException) throw it }
             }
             result
                 .onSuccess { release ->
@@ -71,7 +125,7 @@ class UpdateRepository(
                         // Only ever from a check the user did not ask for. Telling somebody who
                         // just pressed "check" that there is an update, in a notification, over
                         // the screen already showing it, is noise.
-                        if (!manual) alerts.updateAvailable(release.version)
+                        if (!manual) onUpdateAlert(release.version)
                         _state.value = UpdateState.Available(release)
                     } else {
                         if (manual) logs.info(R.string.log_update_none, currentVersion)
@@ -89,25 +143,40 @@ class UpdateRepository(
     }
 
     fun download() {
-        val release = (_state.value as? UpdateState.Available)?.release ?: return
+        val known = (_state.value as? UpdateState.Available)?.release ?: return
         if (working?.isActive == true) return
         working = scope.launch {
-            _state.value = UpdateState.Downloading(release, 0, release.sizeBytes)
-            val target = File(File(context.filesDir, DIRECTORY), fileNameFor(release))
-            val result = withContext(Dispatchers.IO) {
+            _state.value = UpdateState.Downloading(known, 0, known.sizeBytes)
+            val currentAbi = abiProvider()
+            var active = known
+            val result = withContext(ioDispatcher) {
+                // Hidden re-check: if a newer release shipped since the user (or 12h scheduler)
+                // last checked, silently switch to it; on failure or stale CDN, keep [known].
+                val fresh = runCatching { service.latest(currentAbi) }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrNull()
+                if (fresh != null) {
+                    settings.update { it.copy(lastUpdateCheckEpochMillis = System.currentTimeMillis()) }
+                    if (Version.isNewer(fresh.version, known.version)) {
+                        active = fresh
+                        logs.info(R.string.log_update_available, active.version)
+                        _state.value = UpdateState.Downloading(active, 0, active.sizeBytes)
+                    }
+                }
+                val target = File(File(filesDir, DIRECTORY), fileNameFor(active, currentAbi))
                 runCatching {
                     // Anything left from a previous version is dead weight: the installer has
                     // already had it, or the user walked away from it.
                     target.parentFile?.listFiles()?.forEach { if (it != target) it.delete() }
-                    service.download(release, target) { done, total ->
-                        _state.value = UpdateState.Downloading(release, done, total)
+                    service.download(active, target) { done, total ->
+                        _state.value = UpdateState.Downloading(active, done, total)
                     }
-                }
+                }.onFailure { if (it is CancellationException) throw it }
             }
             result
                 .onSuccess {
-                    logs.info(R.string.log_update_downloaded, release.version)
-                    _state.value = UpdateState.Ready(release, it)
+                    logs.info(R.string.log_update_downloaded, active.version)
+                    _state.value = UpdateState.Ready(active, it)
                 }
                 .onFailure { error ->
                     val message = error.message ?: strings.get(R.string.error_update_unreadable)
@@ -131,17 +200,18 @@ class UpdateRepository(
      * here turns a silent refusal into a sentence.
      */
     private fun verify(file: File): String? {
+        val appContext = context ?: return null
         val flags = signatureFlags()
         val candidate = runCatching {
-            context.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+            appContext.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
         }.getOrNull() ?: return strings.get(R.string.error_update_not_an_apk)
 
-        if (candidate.packageName != context.packageName) {
+        if (candidate.packageName != appContext.packageName) {
             return strings.get(R.string.error_update_wrong_package, candidate.packageName.orEmpty())
         }
 
         val installed = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, flags)
+            appContext.packageManager.getPackageInfo(appContext.packageName, flags)
         }.getOrNull() ?: return null
 
         val ours = signersOf(installed)
@@ -200,14 +270,15 @@ class UpdateRepository(
      */
     fun install(activity: Context): Boolean {
         val ready = _state.value as? UpdateState.Ready ?: return false
+        val appContext = context ?: return false
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
+            !appContext.packageManager.canRequestPackageInstalls()
         ) {
             activity.startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${context.packageName}"),
+                    Uri.parse("package:${appContext.packageName}"),
                 ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
             return false
@@ -226,7 +297,7 @@ class UpdateRepository(
             return false
         }
 
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", ready.file)
+        val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.updates", ready.file)
         activity.startActivity(
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -237,18 +308,18 @@ class UpdateRepository(
         return true
     }
 
-    /**
-     * The architecture to fetch a build for.
-     *
-     * The first entry, not a search: `SUPPORTED_ABIS` is ordered best-first, and an arm64 phone
-     * lists the 32-bit ABI too. Taking anything but the first would install the slower build on
-     * every modern phone.
-     */
-    private fun abi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-
-    private fun fileNameFor(release: Release) = "yumi-${release.version}-${abi()}.apk"
+    private fun fileNameFor(release: Release, abi: String) = "yumi-${release.version}-$abi.apk"
 
     private companion object {
         const val DIRECTORY = "updates"
+
+        /**
+         * The architecture to fetch a build for.
+         *
+         * The first entry, not a search: `SUPPORTED_ABIS` is ordered best-first, and an arm64 phone
+         * lists the 32-bit ABI too. Taking anything but the first would install the slower build on
+         * every modern phone.
+         */
+        private fun deviceAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
     }
 }

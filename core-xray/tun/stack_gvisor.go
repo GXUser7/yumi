@@ -189,6 +189,9 @@ func (t *stackGVisor) Close() error {
 	for _, endpoint := range s.CleanupEndpoints() {
 		endpoint.Abort()
 	}
+	// RemoveNIC inside Wait() closes qDisc and drains its dispatcher goroutine without closing
+	// the caller-owned TUN file descriptor.
+	s.Wait()
 	return nil
 }
 

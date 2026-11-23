@@ -21,7 +21,25 @@ class SplitTunnelUidPolicy internal constructor(
     private val sdkInt: Int,
     private val myUid: Int,
     private val ownerUidResolver: (proto: Int, src: InetSocketAddress, dst: InetSocketAddress) -> Int,
+    private val onDenied: ((reason: DenyReason, proto: Int, dstPort: Int, uid: Int) -> Unit)? = null,
 ) {
+
+    enum class DenyReason(val wireName: String) {
+        UNSUPPORTED_PROTO("unsupported_proto"),
+        INVALID_PORT("invalid_port"),
+        INVALID_ADDRESS("invalid_address"),
+        UNRESOLVED_UID("unresolved_uid"),
+        OWN_UID("own_uid"),
+        EXCLUDED_UID("excluded_uid"),
+        EMPTY_ALLOWLIST("empty_allowlist"),
+        NOT_IN_ALLOWLIST("not_in_allowlist"),
+        EXCEPTION("exception"),
+    }
+
+    private fun deny(reason: DenyReason, proto: Int, dstPort: Int, uid: Int = -1): Boolean {
+        onDenied?.let { callback -> runCatching { callback(reason, proto, dstPort, uid) } }
+        return false
+    }
 
     fun allowConnection(
         proto: Int,
@@ -31,34 +49,45 @@ class SplitTunnelUidPolicy internal constructor(
         dstPort: Int,
     ): Boolean = runCatching {
         if (sdkInt < Build.VERSION_CODES.Q) return@runCatching true
-        if (proto != PROTO_TCP && proto != PROTO_UDP) return@runCatching false
-        if (srcPort !in 1..65535 || dstPort !in 1..65535) return@runCatching false
+        if (proto != PROTO_TCP && proto != PROTO_UDP) {
+            return@runCatching deny(DenyReason.UNSUPPORTED_PROTO, proto, dstPort)
+        }
+        if (srcPort !in 1..65535 || dstPort !in 1..65535) {
+            return@runCatching deny(DenyReason.INVALID_PORT, proto, dstPort)
+        }
 
-        val srcBytes = normalizeIpBytes(srcIP) ?: return@runCatching false
-        val dstBytes = normalizeIpBytes(dstIP) ?: return@runCatching false
+        val srcBytes = normalizeIpBytes(srcIP)
+            ?: return@runCatching deny(DenyReason.INVALID_ADDRESS, proto, dstPort)
+        val dstBytes = normalizeIpBytes(dstIP)
+            ?: return@runCatching deny(DenyReason.INVALID_ADDRESS, proto, dstPort)
         val srcAddr = InetAddress.getByAddress(srcBytes)
         val dstAddr = InetAddress.getByAddress(dstBytes)
-        if (srcAddr.isAnyLocalAddress || dstAddr.isAnyLocalAddress) return@runCatching false
+        if (srcAddr.isAnyLocalAddress || dstAddr.isAnyLocalAddress) {
+            return@runCatching deny(DenyReason.INVALID_ADDRESS, proto, dstPort)
+        }
 
         val uid = ownerUidResolver(
             proto,
             InetSocketAddress(srcAddr, srcPort),
             InetSocketAddress(dstAddr, dstPort),
         )
-        if (uid < 0) return@runCatching false
-        if (uid == myUid || uid in excludedUids) return@runCatching false
+        if (uid < 0) return@runCatching deny(DenyReason.UNRESOLVED_UID, proto, dstPort, uid)
+        if (uid == myUid) return@runCatching deny(DenyReason.OWN_UID, proto, dstPort, uid)
+        if (uid in excludedUids) return@runCatching deny(DenyReason.EXCLUDED_UID, proto, dstPort, uid)
 
         when (mode) {
             SplitTunnelMode.Off, SplitTunnelMode.BlockList -> true
             SplitTunnelMode.AllowList -> {
                 if (allowedUids.isEmpty()) {
-                    false
+                    deny(DenyReason.EMPTY_ALLOWLIST, proto, dstPort, uid)
+                } else if (uid in allowedUids || isNetdTunDnsQuery(uid, dstBytes, dstPort)) {
+                    true
                 } else {
-                    uid in allowedUids || isNetdTunDnsQuery(uid, dstBytes, dstPort)
+                    deny(DenyReason.NOT_IN_ALLOWLIST, proto, dstPort, uid)
                 }
             }
         }
-    }.getOrDefault(false)
+    }.getOrElse { deny(DenyReason.EXCEPTION, proto, dstPort) }
 
     private fun isNetdTunDnsQuery(uid: Int, dstBytes: ByteArray, dstPort: Int): Boolean =
         (uid == NETD_ROOT_UID || uid == NETD_DNS_UID) &&
@@ -103,6 +132,7 @@ class SplitTunnelUidPolicy internal constructor(
         private val TUN_DNS_V4_BYTES: ByteArray =
             InetAddress.getByName(XrayConfigFactory.TUN_DNS_V4).address
 
+        @JvmOverloads
         fun create(
             settings: AppSettings,
             packageUidResolver: (String) -> Int?,
@@ -110,6 +140,7 @@ class SplitTunnelUidPolicy internal constructor(
             myUid: Int = Process.myUid(),
             ownPackageName: String = "com.mydrop.vpn",
             ownerUidResolver: (proto: Int, src: InetSocketAddress, dst: InetSocketAddress) -> Int,
+            onDenied: ((reason: DenyReason, proto: Int, dstPort: Int, uid: Int) -> Unit)? = null,
         ): SplitTunnelUidPolicy {
             val alwaysOutsidePackages = (ALWAYS_OUTSIDE_PACKAGES + ownPackageName).toSet()
             val resolvedOutside = alwaysOutsidePackages
@@ -127,6 +158,7 @@ class SplitTunnelUidPolicy internal constructor(
                     sdkInt = sdkInt,
                     myUid = myUid,
                     ownerUidResolver = ownerUidResolver,
+                    onDenied = onDenied,
                 )
 
                 SplitTunnelMode.BlockList -> {
@@ -140,6 +172,7 @@ class SplitTunnelUidPolicy internal constructor(
                         sdkInt = sdkInt,
                         myUid = myUid,
                         ownerUidResolver = ownerUidResolver,
+                        onDenied = onDenied,
                     )
                 }
 
@@ -154,6 +187,7 @@ class SplitTunnelUidPolicy internal constructor(
                         sdkInt = sdkInt,
                         myUid = myUid,
                         ownerUidResolver = ownerUidResolver,
+                        onDenied = onDenied,
                     )
                 }
             }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1609,5 +1610,63 @@ func TestStackGVisor_ConcurrentWriteDuringAndAfterCloseDoesNotPanic(t *testing.T
 	// Repeat Close must remain idempotent.
 	if err := s.Close(); err != nil {
 		t.Fatalf("second stack.Close failed: %v", err)
+	}
+}
+
+func TestStackCloseDoesNotLeakQDiscGoroutines(t *testing.T) {
+	runCycle := func() {
+		ep := channel.New(64, 1500, "")
+		s, err := NewStack(context.Background(), StackOptions{
+			Endpoint:    ep,
+			IdleTimeout: 5 * time.Second,
+			Guard:       &mockGuard{fn: func(int, []byte, int, []byte, int) bool { return false }},
+		}, func(conn net.Conn, _ v2net.Destination) {
+			_ = conn.Close()
+		})
+		if err != nil {
+			t.Fatalf("NewStack failed: %v", err)
+		}
+		if err := s.Start(); err != nil {
+			t.Fatalf("stack.Start failed: %v", err)
+		}
+
+		// Trigger TCP RST through gVisor's NIC qDisc before closing.
+		injectIPv4(ep, buildIPv4TCPSYN(
+			[4]byte{172, 19, 0, 1},
+			[4]byte{1, 1, 1, 1},
+			45000,
+			443,
+			1,
+		))
+
+		if err := s.Close(); err != nil {
+			t.Fatalf("stack.Close failed: %v", err)
+		}
+		ep.Close()
+	}
+
+	// Warm up one-time runtime/gVisor goroutines before snapshotting baseline.
+	runCycle()
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+	before := runtime.NumGoroutine()
+
+	const cycles = 20
+	for i := 0; i < cycles; i++ {
+		runCycle()
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runtime.GC()
+		runtime.Gosched()
+		after := runtime.NumGoroutine()
+		if after <= before+4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutine count grew across %d Start/Close cycles: before=%d after=%d", cycles, before, after)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }

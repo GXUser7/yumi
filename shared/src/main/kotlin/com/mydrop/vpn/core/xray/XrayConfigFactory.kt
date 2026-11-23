@@ -1797,6 +1797,17 @@ object XrayConfigFactory {
                     }
                 }
 
+                // Fail fast on hardcoded IPv6 literals from apps (after loopback/LAN rules) when
+                // IPv6 is disabled or refused by the active exit, without blocking internal probes.
+                if (!settings.enableIpv6) {
+                    addJsonObject {
+                        put("type", "field")
+                        putJsonArray("inboundTag") { add(TUN_TAG) }
+                        putJsonArray("ip") { add("::/0") }
+                        put("outboundTag", BLOCK_TAG)
+                    }
+                }
+
                 addCustomRules(settings.customRules, geoAvailable, geoKnown)
 
                 // The provider's rules, ahead of everything the user chose below and behind

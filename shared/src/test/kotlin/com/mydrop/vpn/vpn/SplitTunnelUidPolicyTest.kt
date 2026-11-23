@@ -271,4 +271,182 @@ class SplitTunnelUidPolicyTest {
             }
         }
     }
+
+    @Test
+    fun `onDenied reports every fail-closed DenyReason, ignores allowed flows, and swallows callback exceptions`() {
+        data class DeniedEvent(
+            val reason: SplitTunnelUidPolicy.DenyReason,
+            val proto: Int,
+            val dstPort: Int,
+            val uid: Int,
+        )
+
+        val events = mutableListOf<DeniedEvent>()
+        var nextUid = bystanderAppUid
+        var shouldThrow = false
+
+        val blockListPolicy = SplitTunnelUidPolicy.create(
+            settings = AppSettings(
+                splitTunnelMode = SplitTunnelMode.BlockList,
+                splitTunnelPackages = setOf("com.example.excluded"),
+            ),
+            packageUidResolver = packageMap::get,
+            sdkInt = 34,
+            myUid = myUid,
+            ownPackageName = ownPkg,
+            ownerUidResolver = { _, _, _ ->
+                if (shouldThrow) throw SecurityException("binder error")
+                nextUid
+            },
+            onDenied = { reason, proto, dstPort, uid ->
+                events += DeniedEvent(reason, proto, dstPort, uid)
+            },
+        )
+
+        // Allowed flows never trigger onDenied
+        assertTrue(blockListPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 443))
+        assertTrue(blockListPolicy.allowConnection(17, tunSrcV6, 51000, dstExternalV6, 53))
+        assertTrue(events.isEmpty())
+
+        // UNSUPPORTED_PROTO, INVALID_PORT, INVALID_ADDRESS
+        assertFalse(blockListPolicy.allowConnection(1, tunSrcV4, 41000, dstExternalV4, 443))
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 0, dstExternalV4, 80))
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 65536))
+        assertFalse(blockListPolicy.allowConnection(6, byteArrayOf(1, 2, 3), 41000, dstExternalV4, 443))
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 41000, byteArrayOf(0, 0, 0, 0), 8443))
+
+        // UNRESOLVED_UID, OWN_UID, EXCLUDED_UID
+        nextUid = -1
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 5228))
+        nextUid = myUid
+        assertFalse(blockListPolicy.allowConnection(17, tunSrcV4, 41000, dstExternalV4, 53))
+        nextUid = excludedAppUid
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 443))
+
+        // EXCEPTION
+        shouldThrow = true
+        assertFalse(blockListPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 993))
+
+        assertEquals(
+            listOf(
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.UNSUPPORTED_PROTO, 1, 443, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.INVALID_PORT, 6, 80, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.INVALID_PORT, 6, 65536, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.INVALID_ADDRESS, 6, 443, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.INVALID_ADDRESS, 6, 8443, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.OWN_UID, 17, 53, myUid),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.EXCLUDED_UID, 6, 443, excludedAppUid),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.EXCEPTION, 6, 993, -1),
+            ),
+            events,
+        )
+
+        // EMPTY_ALLOWLIST & NOT_IN_ALLOWLIST
+        events.clear()
+        val emptyAllowPolicy = SplitTunnelUidPolicy.create(
+            settings = AppSettings(splitTunnelMode = SplitTunnelMode.AllowList),
+            packageUidResolver = packageMap::get,
+            sdkInt = 34,
+            myUid = myUid,
+            ownPackageName = ownPkg,
+            ownerUidResolver = { _, _, _ -> bystanderAppUid },
+            onDenied = { reason, proto, dstPort, uid ->
+                events += DeniedEvent(reason, proto, dstPort, uid)
+            },
+        )
+        assertFalse(emptyAllowPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 443))
+
+        val allowPolicy = SplitTunnelUidPolicy.create(
+            settings = AppSettings(
+                splitTunnelMode = SplitTunnelMode.AllowList,
+                splitTunnelPackages = setOf("com.example.allowed"),
+            ),
+            packageUidResolver = packageMap::get,
+            sdkInt = 34,
+            myUid = myUid,
+            ownPackageName = ownPkg,
+            ownerUidResolver = { _, _, _ -> bystanderAppUid },
+            onDenied = { reason, proto, dstPort, uid ->
+                events += DeniedEvent(reason, proto, dstPort, uid)
+            },
+        )
+        assertFalse(allowPolicy.allowConnection(17, tunSrcV4, 41000, dstExternalV4, 443))
+        assertEquals(
+            listOf(
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.EMPTY_ALLOWLIST, 6, 443, bystanderAppUid),
+                DeniedEvent(SplitTunnelUidPolicy.DenyReason.NOT_IN_ALLOWLIST, 17, 443, bystanderAppUid),
+            ),
+            events,
+        )
+
+        // Throwing onDenied callback never crashes or alters fail-closed return
+        val crashingCallbackPolicy = SplitTunnelUidPolicy.create(
+            settings = AppSettings(),
+            packageUidResolver = packageMap::get,
+            sdkInt = 34,
+            myUid = myUid,
+            ownPackageName = ownPkg,
+            ownerUidResolver = { _, _, _ -> myUid },
+            onDenied = { _, _, _, _ -> throw IllegalStateException("log sink broke") },
+        )
+        assertFalse(crashingCallbackPolicy.allowConnection(6, tunSrcV4, 41000, dstExternalV4, 443))
+    }
+
+    @Test
+    fun `TrafficGuardRateLimiter emits immediately, suppresses repeats within window, resets, and bounds maxKeys`() {
+        var now = 1_000L
+        val limiter = TrafficGuardRateLimiter(
+            windowMillis = 15_000L,
+            maxKeys = 2,
+            nowMillis = { now },
+        )
+
+        assertEquals(
+            "denied reason=unresolved_uid proto=tcp dstPort=5228 uid=-1",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+        now += 5_000L
+        assertEquals(
+            null,
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+        now += 5_000L
+        assertEquals(
+            null,
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+        now += 5_000L // 16_000L - 1_000L == 15_000L -> window elapsed
+        assertEquals(
+            "denied reason=unresolved_uid proto=tcp dstPort=5228 uid=-1 (+2 suppressed)",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+
+        // Fill maxKeys = 2 with fresh entries, then insert a 3rd key -> oldest (16_000L) evicted
+        now += 1_000L // 17_000L
+        assertEquals(
+            "denied reason=excluded_uid proto=udp dstPort=443 uid=10222",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.EXCLUDED_UID, 17, 443, 10222),
+        )
+        now += 1_000L // 18_000L
+        assertEquals(
+            "denied reason=own_uid proto=tcp dstPort=80 uid=10050",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.OWN_UID, 6, 80, 10050),
+        )
+        // Confirm (UNRESOLVED_UID, 5228) was evicted -> re-recording emits cleanly with 0 suppressed
+        now += 1_000L // 19_000L (still within 15s of 16_000L!)
+        assertEquals(
+            "denied reason=unresolved_uid proto=tcp dstPort=5228 uid=-1",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+
+        // Reset clears suppression and windows
+        now += 100L
+        assertEquals(null, limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1))
+        limiter.reset()
+        assertEquals(
+            "denied reason=unresolved_uid proto=tcp dstPort=5228 uid=-1",
+            limiter.record(SplitTunnelUidPolicy.DenyReason.UNRESOLVED_UID, 6, 5228, -1),
+        )
+    }
 }
