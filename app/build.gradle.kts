@@ -1,3 +1,4 @@
+import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
@@ -43,8 +44,8 @@ android {
         applicationId = "com.mydrop.vpn"
         minSdk = 26
         targetSdk = 36
-        versionCode = 49
-        versionName = "2.3.2"
+        versionCode = 50
+        versionName = "2.3.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // ABI selection lives in `splits.abi` below; the two cannot both be set.
     }
@@ -110,6 +111,35 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    // Omit Google Play's encrypted dependency metadata block so FOSS repositories
+    // (IzzyOnDroid, F-Droid) inspect a fully transparent APK.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+}
+
+// Per-ABI versionCode so F-Droid / IzzyOnDroid indexers do not collide when a single release
+// ships both arm64-v8a and armeabi-v7a APKs. Multiplying the base versionCode by 10 keeps all
+// ABIs of a release grouped in strict ascending order (49 -> 491/492, 50 -> 501/502) and stays
+// above earlier unsplit codes so existing installs update in place.
+val abiVersionOffsets = mapOf(
+    "armeabi-v7a" to 1,
+    "arm64-v8a" to 2,
+)
+
+androidComponents {
+    onVariants { variant ->
+        val baseCode = android.defaultConfig.versionCode ?: return@onVariants
+        variant.outputs.forEach { output ->
+            val abi = output.filters
+                .find { it.filterType == FilterConfiguration.FilterType.ABI }
+                ?.identifier
+            val offset = abiVersionOffsets[abi] ?: return@forEach
+            output.versionCode.set(baseCode * 10 + offset)
         }
     }
 }

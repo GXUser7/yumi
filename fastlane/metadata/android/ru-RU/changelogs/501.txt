@@ -1,0 +1,3 @@
+- Разведены versionCode по архитектурам (arm64-v8a / armeabi-v7a) для корректных обновлений в IzzyOnDroid, F-Droid и Obtainium.
+- Отключён блок DEPENDENCY_INFO_BLOCK в релизных APK.
+- Добавлены метаданные Fastlane, обновлённые скриншоты и ссылки Obtainium.

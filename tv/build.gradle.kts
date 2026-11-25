@@ -1,3 +1,4 @@
+import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
@@ -22,8 +23,8 @@ android {
         applicationId = "com.mydrop.vpn.tv"
         minSdk = 28
         targetSdk = 36
-        versionCode = 49
-        versionName = "2.3.2"
+        versionCode = 50
+        versionName = "2.3.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -67,6 +68,32 @@ android {
             reset()
             include("arm64-v8a", "armeabi-v7a")
             isUniversalApk = false
+        }
+    }
+
+    // Omit Google Play's encrypted dependency metadata block so FOSS repositories
+    // (IzzyOnDroid, F-Droid) inspect a fully transparent APK.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+}
+
+// Per-ABI versionCode so F-Droid / IzzyOnDroid indexers do not collide across ABI splits.
+val abiVersionOffsets = mapOf(
+    "armeabi-v7a" to 1,
+    "arm64-v8a" to 2,
+)
+
+androidComponents {
+    onVariants { variant ->
+        val baseCode = android.defaultConfig.versionCode ?: return@onVariants
+        variant.outputs.forEach { output ->
+            val abi = output.filters
+                .find { it.filterType == FilterConfiguration.FilterType.ABI }
+                ?.identifier
+            val offset = abiVersionOffsets[abi] ?: return@forEach
+            output.versionCode.set(baseCode * 10 + offset)
         }
     }
 }

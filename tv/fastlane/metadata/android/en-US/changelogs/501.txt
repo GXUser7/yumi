@@ -1,0 +1,3 @@
+- Distinct per-ABI version codes for reliable updates in IzzyOnDroid, F-Droid, and Obtainium.
+- Disabled Google's encrypted DEPENDENCY_INFO_BLOCK in release APKs.
+- Added Fastlane metadata and TV screenshots.

@@ -469,7 +469,7 @@ def main() -> None:
     if missing:
         die("missing release APKs: " + ", ".join(f"{product}/{abi}" for product, abi in sorted(missing)))
 
-    print(f"\n{tag} (versionCode {code})")
+    print(f"\n{tag} (base versionCode {code} → armeabi-v7a: {code * 10 + 1}, arm64-v8a: {code * 10 + 2})")
     for apk in renamed:
         print(f"  {apk.name}  {apk.stat().st_size / 1048576:.1f} MB  sha256:{sha256(apk)[:16]}…")
 

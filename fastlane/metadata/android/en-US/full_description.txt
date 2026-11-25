@@ -1,0 +1,28 @@
+Yumi is an open-source Android VPN client built on the Xray core in Material 3 Expressive. It monitors your live tunnel, automatically moves off stalled servers, and stays simple enough to set up once for non-technical users.
+
+Note: Yumi connects only to servers from your own subscriptions or configs and does not provide VPN servers or internet access by itself.
+
+Self-healing tunnel:
+- Live traffic health checks every 20 seconds move the tunnel to a working server without dropping open connections or resetting session counters.
+- Dedicated cellular server list with automatic switch between Wi-Fi and mobile data.
+- Optional on-device allow-list geo-zones that remember mobile drop areas locally and pre-switch to your cellular server list.
+- Fallback DNS resolver (1.1.1.1) if your configured resolver stops answering, with separate notification switches for every automatic repair.
+
+Protocols and subscriptions:
+- VLESS, VMess, Trojan, Shadowsocks, Hysteria2, WireGuard, SOCKS, and HTTP.
+- Transports: TCP/RAW, WebSocket, gRPC, HTTPUpgrade, XHTTP (splithttp), mKCP, and QUIC with TLS, post-quantum VLESS encryption, REALITY, ECH, Vision, uTLS browser fingerprints, and live packet fragmentation.
+- Imports link lists (plain text or base64), Clash YAML, Xray/v2ray JSON, SIP008, QR codes, and deep links (including Happ-compatible provider routing and rules).
+
+Simple and advanced modes:
+- Breeze mode (default): plain-language controls with smart defaults, Recommended hints, country/protocol filters, and automatic routing database updates.
+- Under the hood mode: full routing rules (Via VPN, Direct, Block), per-app split tunneling, custom DNS resolvers (DoH, TCP, UDP, sdns://), real through-tunnel latency and speed tests, live Connections log, and core journal.
+- Quick settings tile, 1x1 home widget, Always-on VPN support, dark/AMOLED themes, and Material You wallpaper palettes.
+
+Android TV remote:
+- Pair one or more Yumi TV devices over your local network by QR code and manage TV connections, servers, subscriptions, and DPI settings straight from your phone.
+
+Privacy:
+- No telemetry, no analytics, no ads, and no proprietary Google SDKs.
+- Subscriptions, keys, and optional geo-zones stay strictly on-device with Android cloud backup disabled.
+- Device identifier (x-hwid) sent to subscription panels is random and generated once on install.
+- Optional built-in update checker queries GitHub Releases and hands the APK to Android's system installer only when you confirm.

@@ -1,0 +1,11 @@
+Yumi TV is an open-source Xray VPN client designed natively for Android TV and TV boxes. Control everything with a TV remote or pair your phone over the local network to manage servers and subscriptions from the sofa.
+
+Note: Yumi TV connects only to servers from your own subscriptions or configs and does not provide VPN servers or internet access by itself.
+
+Key features:
+- Clean leanback interface built with Jetpack Compose and seven ready-made color palettes.
+- Phone as a remote: scan a QR code once from Yumi on Android to control connection state, servers, subscriptions, uTLS fingerprints, and packet fragmentation over your local network.
+- Transfer subscriptions from your phone by QR code with automatic refresh on launch.
+- Powered by Xray-core with VLESS, VMess, Trojan, Shadowsocks, Hysteria2, WireGuard, REALITY, and XHTTP support.
+- Split routing (Global, By rules, Direct) with automatic geoip/geosite database updates and self-healing tunnel failover.
+- Privacy first: zero telemetry, zero ads, no proprietary SDKs, Android cloud backup disabled, and a random per-install x-hwid.

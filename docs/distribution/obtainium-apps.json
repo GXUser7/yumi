@@ -1,0 +1,28 @@
+{
+  "configs": [
+    {
+      "id": "com.mydrop.vpn",
+      "url": "https://github.com/GXUser7/yumi",
+      "author": "GXUser7",
+      "name": "Yumi",
+      "additionalSettings": "{\"includePrereleases\":false,\"fallbackToOlderReleases\":true,\"filterReleaseTitlesByRegEx\":\"\",\"filterReleaseNotesByRegEx\":\"\",\"verifyLatestTag\":false,\"dontSortReleasesList\":false,\"useLatestAssetDateAsReleaseDate\":false,\"trackOnly\":false,\"versionExtractionRegEx\":\"\",\"matchGroupToUse\":\"\",\"versionDetection\":true,\"releaseDateAsVersion\":false,\"useVersionCodeAsOSVersion\":false,\"apkFilterRegEx\":\"^yumi-[0-9]\",\"invertAPKFilter\":false,\"autoApkFilterByArch\":true,\"shizukuPretendToBeGooglePlay\":false,\"exemptFromBackgroundUpdates\":false,\"skipUpdateNotifications\":false}",
+      "altLabel": "Android"
+    },
+    {
+      "id": "com.mydrop.vpn.tv",
+      "url": "https://github.com/GXUser7/yumi",
+      "author": "GXUser7",
+      "name": "Yumi TV",
+      "additionalSettings": "{\"includePrereleases\":false,\"fallbackToOlderReleases\":true,\"filterReleaseTitlesByRegEx\":\"\",\"filterReleaseNotesByRegEx\":\"\",\"verifyLatestTag\":false,\"dontSortReleasesList\":false,\"useLatestAssetDateAsReleaseDate\":false,\"trackOnly\":false,\"versionExtractionRegEx\":\"\",\"matchGroupToUse\":\"\",\"versionDetection\":true,\"releaseDateAsVersion\":false,\"useVersionCodeAsOSVersion\":false,\"apkFilterRegEx\":\"^yumi-tv-\",\"invertAPKFilter\":false,\"autoApkFilterByArch\":true,\"shizukuPretendToBeGooglePlay\":false,\"exemptFromBackgroundUpdates\":false,\"skipUpdateNotifications\":false}",
+      "altLabel": "Android TV"
+    }
+  ],
+  "icon": "https://raw.githubusercontent.com/GXUser7/yumi/main/fastlane/metadata/android/en-US/images/icon.png",
+  "categories": [
+    "vpn"
+  ],
+  "description": {
+    "en": "Self-healing Android & Android TV VPN client on Xray-core in Material 3 Expressive, with phone-as-TV-remote control.",
+    "ru": "Самовосстанавливающийся VPN-клиент для Android и Android TV на ядре Xray в Material 3 Expressive с пультом для ТВ на телефоне."
+  }
+}
